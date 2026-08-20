@@ -1,0 +1,10 @@
+{
+  "description": "Enhance productivity with a professional Pomodoro timer featuring focus mode and customizable intervals to boost concentration and manage work sessions effectively.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
