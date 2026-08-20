@@ -62,7 +62,7 @@ export default function CelebrationEffects({ trigger, type = 'session', onComple
 
     const messages = {
       session: ['Great work! 🎉', 'Focus complete! 🍅', 'You did it! ⭐', 'Amazing focus! 🔥'],
-      milestone: ['Milestone reached! 🏆', 'Incredible! 💎', "You're on fire! 🔥", 'Unstoppable! 🚀'],
+      milestone: ['Milestone reached! 🏆', 'Incredible! 💎', 'You are on fire! 🔥', 'Unstoppable! 🚀'],
       streak: ['Streak extended! 🔥', 'Keep it going! 💪', 'Consistency pays! ⭐', 'You are crushing it! 🎯'],
       achievement: ['Achievement unlocked! 🏆', 'Legendary! 👑', 'You earned it! 💎', 'So proud of you! 🌟'],
     }
