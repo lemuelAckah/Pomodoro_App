@@ -132,7 +132,7 @@ export default function CornellPage({ onBack }: { onBack: () => void }) {
           <div className="flex flex-col gap-4">
             {[
               { zone: 'Cues column (left)', role: 'Added within 24 hrs after capture', body: 'Compress your notes into key questions, keywords, or prompts. This becomes your self-test trigger — cover the right side and answer from the cues.' },
-              { zone: 'Notes column (right)', role: 'During the lecture or reading', body: 'Capture the main points, diagrams, examples. Use abbreviations. Leave space between ideas. Speed matters here — donot try to write everything.' },
+              { zone: 'Notes column (right)', role: 'During the lecture or reading', body: "Capture the main points, diagrams, examples. Use abbreviations. Leave space between ideas. Speed matters here — don't try to write everything." },
               { zone: 'Summary row (bottom)', role: '2-3 sentences written after', body: 'Distil the entire page into a 2-3 sentence summary. This forces you to identify what actually mattered and consolidates the material.' },
             ].map(zone => (
               <div key={zone.zone} className="p-4 rounded-xl" style={{ background: theme.card, border: `1px solid ${theme.border}` }}>

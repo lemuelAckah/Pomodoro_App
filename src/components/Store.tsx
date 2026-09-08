@@ -1,290 +1,626 @@
-import { useState } from 'react'
-import { useTheme } from '../ThemeContext'
+import { useMemo, useState } from "react";
+import { useTheme } from "../ThemeContext";
+import { useLocalStorage } from "../hooks/useLocalStorage";
 
-export interface StoreItem {
-  id: string
-  name: string
-  description: string
-  price: number
-  category: 'themes' | 'sounds' | 'titles' | 'badges' | 'boosts'
-  icon: string
-  rarity: 'common' | 'rare' | 'epic' | 'legendary'
-  owned?: boolean
-}
+type StoreItem = {
+  id: string;
+  name: string;
+  category: string;
+  emoji: string;
+  price: number;
+  description: string;
+};
+type Friend = { id: string; username: string; addedAt: number };
+type OwnedItem = StoreItem & { owner: string; boughtAt: number };
 
-const STORE_ITEMS: StoreItem[] = [
-  // Themes
-  { id: 'aurora', name: 'Aurora Theme', description: 'Beautiful northern lights gradient theme with shifting colors', price: 150, category: 'themes', icon: '🌌', rarity: 'rare' },
-  { id: 'sunset', name: 'Sunset Theme', description: 'Warm sunset gradient with orange and pink tones', price: 100, category: 'themes', icon: '🌅', rarity: 'common' },
-  { id: 'neon', name: 'Neon Cyber Theme', description: 'Futuristic neon colors with glowing effects', price: 250, category: 'themes', icon: '🌆', rarity: 'epic' },
-  { id: 'galaxy', name: 'Galaxy Theme', description: 'Deep space theme with stars and cosmic colors', price: 500, category: 'themes', icon: '🌠', rarity: 'legendary' },
-  // Sounds
-  { id: 'chime', name: 'Gentle Chime', description: 'Soft bell sound for timer completion', price: 50, category: 'sounds', icon: '🔔', rarity: 'common' },
-  { id: 'orchestral', name: 'Orchestral Fanfare', description: 'Triumphant orchestral celebration sound', price: 200, category: 'sounds', icon: '🎺', rarity: 'rare' },
-  { id: 'nature', name: 'Nature Sounds Pack', description: 'Birds chirping, rain, and forest ambience', price: 150, category: 'sounds', icon: '🌿', rarity: 'rare' },
-  { id: 'retro', name: 'Retro Game Sounds', description: '8-bit arcade sounds for all notifications', price: 300, category: 'sounds', icon: '👾', rarity: 'epic' },
-  // Titles
-  { id: 'scholar', name: 'Scholar Title', description: 'Display "The Scholar" next to your name', price: 100, category: 'titles', icon: '📖', rarity: 'common' },
-  { id: 'focused', name: 'Focus Master', description: 'Display "Focus Master" badge on profile', price: 250, category: 'titles', icon: '🎯', rarity: 'rare' },
-  { id: 'legend', name: 'Study Legend', description: 'Display "Study Legend" with golden glow', price: 400, category: 'titles', icon: '⭐', rarity: 'epic' },
-  { id: 'grandmaster', name: 'Grandmaster', description: 'The ultimate title for dedicated learners', price: 1000, category: 'titles', icon: '👑', rarity: 'legendary' },
-  // Badges
-  { id: 'streak7', name: '7-Day Streak Badge', description: 'Golden badge for week-long dedication', price: 200, category: 'badges', icon: '🔥', rarity: 'rare' },
-  { id: 'streak30', name: '30-Day Streak Badge', description: 'Diamond badge for monthly commitment', price: 500, category: 'badges', icon: '💎', rarity: 'epic' },
-  { id: 'nightowl', name: 'Night Owl Badge', description: 'For those who study past midnight', price: 150, category: 'badges', icon: '🦉', rarity: 'rare' },
-  { id: 'earlybird', name: 'Early Bird Badge', description: 'For morning study sessions before 7am', price: 150, category: 'badges', icon: '🐦', rarity: 'rare' },
-  // Boosts
-  { id: 'double', name: '2x Coin Boost', description: 'Double coins earned for the next 5 sessions', price: 100, category: 'boosts', icon: '⚡', rarity: 'common' },
-  { id: 'triple', name: '3x Coin Boost', description: 'Triple coins earned for the next 3 sessions', price: 200, category: 'boosts', icon: '🚀', rarity: 'rare' },
-  { id: 'streakshield', name: 'Streak Shield', description: 'Protect your streak for one missed day', price: 250, category: 'boosts', icon: '🛡️', rarity: 'epic' },
-  { id: 'megaboost', name: 'Mega Boost Pack', description: '5x coins for 2 sessions + streak protection', price: 500, category: 'boosts', icon: '🌟', rarity: 'legendary' },
-]
+type StoreProps = {
+  coins: number;
+  setCoins: React.Dispatch<React.SetStateAction<number>>;
+};
 
-const RARITY_COLORS: Record<string, { bg: string; text: string; border: string }> = {
-  common: { bg: 'rgba(150,150,150,0.15)', text: '#9ca3af', border: 'rgba(150,150,150,0.3)' },
-  rare: { bg: 'rgba(59,130,246,0.15)', text: '#3b82f6', border: 'rgba(59,130,246,0.3)' },
-  epic: { bg: 'rgba(168,85,247,0.15)', text: '#a855f7', border: 'rgba(168,85,247,0.3)' },
-  legendary: { bg: 'rgba(245,158,11,0.15)', text: '#f59e0b', border: 'rgba(245,158,11,0.4)' },
-}
+const ITEMS: StoreItem[] = [
+  [
+    "focus-flame",
+    "Focus Flame theme",
+    "Themes",
+    "🔥",
+    35,
+    "A warm animated focus accent",
+  ],
+  [
+    "ocean-mist",
+    "Ocean Mist theme",
+    "Themes",
+    "🌊",
+    40,
+    "A calm blue study atmosphere",
+  ],
+  [
+    "forest-glow",
+    "Forest Glow theme",
+    "Themes",
+    "🌲",
+    40,
+    "A fresh green workspace look",
+  ],
+  [
+    "midnight",
+    "Midnight theme",
+    "Themes",
+    "🌙",
+    50,
+    "Deep contrast for night sessions",
+  ],
+  [
+    "sunrise",
+    "Sunrise theme",
+    "Themes",
+    "🌅",
+    45,
+    "Bright energy for early starts",
+  ],
+  [
+    "lavender",
+    "Lavender theme",
+    "Themes",
+    "💜",
+    45,
+    "Soft colour for gentle focus",
+  ],
+  ["cafe", "Study Cafe theme", "Themes", "☕", 55, "A cozy cafe-inspired skin"],
+  [
+    "paper",
+    "Paper Notes theme",
+    "Themes",
+    "📄",
+    60,
+    "A clean notebook aesthetic",
+  ],
+  [
+    "neon",
+    "Neon Lab theme",
+    "Themes",
+    "⚡",
+    75,
+    "Electric colour for power sessions",
+  ],
+  [
+    "solar",
+    "Solar Gold theme",
+    "Themes",
+    "☀️",
+    90,
+    "A premium golden workspace",
+  ],
+  ["rain", "Rain on Glass", "Sounds", "🌧️", 25, "Steady rain for deep work"],
+  [
+    "library",
+    "Quiet Library",
+    "Sounds",
+    "📚",
+    30,
+    "Soft room tone and turning pages",
+  ],
+  [
+    "campfire",
+    "Study Campfire",
+    "Sounds",
+    "🏕️",
+    30,
+    "Crackling warmth without lyrics",
+  ],
+  [
+    "lofi",
+    "Lo-fi Focus Pack",
+    "Sounds",
+    "🎧",
+    45,
+    "A mellow instrumental session",
+  ],
+  [
+    "piano",
+    "Midnight Piano",
+    "Sounds",
+    "🎹",
+    45,
+    "Minimal piano for concentration",
+  ],
+  ["forest", "Forest Ambience", "Sounds", "🌿", 25, "Wind and distant birds"],
+  [
+    "brown-noise",
+    "Brown Noise",
+    "Sounds",
+    "〰️",
+    20,
+    "Low, even concentration noise",
+  ],
+  ["ocean", "Ocean Waves", "Sounds", "🐚", 25, "Slow waves for relaxed study"],
+  ["space", "Deep Space", "Sounds", "🪐", 35, "A spacious ambient soundscape"],
+  [
+    "thunder",
+    "Distant Thunder",
+    "Sounds",
+    "⛈️",
+    30,
+    "Rainy-day focus atmosphere",
+  ],
+  [
+    "streak-shield",
+    "Streak Shield",
+    "Boosts",
+    "🛡️",
+    80,
+    "Protect one missed study day",
+  ],
+  [
+    "coin-multiplier",
+    "Coin Multiplier",
+    "Boosts",
+    "✨",
+    120,
+    "Earn 25% more coins for a day",
+  ],
+  [
+    "extra-break",
+    "Extra Break",
+    "Boosts",
+    "🍵",
+    35,
+    "Unlock one restorative break",
+  ],
+  [
+    "focus-sprint",
+    "Focus Sprint",
+    "Boosts",
+    "🏃",
+    60,
+    "Add a bonus 10-minute sprint",
+  ],
+  [
+    "double-dip",
+    "Double Dip",
+    "Boosts",
+    "🎯",
+    150,
+    "Double the reward from one session",
+  ],
+  [
+    "quick-start",
+    "Quick Start Pass",
+    "Boosts",
+    "🚀",
+    50,
+    "Skip one setup step",
+  ],
+  [
+    "calm-mode",
+    "Calm Mode",
+    "Boosts",
+    "🧘",
+    70,
+    "Hide distractions for one session",
+  ],
+  [
+    "exam-week",
+    "Exam Week Pack",
+    "Boosts",
+    "📖",
+    180,
+    "A bundle of three study boosts",
+  ],
+  [
+    "priority",
+    "Priority Queue",
+    "Boosts",
+    "🏆",
+    100,
+    "Pin your most important task",
+  ],
+  [
+    "lucky-hour",
+    "Lucky Hour",
+    "Boosts",
+    "🍀",
+    90,
+    "A one-hour bonus earning window",
+  ],
+  [
+    "focus-badge",
+    "Focus Legend badge",
+    "Badges",
+    "🏅",
+    100,
+    "Show your consistency proudly",
+  ],
+  [
+    "night-owl",
+    "Night Owl badge",
+    "Badges",
+    "🦉",
+    80,
+    "For late-night learning sessions",
+  ],
+  [
+    "early-bird",
+    "Early Bird badge",
+    "Badges",
+    "🐦",
+    80,
+    "For morning study champions",
+  ],
+  [
+    "bookworm",
+    "Bookworm badge",
+    "Badges",
+    "🐛",
+    120,
+    "A badge for curious minds",
+  ],
+  [
+    "seven-day",
+    "Seven Day badge",
+    "Badges",
+    "7️⃣",
+    140,
+    "Celebrate a full week streak",
+  ],
+  [
+    "deep-work",
+    "Deep Work badge",
+    "Badges",
+    "🧠",
+    160,
+    "For serious uninterrupted focus",
+  ],
+  [
+    "team-player",
+    "Team Player badge",
+    "Badges",
+    "🤝",
+    100,
+    "Celebrate learning with friends",
+  ],
+  [
+    "first-place",
+    "First Place badge",
+    "Badges",
+    "🥇",
+    220,
+    "A rare achievement badge",
+  ],
+  [
+    "spark",
+    "Spark badge",
+    "Badges",
+    "💫",
+    60,
+    "A bright little profile detail",
+  ],
+  [
+    "creator",
+    "Creator badge",
+    "Badges",
+    "🎨",
+    130,
+    "For people who share knowledge",
+  ],
+  [
+    "avatar-fox",
+    "Clever Fox avatar",
+    "Avatars",
+    "🦊",
+    75,
+    "A sharp new profile avatar",
+  ],
+  [
+    "avatar-cat",
+    "Study Cat avatar",
+    "Avatars",
+    "🐱",
+    75,
+    "A cozy companion for your profile",
+  ],
+  [
+    "avatar-owl",
+    "Wise Owl avatar",
+    "Avatars",
+    "🦉",
+    100,
+    "A thoughtful profile companion",
+  ],
+  [
+    "avatar-rocket",
+    "Rocket avatar",
+    "Avatars",
+    "🚀",
+    110,
+    "Launch your next study goal",
+  ],
+  [
+    "avatar-planet",
+    "Planet avatar",
+    "Avatars",
+    "🪐",
+    110,
+    "Explore your learning orbit",
+  ],
+  [
+    "avatar-bolt",
+    "Lightning avatar",
+    "Avatars",
+    "⚡",
+    95,
+    "Fast, bright, and focused",
+  ],
+  [
+    "avatar-lotus",
+    "Lotus avatar",
+    "Avatars",
+    "🪷",
+    90,
+    "A calm profile identity",
+  ],
+  [
+    "avatar-crown",
+    "Scholar Crown avatar",
+    "Avatars",
+    "👑",
+    250,
+    "The ultimate scholar look",
+  ],
+  [
+    "avatar-mountain",
+    "Mountain avatar",
+    "Avatars",
+    "⛰️",
+    130,
+    "Climb every learning challenge",
+  ],
+  [
+    "avatar-star",
+    "North Star avatar",
+    "Avatars",
+    "⭐",
+    150,
+    "Keep your goals in sight",
+  ],
+].map(
+  ([id, name, category, emoji, price, description]) =>
+    ({ id, name, category, emoji, price, description }) as StoreItem,
+);
 
-const CATEGORIES = [
-  { id: 'all', name: 'All Items', icon: '🏪' },
-  { id: 'themes', name: 'Themes', icon: '🎨' },
-  { id: 'sounds', name: 'Sounds', icon: '🔊' },
-  { id: 'titles', name: 'Titles', icon: '📛' },
-  { id: 'badges', name: 'Badges', icon: '🏅' },
-  { id: 'boosts', name: 'Boosts', icon: '⚡' },
-]
+const CATEGORIES = ["All", "Themes", "Sounds", "Boosts", "Badges", "Avatars"];
 
-interface StoreProps {
-  isOpen: boolean
-  onClose: () => void
-  coins: number
-  onPurchase: (item: StoreItem) => void
-  ownedItems: string[]
-}
+export default function Store({ coins, setCoins }: StoreProps) {
+  const { theme } = useTheme();
+  const [category, setCategory] = useState("All");
+  const [selected, setSelected] = useState<string[]>([]);
+  const [recipient, setRecipient] = useState("me");
+  const [notice, setNotice] = useState("");
+  const [friends] = useLocalStorage<Friend[]>("sf-friends", []);
+  const [owned, setOwned] = useLocalStorage<OwnedItem[]>("sf-owned-items", []);
+  const visible = useMemo(
+    () =>
+      category === "All"
+        ? ITEMS
+        : ITEMS.filter((item) => item.category === category),
+    [category],
+  );
+  const cart = ITEMS.filter((item) => selected.includes(item.id));
+  const total = cart.reduce((sum, item) => sum + item.price, 0);
 
-export default function Store({ isOpen, onClose, coins, onPurchase, ownedItems }: StoreProps) {
-  const { theme } = useTheme()
-  const [category, setCategory] = useState('all')
-  const [selectedItem, setSelectedItem] = useState<StoreItem | null>(null)
-  const [purchaseSuccess, setPurchaseSuccess] = useState<string | null>(null)
-
-  if (!isOpen) return null
-
-  const c = theme.accent
-
-  const filteredItems = category === 'all' 
-    ? STORE_ITEMS 
-    : STORE_ITEMS.filter(item => item.category === category)
-
-  const handlePurchase = (item: StoreItem) => {
-    if (coins >= item.price && !ownedItems.includes(item.id)) {
-      onPurchase(item)
-      setPurchaseSuccess(item.id)
-      setTimeout(() => setPurchaseSuccess(null), 2000)
+  const buy = () => {
+    if (!cart.length) return;
+    if (coins < total) {
+      setNotice(
+        `You need ${total - coins} more coins to purchase these items.`,
+      );
+      return;
     }
-  }
+    const owner =
+      recipient === "me"
+        ? "You"
+        : (friends.find((friend) => friend.id === recipient)?.username ??
+          "Friend");
+    setCoins((value) => value - total);
+    setOwned((items) => [
+      ...items,
+      ...cart.map((item) => ({ ...item, owner, boughtAt: Date.now() })),
+    ]);
+    setSelected([]);
+    setNotice(
+      recipient === "me"
+        ? `Purchased ${cart.length} item${cart.length === 1 ? "" : "s"}!`
+        : `Gift sent to ${owner}!`,
+    );
+  };
+
+  const sell = (item: OwnedItem) => {
+    setOwned((items) =>
+      items.filter(
+        (ownedItem) =>
+          ownedItem.id !== item.id || ownedItem.boughtAt !== item.boughtAt,
+      ),
+    );
+    setCoins((value) => value + Math.floor(item.price * 0.6));
+    setNotice(`Traded ${item.name} for ${Math.floor(item.price * 0.6)} coins.`);
+  };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.7)' }} onClick={onClose}>
-      <div
-        className="w-full max-w-4xl rounded-2xl overflow-hidden animate-slide-up"
-        style={{ background: theme.bg, border: `1px solid ${theme.border}`, maxHeight: '90vh' }}
-        onClick={e => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4" style={{ background: theme.card, borderBottom: `1px solid ${theme.border}` }}>
-          <div className="flex items-center gap-3">
-            <span className="text-2xl">🏪</span>
-            <h2 className="text-xl font-bold" style={{ color: theme.text }}>StudyFlow Store</h2>
-          </div>
-          <div className="flex items-center gap-4">
-            <div
-              className="flex items-center gap-2 px-4 py-2 rounded-xl"
-              style={{ background: 'rgba(245,166,35,0.12)', border: '1px solid rgba(245,166,35,0.3)' }}
-            >
-              <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-                <circle cx="9" cy="9" r="7" fill="#f5a623" opacity="0.2"/>
-                <circle cx="9" cy="9" r="7" stroke="#f5a623" strokeWidth="1.5"/>
-                <text x="9" y="13" textAnchor="middle" fontSize="8" fontWeight="700" fill="#f5a623" fontFamily="Outfit">$</text>
-              </svg>
-              <span className="font-bold" style={{ color: '#f5a623', fontFamily: "'JetBrains Mono', monospace" }}>{coins}</span>
-            </div>
-            <button
-              onClick={onClose}
-              className="w-10 h-10 rounded-xl flex items-center justify-center transition-opacity hover:opacity-70"
-              style={{ background: theme.cardHover, color: theme.textMuted }}
-            >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-              </svg>
-            </button>
-          </div>
+    <div className="animate-fade-in">
+      <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
+        <div>
+          <h1
+            className="text-2xl font-bold tracking-tight"
+            style={{ color: theme.text }}
+          >
+            Rewards Store
+          </h1>
+          <p className="text-sm mt-1" style={{ color: theme.textSubtle }}>
+            Turn focused time into things that make studying yours.
+          </p>
         </div>
-
-        {/* Categories */}
-        <div className="flex gap-2 px-6 py-4 overflow-x-auto" style={{ borderBottom: `1px solid ${theme.border}` }}>
-          {CATEGORIES.map(cat => (
+        <div
+          className="px-4 py-2 rounded-xl text-sm font-semibold"
+          style={{ background: "#f5a62318", color: "#f5a623" }}
+        >
+          🪙 {coins} coins
+        </div>
+      </div>
+      <div className="flex gap-2 overflow-x-auto pb-2 mb-5">
+        {CATEGORIES.map((item) => (
+          <button
+            key={item}
+            onClick={() => setCategory(item)}
+            className="px-3.5 py-2 rounded-xl text-xs font-medium whitespace-nowrap"
+            style={{
+              background: category === item ? theme.accent : theme.card,
+              color: category === item ? "#fff" : theme.textMuted,
+            }}
+          >
+            {item}
+          </button>
+        ))}
+      </div>
+      {notice && (
+        <div
+          className="mb-5 px-4 py-3 rounded-xl text-sm"
+          style={{
+            background: notice.includes("need")
+              ? "#ef444418"
+              : `${theme.accent}18`,
+            color: notice.includes("need") ? "#ef6b6b" : theme.accent,
+          }}
+        >
+          {notice}
+        </div>
+      )}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {visible.map((item) => {
+          const active = selected.includes(item.id);
+          return (
             <button
-              key={cat.id}
-              onClick={() => setCategory(cat.id)}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium whitespace-nowrap transition-all"
+              key={item.id}
+              onClick={() =>
+                setSelected((current) =>
+                  active
+                    ? current.filter((id) => id !== item.id)
+                    : [...current, item.id],
+                )
+              }
+              className="text-left rounded-2xl p-4 transition-all hover:scale-[1.01]"
               style={{
-                background: category === cat.id ? `${c}20` : theme.card,
-                color: category === cat.id ? c : theme.textMuted,
-                border: `1px solid ${category === cat.id ? `${c}40` : theme.border}`,
+                background: active ? `${theme.accent}15` : theme.card,
+                border: `1px solid ${active ? theme.accent : theme.border}`,
               }}
             >
-              <span>{cat.icon}</span>
-              {cat.name}
-            </button>
-          ))}
-        </div>
-
-        {/* Items Grid */}
-        <div className="p-6 overflow-y-auto" style={{ maxHeight: 'calc(90vh - 180px)' }}>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-            {filteredItems.map(item => {
-              const rarityStyle = RARITY_COLORS[item.rarity]
-              const isOwned = ownedItems.includes(item.id)
-              const canAfford = coins >= item.price
-              const justPurchased = purchaseSuccess === item.id
-
-              return (
-                <div
-                  key={item.id}
-                  onClick={() => setSelectedItem(item)}
-                  className="rounded-2xl p-4 cursor-pointer transition-all hover:scale-[1.02]"
-                  style={{
-                    background: theme.card,
-                    border: `1px solid ${isOwned ? rarityStyle.border : theme.border}`,
-                    opacity: isOwned ? 0.7 : 1,
-                    position: 'relative',
-                    overflow: 'hidden',
-                  }}
+              <div className="flex items-start justify-between gap-3">
+                <div className="text-3xl">{item.emoji}</div>
+                <span
+                  className="text-xs font-semibold"
+                  style={{ color: "#f5a623" }}
                 >
-                  {/* Rarity indicator */}
-                  <div
-                    className="absolute top-0 right-0 px-2 py-1 text-xs font-semibold rounded-bl-lg"
-                    style={{ background: rarityStyle.bg, color: rarityStyle.text }}
-                  >
-                    {item.rarity}
-                  </div>
-
-                  {/* Icon */}
-                  <div
-                    className="w-14 h-14 rounded-xl flex items-center justify-center text-3xl mb-3"
-                    style={{ background: `${c}10` }}
-                  >
-                    {item.icon}
-                  </div>
-
-                  {/* Name & Description */}
-                  <div className="text-sm font-semibold mb-1" style={{ color: theme.text }}>{item.name}</div>
-                  <div className="text-xs leading-relaxed mb-3 line-clamp-2" style={{ color: theme.textSubtle }}>
-                    {item.description}
-                  </div>
-
-                  {/* Price / Owned */}
-                  <div className="flex items-center justify-between">
-                    {isOwned ? (
-                      <span className="text-xs font-semibold" style={{ color: '#3ab07a' }}>✓ Owned</span>
-                    ) : (
-                      <div className="flex items-center gap-1">
-                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                          <circle cx="6" cy="6" r="5" fill="#f5a623" opacity="0.2"/>
-                          <circle cx="6" cy="6" r="5" stroke="#f5a623" strokeWidth="1"/>
-                          <text x="6" y="9" textAnchor="middle" fontSize="5" fontWeight="700" fill="#f5a623">$</text>
-                        </svg>
-                        <span
-                          className="text-xs font-bold"
-                          style={{ color: canAfford ? '#f5a623' : '#e8532a', fontFamily: "'JetBrains Mono', monospace" }}
-                        >
-                          {item.price}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Purchase success overlay */}
-                  {justPurchased && (
-                    <div
-                      className="absolute inset-0 flex items-center justify-center animate-fade-in"
-                      style={{ background: 'rgba(58,176,122,0.9)', borderRadius: '1rem' }}
-                    >
-                      <span className="text-white font-bold text-lg">Purchased! ✓</span>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        </div>
-
-        {/* Item Detail Modal */}
-        {selectedItem && !ownedItems.includes(selectedItem.id) && (
-          <div
-            className="absolute inset-0 flex items-center justify-center p-4 animate-fade-in"
-            style={{ background: 'rgba(0,0,0,0.8)' }}
-            onClick={() => setSelectedItem(null)}
-          >
-            <div
-              className="w-full max-w-sm rounded-2xl p-6"
-              style={{ background: theme.card, border: `1px solid ${theme.border}` }}
-              onClick={e => e.stopPropagation()}
-            >
-              <div className="text-center mb-4">
-                <div
-                  className="w-20 h-20 rounded-2xl mx-auto flex items-center justify-center text-5xl mb-4"
-                  style={{ background: `${c}15` }}
-                >
-                  {selectedItem.icon}
-                </div>
-                <div
-                  className="inline-block px-3 py-1 rounded-full text-xs font-semibold mb-2"
-                  style={{ background: RARITY_COLORS[selectedItem.rarity].bg, color: RARITY_COLORS[selectedItem.rarity].text }}
-                >
-                  {selectedItem.rarity.toUpperCase()}
-                </div>
-                <h3 className="text-xl font-bold mb-2" style={{ color: theme.text }}>{selectedItem.name}</h3>
-                <p className="text-sm leading-relaxed" style={{ color: theme.textMuted }}>{selectedItem.description}</p>
-              </div>
-
-              <div className="flex items-center justify-center gap-2 mb-6">
-                <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                  <circle cx="10" cy="10" r="8" fill="#f5a623" opacity="0.2"/>
-                  <circle cx="10" cy="10" r="8" stroke="#f5a623" strokeWidth="1.5"/>
-                  <text x="10" y="14" textAnchor="middle" fontSize="9" fontWeight="700" fill="#f5a623">$</text>
-                </svg>
-                <span className="text-2xl font-bold" style={{ color: '#f5a623', fontFamily: "'JetBrains Mono', monospace" }}>
-                  {selectedItem.price}
+                  🪙 {item.price}
                 </span>
               </div>
-
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setSelectedItem(null)}
-                  className="flex-1 py-3 rounded-xl text-sm font-medium"
-                  style={{ background: theme.cardHover, color: theme.textMuted, border: `1px solid ${theme.border}` }}
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => { handlePurchase(selectedItem); setSelectedItem(null) }}
-                  disabled={coins < selectedItem.price}
-                  className="flex-1 py-3 rounded-xl text-sm font-semibold transition-opacity hover:opacity-90 disabled:opacity-50"
-                  style={{ background: coins >= selectedItem.price ? c : theme.border, color: coins >= selectedItem.price ? theme.accentFg : theme.textMuted }}
-                >
-                  {coins >= selectedItem.price ? 'Purchase' : 'Not enough coins'}
-                </button>
+              <div
+                className="mt-3 text-sm font-semibold"
+                style={{ color: theme.text }}
+              >
+                {item.name}
               </div>
+              <div
+                className="mt-1 text-xs leading-relaxed"
+                style={{ color: theme.textSubtle }}
+              >
+                {item.description}
+              </div>
+              <div
+                className="mt-3 text-[11px] uppercase tracking-wider"
+                style={{ color: theme.accent }}
+              >
+                {active ? "Selected" : item.category}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      <div
+        className="mt-8 rounded-2xl p-5"
+        style={{ background: theme.card, border: `1px solid ${theme.border}` }}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div
+              className="text-sm font-semibold"
+              style={{ color: theme.text }}
+            >
+              Checkout {cart.length ? `· ${cart.length} selected` : ""}
+            </div>
+            <div className="text-xs mt-1" style={{ color: theme.textSubtle }}>
+              {total
+                ? `Total: ${total} coins`
+                : "Select one or more rewards above."}
             </div>
           </div>
-        )}
+          <div className="flex items-center gap-2">
+            <select
+              value={recipient}
+              onChange={(event) => setRecipient(event.target.value)}
+              className="px-3 py-2 rounded-xl text-xs outline-none"
+              style={{
+                background: theme.cardHover,
+                color: theme.text,
+                border: `1px solid ${theme.border}`,
+              }}
+            >
+              <option value="me">For me</option>
+              {friends.map((friend) => (
+                <option key={friend.id} value={friend.id}>
+                  Gift to {friend.username}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={buy}
+              disabled={!cart.length}
+              className="px-4 py-2 rounded-xl text-xs font-semibold disabled:opacity-40"
+              style={{ background: theme.accent, color: "#fff" }}
+            >
+              Buy selected
+            </button>
+          </div>
+        </div>
       </div>
+      {owned.length > 0 && (
+        <div className="mt-8">
+          <h2
+            className="text-sm font-semibold uppercase tracking-wide mb-3"
+            style={{ color: theme.textSubtle }}
+          >
+            Owned rewards · trade for 60%
+          </h2>
+          <div className="flex flex-wrap gap-2">
+            {owned.map((item) => (
+              <button
+                key={`${item.id}-${item.boughtAt}`}
+                onClick={() => sell(item)}
+                className="px-3 py-2 rounded-xl text-xs"
+                style={{
+                  background: theme.card,
+                  border: `1px solid ${theme.border}`,
+                  color: theme.text,
+                }}
+              >
+                {item.emoji} {item.name}{" "}
+                <span style={{ color: "#f5a623" }}>
+                  +{Math.floor(item.price * 0.6)} 🪙
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
-  )
+  );
 }
-
-export { STORE_ITEMS }

@@ -81,7 +81,6 @@ function MindMapSVG({ accent }: { accent: string }) {
 
             {/* Child nodes */}
             {branch.children.map(child => {
-              const childAngle = branch.angle + child.angle - branch.angle + (child.angle > branch.angle ? 20 : -20)
               const childRelAngle = branch.angle + (child.label === branch.children[0]?.label ? -25 : 25)
               const tx = bx + Math.cos(deg2rad(childRelAngle)) * child.dist * 0.65
               const ty = by + Math.sin(deg2rad(childRelAngle)) * child.dist * 0.45

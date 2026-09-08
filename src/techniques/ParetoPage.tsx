@@ -55,7 +55,6 @@ function ParetoChart({ accent }: { accent: string }) {
       <text x={W - PR + 2} y={line80y + 4} fontSize="8" fill={accent} opacity="0.8">80%</text>
 
       {/* Vital/Trivial divider */}
-      const divX = PL + 3 * (barW + barGap) - barGap / 2
       <line x1={PL + 3 * (barW + barGap) - barGap / 2} y1={PT} x2={PL + 3 * (barW + barGap) - barGap / 2} y2={H - PB} stroke="rgba(255,255,255,0.15)" strokeWidth="1.5" strokeDasharray="4 3"/>
 
       {/* Bars */}

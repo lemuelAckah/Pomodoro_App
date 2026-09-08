@@ -1,24 +1,24 @@
 import { useTheme } from '../ThemeContext'
 
-const RADIUS = 110
-export const CIRCUMFERENCE = 2 * Math.PI * RADIUS
-
 function pad(n: number) { return String(n).padStart(2, '0') }
 export function formatTime(s: number) { return `${pad(Math.floor(s / 60))}:${pad(s % 60)}` }
 
 interface Props {
   timeLeft: number
-  dashOffset: number
+  progress: number  // 0–1, caller computes timeLeft / totalDuration
   color: string
   running: boolean
   large?: boolean
 }
 
-export default function TimerRing({ timeLeft, dashOffset, color, running, large }: Props) {
+export default function TimerRing({ timeLeft, progress, color, running, large }: Props) {
   const { theme } = useTheme()
   const size = large ? 300 : 260
   const cx = size / 2
+  // Each size variant uses its own radius so circumference is always correct
   const r = large ? 128 : 110
+  const circumference = 2 * Math.PI * r
+  const dashOffset = circumference * (1 - progress)
 
   return (
     <div className="relative flex items-center justify-center" style={{ width: size, height: size }}>
@@ -38,7 +38,7 @@ export default function TimerRing({ timeLeft, dashOffset, color, running, large 
           stroke={color}
           strokeWidth={large ? 4 : 3}
           strokeLinecap="round"
-          strokeDasharray={CIRCUMFERENCE}
+          strokeDasharray={circumference}
           strokeDashoffset={dashOffset}
           style={{
             transformOrigin: 'center',
