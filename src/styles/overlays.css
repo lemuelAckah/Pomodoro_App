@@ -1,0 +1,225 @@
+/* overlays.css — Overlays: modals, toasts, search palette, menus, mini-timer, tour, and confetti canvas. */
+
+/* Minimized persistent timer — visible on every tab except the timer tab.
+   Lifted above the now-playing bar (bottom 0, z-index 44) so the two fixed
+   bars never overlap when music is playing during a session. */
+.mini-timer {
+  position: fixed;
+  left: 50%;
+  bottom: 64px;
+  transform: translateX(-50%);
+  z-index: 46;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--ink);
+  color: #fff;
+  padding: 10px 12px 10px 18px;
+  border-radius: 999px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+  font-size: 13px;
+  white-space: nowrap;
+  animation: mini-slide-up 0.25s ease-out;
+  max-width: calc(100vw - 24px);
+}
+.mini-timer .mini-time {
+  flex-shrink: 0;
+}
+@media (max-width: 640px) {
+  .mini-timer {
+    white-space: normal;
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: 6px;
+    bottom: 76px;
+  }
+}
+
+.mini-timer .mini-time {
+  font:
+    700 16px "Space Mono",
+    monospace;
+  letter-spacing: -1px;
+}
+
+.mini-timer .mini-btn {
+  background: var(--sage);
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+#confetti-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  pointer-events: none;
+}
+
+#tour-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  background: rgba(16, 32, 24, 0.45);
+}
+
+.tour-tip {
+  position: fixed;
+  width: min(320px, calc(100vw - 24px));
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: var(--shadow);
+  z-index: 151;
+}
+
+.tour-center {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.tour-glow {
+  position: relative;
+  z-index: 151;
+  outline: 3px solid var(--gold);
+  outline-offset: 3px;
+  border-radius: 12px;
+}
+
+#update-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 134px;
+  transform: translateX(-50%);
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 10px 12px 10px 18px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+  white-space: nowrap;
+}
+
+#update-toast button {
+  background: var(--sage);
+  color: #fff;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.search-modal {
+  max-width: 560px;
+}
+
+.search-results {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  background: #f6f7f2;
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.search-row:hover {
+  background: #edf3e8;
+}
+
+.search-ico {
+  font-size: 20px;
+}
+
+.search-txt {
+  display: grid;
+  gap: 1px;
+}
+
+.search-txt strong {
+  font-size: 13px;
+}
+
+.search-txt small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.modal-backdrop[data-st-confirm] {
+  z-index: 500;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: #10201888;
+  z-index: 50;
+  display: grid;
+  align-items: start;
+  justify-items: center;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.modal {
+  max-width: 500px;
+  width: 100%;
+  background: #fff;
+  border-radius: 18px;
+  padding: 24px;
+  box-shadow: var(--shadow);
+  margin: auto 0;
+}
+
+.toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(340px, calc(100vw - 40px));
+  background: #18352a;
+  color: #fff;
+  padding: 12px 16px;
+  border-radius: 12px;
+  z-index: 80;
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: var(--shadow);
+  animation: toast-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+.toast svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
+}

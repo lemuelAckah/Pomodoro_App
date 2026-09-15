@@ -1,0 +1,380 @@
+/* layout.css — App shell: sidebar, navigation, topbar, and page layout. */
+
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+}
+
+.sidebar {
+  .verification-banner {
+    display: grid;
+    gap: 5px;
+    padding: 14px;
+    margin: 18px 0;
+    border: 1px solid #efd69a;
+    border-radius: 13px;
+    background: #fff8e6;
+    color: #8a650e;
+    font-size: 12px;
+  }
+  .verification-banner span {
+    color: #9c8653;
+    font-size: 11px;
+  }
+  .verification-banner .ghost {
+    justify-self: start;
+    padding: 8px 10px;
+    color: #8a650e;
+    background: #fff0c7;
+    font-size: 11px;
+  }
+  background: #18352a;
+  color: #eaf3e9;
+  padding: 28px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 10px;
+}
+
+.brand-mark {
+  width: 38px;
+  height: 38px;
+  border-radius: 13px;
+  background: var(--lime);
+  color: #18352a;
+  display: grid;
+  place-items: center;
+  font-size: 21px;
+  font-weight: 700;
+}
+
+.brand strong {
+  font-family: "Fraunces", serif;
+  font-size: 22px;
+  letter-spacing: -0.4px;
+}
+
+.nav {
+  display: grid;
+  gap: 6px;
+}
+
+.nav button {
+  text-align: left;
+  padding: 12px 13px;
+  border-radius: 12px;
+  background: transparent;
+  color: #bcd0c1;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  transition: 0.2s;
+}
+
+.nav button:hover,
+.nav button.active {
+  background: #2b5542;
+  color: #fff;
+}
+
+.nav button.active {
+  box-shadow: inset 3px 0 var(--lime);
+}
+
+.sidebar-note {
+  margin-top: auto;
+  border: 1px solid #35604a;
+  background: #214633;
+  border-radius: 16px;
+  padding: 15px;
+}
+
+.sidebar-note p {
+  margin: 8px 0 0;
+  color: #b7d0bd;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.main {
+  min-width: 0;
+  padding: 30px clamp(20px, 4vw, 58px) 48px;
+}
+
+.topbar {
+  max-width: 1220px;
+  margin: auto;
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: center;
+  margin-bottom: 18px;
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--paper);
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+
+.mobile-brand {
+  display: none;
+}
+
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.top-icon {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: #fff;
+  color: var(--sage);
+  border: 1px solid var(--line);
+  font-size: 20px;
+}
+
+[data-header-short] {
+  display: none;
+}
+
+.top-icon:hover {
+  background: #edf3e8;
+  transform: translateY(-1px);
+}
+
+.notification-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  min-width: 8px;
+  height: 8px;
+  padding: 0 2px;
+  border-radius: 99px;
+  background: var(--coral);
+  color: #fff;
+  font:
+    700 8px "Space Mono",
+    monospace;
+}
+
+.coins {
+  background: #fff6dd;
+  color: #a76c06;
+  border: 1px solid #f1d894;
+  padding: 10px 14px;
+  border-radius: 999px;
+  font:
+    700 13px "Space Mono",
+    monospace;
+}
+
+/* The coin pill is a shortcut to MoMo top-ups in the Rewards store */
+button.coins {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+button.coins:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(167, 108, 6, .25);
+}
+
+.avatar {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--coral);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  overflow: hidden;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+}
+
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  display: block;
+  border-radius: 50%;
+}
+
+.content {
+  max-width: 1220px;
+  margin: auto;
+  /* Reserve space for fixed bottom bars (now-playing / mini timer / mini
+     player). --bar-pad is kept current by updateBarPadding() in core.js;
+     24px is the no-bars baseline. */
+  padding-bottom: max(24px, var(--bar-pad, 0px));
+}
+
+.page-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 20px;
+  margin-bottom: 24px;
+}
+
+.lede {
+  color: var(--muted);
+  max-width: 600px;
+  line-height: 1.6;
+  font-size: 15px;
+}
+
+.session-card .avatar {
+  flex: none;
+}
+
+[data-compact="1"] .main {
+  padding: 18px clamp(14px, 3vw, 40px) 32px;
+}
+
+[data-compact="1"] .page-head {
+  margin-bottom: 16px;
+}
+
+.tc-brand .brand-mark {
+  width: 32px;
+  height: 32px;
+  font-size: 18px;
+  border-radius: 11px;
+}
+
+.avatar-sm {
+  width: 28px;
+  height: 28px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 1080px) {
+  .app-shell {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+  .main {
+    padding-left: 28px;
+    padding-right: 28px;
+  }
+  .three {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+  .sidebar {
+    height: auto;
+    position: static;
+    padding: 12px 14px;
+    flex-direction: column;
+    align-items: stretch;
+    overflow: visible;
+  }
+  .brand {
+    padding: 0;
+  }
+  /* Wrapped chip grid: ALL tabs fit in one view — no horizontal scrollbar
+     needed to reach the last tab. */
+  .nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    overflow: visible;
+    margin-top: 10px;
+  }
+  .nav button {
+    white-space: nowrap;
+    padding: 8px 11px;
+    font-size: 12.5px;
+    gap: 7px;
+    border-radius: 999px;
+    border: 1px solid #35604a;
+    background: #214633;
+    color: #bcd0c1;
+    flex: 0 1 auto;
+  }
+  .nav button.active {
+    background: var(--lime);
+    color: #18352a;
+    border-color: var(--lime);
+    font-weight: 700;
+  }
+  .sidebar-note {
+    display: none;
+  }
+  .topbar {
+    margin-bottom: 23px;
+  }
+  .mobile-brand {
+    display: none;
+  }
+  .two,
+  .sound-layout {
+    grid-template-columns: 1fr;
+  }
+  .community-layout {
+    grid-template-columns: 1fr;
+  }
+  /* community.css / audio.css load after layout.css, so their base layout rules
+     win the cascade tie and keep squeezed multi-column grids on small screens
+     (overflow). Re-assert the collapse with stronger selectors. */
+  main .sound-layout,
+  .main .sound-layout {
+    grid-template-columns: 1fr;
+  }
+  main .community-layout,
+  .main .community-layout {
+    grid-template-columns: 1fr;
+  }
+  .category-list {
+    display: flex;
+    overflow: auto;
+  }
+  .category-list button {
+    white-space: nowrap;
+  }
+  .messages {
+    grid-template-columns: 150px 1fr;
+  }
+  .page-head {
+    align-items: flex-start;
+  }
+  .account-layout {
+    grid-template-columns: 1fr;
+  }
+  .account-hero {
+    align-items: flex-start;
+  }
+  .account-orbit {
+    width: 100px;
+    height: 100px;
+    font-size: 30px;
+  }
+}

@@ -1,0 +1,19 @@
+/* icons.css — Custom theme-aware SVG icon system (sicon) and emoji display surfaces. */
+
+.complete-emoji {
+  font-size: 44px;
+  margin-bottom: 10px;
+}
+
+.emoji {
+  font-size: 32px;
+  margin-bottom: 15px;
+}
+
+/* ---- Custom icon system (theme-aware, replaces Unicode emoji) ---- */
+.sicon {
+  width: 1.15em;
+  height: 1.15em;
+  flex: none;
+  vertical-align: -0.22em;
+}

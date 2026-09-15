@@ -1,0 +1,274 @@
+/* techcheck.css — Study Technique Check: branded assessment journey, questions, progress, and results. */
+
+.tc-box {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 9px;
+  border: 2px solid var(--line);
+  background: var(--panel, #fff);
+  color: #fff;
+  transition:
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    transform 0.12s ease,
+    box-shadow 0.18s ease;
+}
+
+.tc-box .sicon {
+  width: 14px;
+  height: 14px;
+  transform: scale(0);
+  transition: transform 0.22s cubic-bezier(0.2, 1.6, 0.4, 1);
+}
+
+/* ---- Study Technique Check ---- */
+.tc-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(600px 420px at 12% 8%, #47765a26, transparent 70%),
+    radial-gradient(560px 420px at 88% 18%, #e9ae3f2b, transparent 70%),
+    radial-gradient(700px 520px at 50% 110%, #e8795b22, transparent 70%),
+    var(--paper);
+  pointer-events: none;
+}
+
+.tc-bg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(#47765a2e 1.2px, transparent 1.3px);
+  background-size: 26px 26px;
+  mask-image: radial-gradient(85% 70% at 50% 28%, #000 30%, transparent 100%);
+  -webkit-mask-image: radial-gradient(85% 70% at 50% 28%, #000 30%, transparent 100%);
+}
+
+.tc-bg::after {
+  content: "◷";
+  position: absolute;
+  right: -30px;
+  bottom: -80px;
+  font-size: min(52vw, 360px);
+  line-height: 1;
+  font-weight: 700;
+  color: var(--sage);
+  opacity: 0.08;
+}
+
+.tc-wrap {
+  max-width: 660px;
+  margin: 0 auto;
+  padding: 34px 16px 60px;
+  position: relative;
+  z-index: 1;
+}
+
+.tc-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.tc-brand strong {
+  font-family: "Fraunces", serif;
+  font-size: 20px;
+  letter-spacing: -0.3px;
+}
+
+.tc-card {
+  border-radius: 20px;
+  box-shadow: 0 24px 70px rgba(45, 67, 48, 0.14);
+}
+
+.tc-card h1 {
+  margin: 6px 0 10px;
+  font-size: clamp(24px, 5vw, 32px);
+}
+
+.tc-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+  flex-wrap: wrap;
+}
+
+.tc-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.tc-progress {
+  height: 8px;
+  border-radius: 99px;
+  background: var(--line);
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+
+.tc-progress i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--sage), var(--gold));
+  transition: width 0.3s ease;
+}
+
+.tc-opts {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.tc-opt {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  text-align: left;
+  background: var(--paper, #f6f7f2);
+  border: 2px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 16px;
+  font-size: 15px;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease,
+    transform 0.1s ease;
+}
+
+.tc-opt:hover {
+  border-color: var(--sage);
+  transform: translateY(-1px);
+}
+
+.tc-opt:active {
+  transform: scale(0.99);
+}
+
+.tc-radio {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease;
+}
+
+.tc-nav {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.tc-picked {
+  display: none;
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--sage);
+  color: #fff;
+  place-items: center;
+}
+
+.tc-picked .sicon {
+  width: 14px;
+  height: 14px;
+}
+
+.tc-results-head {
+  text-align: center;
+  margin-bottom: 18px;
+}
+
+.tc-results-head h1 {
+  margin: 6px 0 8px;
+  font-size: clamp(24px, 5vw, 32px);
+}
+
+.tc-rank {
+  margin-bottom: 16px;
+}
+
+.tc-ranknum {
+  font:
+    700 22px "Space Mono",
+    monospace;
+  color: var(--gold);
+}
+
+.tc-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0;
+}
+
+.tc-bar {
+  flex: 1;
+  height: 10px;
+  border-radius: 99px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.tc-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--sage), var(--gold));
+}
+
+.tc-bar.small {
+  height: 7px;
+}
+
+.tc-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px dashed var(--line);
+}
+
+.tc-row:last-child {
+  border-bottom: 0;
+}
+
+.tc-row-icon .sicon {
+  width: 22px;
+  height: 22px;
+}
+
+.tc-row-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+}
+
+.tc-anim {
+  animation: tc-in 0.32s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tc-anim {
+    animation: none;
+  }
+  .tc-progress i,
+  .tc-bar i {
+    transition: none;
+  }
+}

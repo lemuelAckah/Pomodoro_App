@@ -1,0 +1,670 @@
+/* timer.css — Focus desk: timer ring, mode switch, tasks, stats, streaks, garden, records, achievements, focus view, and boss mode. */
+
+.timer-card {
+  min-height: 590px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.mode-switch {
+  display: flex;
+  gap: 5px;
+  background: #eef2eb;
+  border-radius: 12px;
+  padding: 5px;
+  margin-bottom: 56px;
+}
+
+.mode-switch button {
+  padding: 10px 15px;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.mode-switch button.active {
+  background: var(--sage);
+  color: #fff;
+}
+
+.timer-ring {
+  width: min(330px, 75vw);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: conic-gradient(var(--sage) var(--progress), #dbe6d7 0);
+  position: relative;
+}
+
+.timer-ring:after {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  border-radius: 50%;
+  background: var(--panel);
+}
+
+.time {
+  position: relative;
+  z-index: 1;
+  font:
+    700 clamp(44px, 7vw, 74px) "Space Mono",
+    monospace;
+  letter-spacing: -5px;
+}
+
+.timer-label {
+  color: var(--sage);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  font-weight: 700;
+  margin-top: 8px;
+  position: relative;
+  z-index: 1;
+}
+
+.timer-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 64px;
+}
+
+.tasks-card {
+  min-height: 590px;
+}
+
+.task {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 13px 0;
+  border-bottom: 1px solid #edf0eb;
+}
+
+.task:last-child {
+  border: 0;
+}
+
+.task-check {
+  background: none;
+  border: 0;
+  padding: 8px;
+  margin: -8px -4px -8px -8px;
+  cursor: pointer;
+  flex: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.task-check:hover .tc-box {
+  border-color: var(--sage);
+  box-shadow: 0 0 0 4px #47765a14;
+}
+
+.task-check:active .tc-box {
+  transform: scale(0.85);
+}
+
+.task-check.done .tc-box {
+  background: var(--sage);
+  border-color: var(--sage);
+}
+
+.task-check.done .tc-box .sicon {
+  transform: scale(1);
+}
+
+.task-check:focus-visible {
+  outline: 2px solid var(--sage);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+
+.task-text {
+  flex: 1;
+  font-size: 14px;
+  padding-top: 2px;
+}
+
+.task.done .task-text {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.task-meta {
+  color: var(--muted);
+  font:
+    11px "Space Mono",
+    monospace;
+  padding-top: 5px;
+  flex: none;
+}
+
+.task-edit {
+  font-size: 12px;
+  padding: 7px 10px;
+  flex: none;
+}
+
+.stats {
+  margin-top: 18px;
+}
+
+.stat strong {
+  display: block;
+  font:
+    700 27px "Space Mono",
+    monospace;
+  margin: 8px 0 2px;
+}
+
+.stat span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.streak-dots {
+  display: flex;
+  gap: 4px;
+  margin: 6px 0 4px;
+}
+
+.streak-dots i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--line);
+}
+
+.streak-dots i.on {
+  background: var(--gold);
+}
+
+.focus-live {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #c0392b;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  margin-bottom: 16px;
+}
+
+.focus-live.off {
+  display: none;
+}
+
+.focus-live .live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e05252;
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+
+.mini-live {
+  font-size: 12px;
+}
+
+.mini-live.off {
+  display: none;
+}
+
+[data-compact="1"] .timer-card {
+  min-height: 480px;
+}
+
+[data-compact="1"] .timer-card .timer-ring {
+  width: min(270px, 70vw);
+}
+
+[data-compact="1"] .mode-switch {
+  margin-bottom: 32px;
+}
+
+[data-compact="1"] .timer-actions {
+  margin-top: 32px;
+}
+
+#focus-view {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  background: var(--paper);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 34px;
+  padding: 24px;
+  animation: focusIn 0.25s ease-out;
+}
+
+#focus-view .timer-ring {
+  width: min(380px, 82vw);
+}
+
+#focus-view .timer-actions {
+  margin-top: 0;
+}
+
+.focus-exit {
+  font-size: 12px;
+  padding: 9px 16px;
+}
+
+.template-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-bottom: 36px;
+}
+
+.template-chip {
+  background: #eef2eb;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 13px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.template-chip:hover {
+  background: var(--sage);
+  border-color: transparent;
+  color: #fff;
+}
+
+.dur-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin: -20px 0 36px;
+}
+.dur-row .field-label {
+  margin: 0;
+  font-size: 11px;
+}
+.dur-input {
+  width: 88px;
+}
+
+.garden-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 26px;
+  line-height: 1.2;
+}
+
+.garden-plant.wilted {
+  filter: grayscale(1);
+  opacity: 0.6;
+}
+
+/* Living petals: soft tint glow + gentle sway on the rarity-colored blooms */
+.garden-plant {
+  transition: transform 0.2s ease;
+}
+.garden-plant:not(.wilted):hover {
+  transform: scale(1.18) rotate(-6deg);
+}
+.garden-plant:not(.wilted) svg {
+  animation: bloom-breathe 4s ease-in-out infinite;
+}
+.garden-plant:nth-child(2n):not(.wilted) svg {
+  animation-delay: -1.3s;
+}
+.garden-plant:nth-child(3n):not(.wilted) svg {
+  animation-delay: -2.6s;
+}
+@keyframes bloom-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}
+
+.records-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 4px;
+  text-align: center;
+}
+
+.records-grid > div {
+  background: #f6f7f2;
+  border-radius: 12px;
+  padding: 10px 6px;
+  display: grid;
+  gap: 2px;
+}
+
+.records-grid strong {
+  font:
+    700 15px "Space Mono",
+    monospace;
+}
+
+.records-grid span {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+@media (max-width: 640px) {
+  .records-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.ach-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.ach {
+  font-size: 22px;
+  background: #f6f7f2;
+  border-radius: 10px;
+  padding: 4px 7px;
+}
+
+.ach.locked {
+  filter: grayscale(1);
+  opacity: 0.45;
+}
+
+/* Earned achievements keep their natural colors and shine */
+.ach.earned svg {
+  animation: bloom-breathe 3.5s ease-in-out infinite;
+}
+
+/* ---- Win journal actions ---- */
+.win-row {
+  align-items: flex-start;
+}
+.win-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.win-row:hover .win-actions,
+.win-row:focus-within .win-actions {
+  opacity: 1;
+}
+.win-actions .icon-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+.win-actions .icon-btn svg {
+  width: 14px;
+  height: 14px;
+}
+@media (hover: none) {
+  .win-actions {
+    opacity: 1;
+  }
+}
+
+.win-row {
+  display: flex;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.win-row:last-child {
+  border-bottom: 0;
+}
+
+.win-row p {
+  margin: 0;
+}
+
+#boss-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: #f3f3f3;
+  display: flex;
+  flex-direction: column;
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+.boss-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #217346;
+  color: #fff;
+  font-size: 13px;
+  padding: 8px 16px;
+}
+
+.boss-sheet {
+  flex: 1;
+  overflow: auto;
+  padding: 0;
+}
+
+.boss-sheet table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+  background: #fff;
+}
+
+.boss-sheet th,
+.boss-sheet td {
+  border: 1px solid #d4d4d4;
+  padding: 5px 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.boss-sheet th {
+  background: #f3f3f3;
+  color: #444;
+  font-weight: 600;
+}
+
+button.streak-dots {
+  background: none;
+  border: 0;
+  padding: 4px 2px;
+  cursor: pointer;
+}
+
+/* ---- Focus-mode spiral wave ----
+   While a focus session runs, a three-arm spiral swirls around the timer ring
+   and soft wave ripples breathe inside the clock face. */
+.timer-ring.spiral-on {
+  animation: focus-glow 3.2s ease-in-out infinite;
+}
+.timer-ring.spiral-on::before {
+  content: "";
+  position: absolute;
+  inset: -26px;
+  border-radius: 50%;
+  background: repeating-conic-gradient(
+    from 0deg,
+    transparent 0deg 20deg,
+    rgba(90, 140, 105, 0.95) 26deg 40deg,
+    transparent 48deg 92deg,
+    rgba(90, 140, 105, 0.5) 100deg 112deg,
+    transparent 120deg 160deg,
+    rgba(90, 140, 105, 0.75) 168deg 180deg,
+    transparent 188deg 360deg
+  );
+  -webkit-mask: radial-gradient(closest-side circle, transparent 0 46%, #000 60% 92%, transparent 100%);
+  mask: radial-gradient(closest-side circle, transparent 0 46%, #000 60% 92%, transparent 100%);
+  animation: spiral-rot 14s linear infinite;
+  opacity: 0.9;
+  pointer-events: none;
+}
+.timer-ring.spiral-on > div {
+  position: relative;
+}
+.timer-ring.spiral-on > div::before {
+  content: "";
+  position: absolute;
+  inset: 10px;
+  z-index: 1;
+  border-radius: 50%;
+  border: 3px solid rgba(90, 140, 105, 0.55);
+  box-shadow: 0 0 22px rgba(90, 140, 105, 0.4), inset 0 0 28px rgba(90, 140, 105, 0.28);
+  animation: ripple-out 3s cubic-bezier(0.2, 0.6, 0.4, 1) infinite;
+  pointer-events: none;
+}
+@keyframes spiral-rot {
+  to { transform: rotate(360deg); }
+}
+@keyframes ripple-out {
+  0% { transform: scale(0.35); opacity: 0.55; }
+  100% { transform: scale(1.06); opacity: 0; }
+}
+@keyframes focus-glow {
+  0%, 100% { box-shadow: 0 0 0 rgba(90, 140, 105, 0); }
+  50% { box-shadow: 0 0 44px rgba(90, 140, 105, 0.45); }
+}
+@media (max-width: 640px) {
+  .timer-ring.spiral-on::before {
+    inset: -16px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .timer-ring.spiral-on,
+  .timer-ring.spiral-on::before,
+  .timer-ring.spiral-on > div::before,
+  .garden-plant:not(.wilted) svg,
+  .ach.earned svg {
+    animation: none;
+  }
+}
+
+/* ---------- Focus desk live mission ---------- */
+.mission-desk {
+  position: relative;
+  overflow: hidden;
+  margin-top: 18px;
+  border-color: var(--sage);
+}
+.mission-desk.live { box-shadow: 0 0 0 1px var(--sage), var(--shadow); }
+.mission-glow {
+  position: absolute; inset: -40% -20% auto -20%; height: 220px;
+  background: radial-gradient(closest-side, rgba(71, 118, 90, .14), transparent);
+  pointer-events: none;
+}
+.mission-top { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
+.mission-eyebrow {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--sage);
+}
+.mission-dot { width: 9px; height: 9px; border-radius: 50%; background: #3ab07a; box-shadow: 0 0 8px #3ab07a; animation: tag-pulse 1.6s infinite; }
+.mission-desk.idle .mission-dot { background: var(--muted); box-shadow: none; animation: none; }
+.mission-sprint { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin: 6px 0 10px; }
+.mission-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13px; margin-top: 8px; }
+
+/* ---------- group challenge timer lock ---------- */
+.challenge-lock {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  margin: 12px 0 4px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--gold);
+  background: linear-gradient(120deg, rgba(233, 174, 63, .12), rgba(71, 118, 90, .10));
+  font-size: 13px;
+}
+.lock-ico {
+  width: 36px; height: 36px; border-radius: 11px; flex-shrink: 0;
+  display: grid; place-items: center;
+  background: var(--sage); color: #fff;
+}
+.lock-ico .sicon { width: 18px; height: 18px; }
+.challenge-lock .ghost { margin-left: auto; flex-shrink: 0; }
+.timer-card [disabled] { opacity: .45; cursor: not-allowed; }
+
+/* ---------- achievement cabinet ---------- */
+.ach-cabinet .section-row h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.ach-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.ach-tile {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px;
+}
+.ach-tile > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+.ach-tile small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.ach-tile .tag {
+  margin-top: 4px;
+  justify-self: start;
+}
+.ach-tile-ico {
+  width: 46px;
+  height: 46px;
+  border-radius: 13px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  background: rgba(148, 163, 184, .14);
+}
+.ach-tile-ico .sicon {
+  width: 24px;
+  height: 24px;
+}
+.ach-tile.earned {
+  border-color: var(--gold);
+  background: linear-gradient(140deg, rgba(233, 174, 63, .10), transparent 60%);
+}
+.ach-tile.earned .ach-tile-ico {
+  background: linear-gradient(140deg, var(--gold), #c98a1f);
+  color: #fff;
+  box-shadow: 0 6px 18px rgba(233, 174, 63, .4);
+}
+.ach-tile.locked .ach-tile-ico {
+  filter: grayscale(1);
+  opacity: .55;
+}

@@ -1,0 +1,4515 @@
+/* community.js — community, chat, groups, stories/status loop, calls, sprints */
+import {
+  state, $, $$, uid, get, save, esc, sicon, stripIcon, persist, notify, confirmBox, viewHead,
+  addCoins, addNotification, browserNotify, celebrate, fmt, fmtSize, avatarMarkup, dayKey, notifOn,
+  setGroupLookup, fitTextarea,
+} from "./core.js";
+import {
+  sendCloudMessage, markMessageRead, subscribeToConversation, subscribeToPresence,
+  createWebRtcPeer, recordCall, updateCall, upsertCallParticipant,
+  uploadUserFile, getUserFileUrl, backendConfigured, reportUser, listPublicGroups,
+  createCloudGroup, joinCloudGroup, leaveCloudGroup, deleteCloudGroup,
+} from "./services/backend.js";
+import { playChime } from "./audio.js";
+import { matchTech } from "./techniques.js";
+import { renderMiniTimer, sessionInProgress, startTimer, updateTimerDom, applyDurations } from "./timer.js";
+import { shell } from "./app.js";
+// Groups exist only when a user creates them — there is no built-in catalog.
+// Every user-created group is public so other users can discover and join it.
+let cloudGroups = [];
+let cloudGroupsAt = 0;
+async function refreshCloudGroups(force) {
+  if (!backendConfigured) return cloudGroups;
+  if (!force && Date.now() - cloudGroupsAt < 60000 && cloudGroups.length) return cloudGroups;
+  try {
+    const { data, error } = await listPublicGroups(200);
+    if (!error && Array.isArray(data)) {
+      cloudGroups = data.map((r) => ({
+        id: r.id,
+        name: r.name,
+        emoji: sicon(r.logo || "book"),
+        logoName: r.logo || "book",
+        ownerId: r.owner_id,
+        description: r.description || "",
+        tags: r.focus_topics || [],
+        members: r.member_count ?? 1,
+        color: "#47765a",
+        source: "cloud",
+      }));
+      cloudGroupsAt = Date.now();
+    }
+  } catch {
+    /* offline — keep stale cache */
+  }
+  return cloudGroups;
+}
+
+function allGroups() {
+  const seen = new Set();
+  return [...(state.customGroups || []), ...cloudGroups].filter((g) => {
+    if (!g || !g.id || seen.has(g.id)) return false;
+    seen.add(g.id);
+    return true;
+  });
+}
+setGroupLookup(() => allGroups());
+
+let activePeer;
+
+let conversationSubscription;
+
+let activeCallHistoryId;
+
+let activeCallStream = null;
+
+let chatReply = null;
+
+let chatTypingSentAt = 0;
+
+const typingTimeouts = {};
+
+let voiceRec = null;
+
+let presenceSub = null;
+
+let presenceInfo = { chatId: null, users: [] };
+
+let sprintTicker = null;
+
+function weekKey(d) {
+  const dt = new Date(d.getTime ? d.getTime() : d);
+  const day = (dt.getDay() + 6) % 7;
+  dt.setDate(dt.getDate() - day);
+  return dayKey(dt);
+}
+
+function logFocusDay(min) {
+  const k = dayKey(new Date());
+  state.focusDays[k] = (state.focusDays[k] || 0) + min;
+  const cutoff = Date.now() - 70 * 86400000;
+  Object.keys(state.focusDays).forEach((key) => {
+    if (new Date(key + "T00:00:00").getTime() < cutoff)
+      delete state.focusDays[key];
+  });
+  persist();
+}
+
+function weekMinutes(wk) {
+  return Object.entries(state.focusDays || {})
+    .filter(([date]) => weekKey(new Date(date + "T00:00:00")) === wk)
+    .reduce((n, [, m]) => n + m, 0);
+}
+
+function progressChallenges(focusedMin) {
+  const wk = weekKey(new Date());
+  (state.challenges || []).forEach((c) => {
+    sanitizeChallenge(c);
+    if (c.weekKey !== wk || c.done || !c.joined) return;
+    const me = state.profile.handle || "you";
+    bumpChallengeMember(c, me, true, focusedMin);
+    c.progress += c.unit === "minutes" ? focusedMin : 1;
+    postGroupMessage(
+      c.groupId,
+      `@${me} finished a ${fmtPace(c)} session — ${Math.min(c.progress, c.target)}/${c.target} ${c.unit} in “${c.title}”.`,
+      "trophy",
+    );
+    // A rival answers back — the leaderboard stays alive.
+    if (!c.done && Math.random() < 0.4) mateChallengeSession(c, true);
+    if (c.progress >= c.target) finishChallenge(c, null);
+  });
+  persist();
+}
+
+/* ---------- group challenges pro: prescribed pace, leaderboard, one-at-a-time lock ---------- */
+function fmtPace(c) {
+  const m = Math.max(0, c.sessionMin || 0);
+  const s = Math.max(0, Math.min(59, c.sessionSec || 0));
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function paceSec(c) {
+  return Math.max(1, (c.sessionMin || 0) * 60 + (c.sessionSec || 0));
+}
+
+function sanitizeChallenge(c) {
+  if (!c || typeof c !== "object") return c;
+  if (!Number.isFinite(+c.sessionMin)) c.sessionMin = 25;
+  if (!Number.isFinite(+c.sessionSec)) c.sessionSec = 0;
+  c.sessionMin = Math.min(180, Math.max(0, Math.floor(+c.sessionMin)));
+  c.sessionSec = Math.min(59, Math.max(0, Math.floor(+c.sessionSec)));
+  if (c.sessionMin === 0 && c.sessionSec === 0) c.sessionMin = 25;
+  if (!c.ownerId) c.ownerId = "";
+  if (c.joined == null) c.joined = true; // legacy rooms counted automatically
+  if (!Array.isArray(c.members) || !c.members.length) {
+    const names = [...SPRINT_PEER_NAMES].sort(() => Math.random() - 0.5).slice(0, 3);
+    const per = paceSec(c) / 60;
+    c.members = names.map((name) => {
+      const sessions = Math.floor(Math.random() * Math.max(1, Math.min(4, (c.target || 10) - 1)));
+      return { id: "cm-" + uid(), name, sessions, minutes: Math.round(sessions * per) };
+    });
+  }
+  if (!c.members.some((m) => m.you)) {
+    // Legacy progress was mine alone — carry it onto my leaderboard row.
+    c.members.unshift({
+      id: "cm-me",
+      name: state.profile.handle || "you",
+      you: true,
+      sessions: c.unit === "sessions" ? Math.min(c.progress || 0, c.target || 0) : 0,
+      minutes: c.unit === "minutes" ? c.progress || 0 : Math.round((c.progress || 0) * paceSec(c) / 60),
+    });
+  }
+  return c;
+}
+
+// One race at a time: legacy weeks may hold several auto-counted challenges,
+// so keep the first undone one and park the rest as joinable.
+function ensureChallengeFields() {
+  if (!Array.isArray(state.challenges)) state.challenges = [];
+  const wk = weekKey(new Date());
+  let kept = false;
+  state.challenges.forEach((c) => {
+    sanitizeChallenge(c);
+    if (c.weekKey === wk && !c.done && c.joined) {
+      if (kept) c.joined = false;
+      else kept = true;
+    }
+  });
+  const active = state.challenges.find((c) => c.weekKey === wk && !c.done && c.joined);
+  if (active && state.activeChallengeId !== active.id) {
+    state.activeChallengeId = active.id;
+    persist();
+  }
+  // Validate the pointer inline (never via challengeLock — that calls back
+  // here and would recurse forever).
+  const valid = (state.challenges || []).some(
+    (x) => x.id === state.activeChallengeId && x.weekKey === wk && !x.done && x.joined,
+  );
+  if (!valid && state.activeChallengeId) state.activeChallengeId = null;
+}
+
+// The challenge currently locking the focus timer (self-healing).
+function challengeLock() {
+  ensureChallengeFields();
+  const wk = weekKey(new Date());
+  const c = (state.challenges || []).find(
+    (x) => x.id === state.activeChallengeId && x.weekKey === wk && !x.done && x.joined,
+  );
+  if (!c && state.activeChallengeId) {
+    state.activeChallengeId = null;
+    persist();
+  }
+  return c || null;
+}
+
+function otherActiveChallenge(id) {
+  const wk = weekKey(new Date());
+  return (state.challenges || []).find(
+    (x) => x.id !== id && x.weekKey === wk && !x.done && x.joined,
+  );
+}
+
+function joinChallenge(id) {
+  const c = (state.challenges || []).find((x) => x.id === id);
+  if (!c || c.done) return false;
+  sanitizeChallenge(c);
+  const other = otherActiveChallenge(id);
+  if (other) {
+    notify(`One race at a time — finish or leave “${other.title}” first`);
+    return false;
+  }
+  if (sessionInProgress()) {
+    notify("Finish or reset your current session before joining");
+    return false;
+  }
+  c.joined = true;
+  state.activeChallengeId = c.id;
+  const dur = paceSec(c);
+  state.mode = "focus";
+  state.time = dur;
+  state.sessionDuration = dur;
+  state.running = false;
+  state.endsAt = null;
+  state.sessionTech = null;
+  state.sprintSession = null;
+  try {
+    applyDurations();
+  } catch {
+    /* timer module warms it on next render */
+  }
+  persist();
+  return true;
+}
+
+function leaveChallenge(id) {
+  const c = (state.challenges || []).find((x) => x.id === id);
+  if (state.activeChallengeId === id) state.activeChallengeId = null;
+  if (c) {
+    c.joined = false;
+    c.progress = 0;
+    const me = c.members?.find((m) => m.you);
+    if (me) {
+      me.sessions = 0;
+      me.minutes = 0;
+    }
+  }
+  try {
+    applyDurations();
+  } catch {
+    /* ignore */
+  }
+  persist();
+  return true;
+}
+
+// Focus-desk banner for the active challenge lock.
+function challengeLockBanner() {
+  const c = challengeLock();
+  if (!c) return "";
+  return `<div class="challenge-lock"><span class="lock-ico">${sicon("lock")}</span><div><strong>Challenge lock · “${esc(c.title)}”</strong><br><small class="muted">Every focus session runs ${fmtPace(c)} — templates and custom durations are paused until you leave.</small></div><button class="ghost" data-challenge-leave="${c.id}">Leave</button></div>`;
+}
+
+function bumpChallengeMember(c, name, you, focusedMin) {
+  c.members = Array.isArray(c.members) ? c.members : [];
+  let m = c.members.find((x) => (you && x.you) || (!you && x.name === name));
+  if (!m) {
+    m = { id: "cm-" + uid(), name, you: Boolean(you), sessions: 0, minutes: 0 };
+    c.members.push(m);
+  }
+  m.sessions = (m.sessions || 0) + 1;
+  m.minutes = (m.minutes || 0) + Math.max(1, Math.round(focusedMin || paceSec(c) / 60));
+  return m;
+}
+
+function challengeScore(c, m) {
+  return c.unit === "minutes" ? m.minutes || 0 : m.sessions || 0;
+}
+
+function mateWon(c, m) {
+  return challengeScore(c, m) >= (c.target || 0);
+}
+
+// A simulated group mate logs a session of their own.
+function mateChallengeSession(c, announce) {
+  const mates = (c.members || []).filter((m) => !m.you);
+  let who = mates.length && Math.random() < 0.8
+    ? mates[Math.floor(Math.random() * mates.length)]
+    : null;
+  if (!who) {
+    if ((c.members || []).length >= 6 && mates.length) {
+      who = mates[Math.floor(Math.random() * mates.length)];
+    } else {
+      who = { id: "cm-" + uid(), name: SPRINT_PEER_NAMES[Math.floor(Math.random() * SPRINT_PEER_NAMES.length)], sessions: 0, minutes: 0 };
+      (c.members = c.members || []).push(who);
+    }
+  }
+  const logged = bumpChallengeMember(c, who.name, false, paceSec(c) / 60);
+  // Ambient posts are throttled — at most one shout per 90s per challenge.
+  const nowT = Date.now();
+  if (announce && nowT - (c._matePostAt || 0) > 90000) {
+    c._matePostAt = nowT;
+    postGroupMessage(
+      c.groupId,
+      `@${who.name} finished a ${fmtPace(c)} session — now at ${logged.sessions} session${logged.sessions === 1 ? "" : "s"} in “${c.title}”.`,
+      "fire",
+      who.name,
+    );
+  }
+  if (mateWon(c, logged)) finishChallenge(c, logged.name);
+  persist();
+  return logged;
+}
+
+function finishChallenge(c, winnerName) {
+  if (c.done) return;
+  c.done = true;
+  c.winner = winnerName || state.profile.handle || "you";
+  if (!winnerName) {
+    const award = c.unit === "minutes"
+      ? Math.min(100, Math.round(c.target / 2))
+      : Math.min(100, c.target * 5);
+    addCoins(award);
+    addNotification("Challenge complete", `${c.title} — +${award} coins showered.`, "trophy");
+    postGroupMessage(c.groupId, `“${c.title}” complete — @${c.winner} takes the crown with ${c.target} ${c.unit}. +${award} coins showered. 👑`, "crown");
+    notify(`${sicon("trophy")} Challenge complete · +${award} coins`);
+    celebrate(true);
+    if (notifOn("completion")) playChime("focus");
+  } else {
+    postGroupMessage(c.groupId, `👑 @${winnerName} takes “${c.title}” with ${c.target} ${c.unit}. The crown is theirs — run it back next week?`, "crown", winnerName);
+    addNotification("Challenge crown taken", `@${winnerName} won “${c.title}” in your group.`, "crown");
+    notify(`👑 @${winnerName} takes “${c.title}” — run it back`);
+  }
+  if (state.activeChallengeId === c.id) state.activeChallengeId = null;
+  try {
+    applyDurations();
+  } catch {
+    /* timer module warms it on next render */
+  }
+  persist();
+}
+
+function fmtCountdown(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function clearSprintTicker() {
+  if (sprintTicker) {
+    clearInterval(sprintTicker);
+    sprintTicker = null;
+  }
+}
+
+function ensureSprintTicker() {
+  clearSprintTicker();
+  sprintTicker = setInterval(() => {
+    if (state.tab !== "community" || state.subtab !== "sprints") {
+      clearSprintTicker();
+      return;
+    }
+    const now = Date.now();
+    let changed = false;
+    (state.sprints || []).forEach((sp) => {
+      sanitizeSprint(sp);
+      // Friends simulate reading their invite and replying while you watch.
+      if (!sp.result && (sp.invites || []).some((i) => i.status === "pending") && Math.random() < 0.03) {
+        if (resolveOneInvite(sp)) {
+          changed = true;
+          // Never wipe a half-typed room title / purpose for ambient news —
+          // just persist and let the chips catch up on the next render.
+          const typing = document.activeElement && ["INPUT", "TEXTAREA"].includes(document.activeElement.tagName);
+          if (!typing) {
+            renderCommunity();
+            return;
+          } else {
+            notify("A friend just replied to your sprint invite");
+          }
+        }
+      }
+      // Live crew members inch forward; some finish a sprint of their own.
+      const liveNow = now >= sp.startsAt && now < sp.startsAt + sp.durationSec * 1000;
+      if (!sp.result && liveNow && Array.isArray(sp.roster)) {
+        sp.roster.forEach((c) => {
+          if (c.you || (c.left ?? 0) === 0) return;
+          c.pct = Math.min(99, (c.pct || 0) + Math.random() * 2.2);
+          if (c.pct >= 99 && Math.random() < 0.25) {
+            c.left = Math.max(0, (c.left ?? 1) - 1);
+            c.pct = c.left === 0 ? 100 : 4;
+            changed = true;
+          }
+        });
+      }
+      if (sp.result || !sp.joined) return;
+      const end = sp.startsAt + sp.durationSec * 1000;
+      if (now >= sp.startsAt && !sp.liveNotified) {
+        sp.liveNotified = true;
+        changed = true;
+        const lock = challengeLock();
+        if (lock) {
+          notify(`🔒 “${sp.title}” is live, but your challenge lock holds the pace`);
+        } else if (!sessionInProgress()) {
+          state.mode = "focus";
+          state.time = sp.durationSec;
+          state.sessionDuration = sp.durationSec;
+          state.sprintSession = sp.id;
+          startTimer();
+          persist();
+          updateTimerDom();
+          renderMiniTimer();
+          notify(`${sicon("bolt")} Sprint live — ${Math.round(sp.durationSec / 60)} min focus started`);
+        } else {
+          notify(sicon("bolt") + " Your sprint started — finish this session first");
+        }
+      }
+      if (now >= end && !sp.result) {
+        if (state.running && state.mode === "focus" && !state.sprintSession) {
+          state.sprintSession = sp.id;
+        } else if (state.sprintSession === sp.id) {
+          state.sprintSession = null;
+          sp.result = { status: "dnf", at: now };
+        } else {
+          sp.result = { status: "missed", at: now };
+        }
+        changed = true;
+      }
+    });
+    // Rivals log sessions while you watch — the leaderboard breathes.
+    const wk = weekKey(new Date());
+    let raceNews = false;
+    (state.challenges || []).forEach((c) => {
+      if (c.weekKey !== wk || c.done || !c.joined) return;
+      if (Math.random() < 0.012) {
+        mateChallengeSession(c, true);
+        raceNews = true;
+      }
+    });
+    // Session invites get answered while you watch.
+    (state.events || []).forEach((e) => {
+      if (!e || e.at < Date.now() || !(e.invites || []).some((i) => i.status === "pending")) return;
+      if (Math.random() < 0.02 && resolveOneEventInvite(e)) raceNews = true;
+    });
+    if (raceNews) {
+      const typing = document.activeElement && ["INPUT", "TEXTAREA"].includes(document.activeElement.tagName);
+      if (!typing && state.tab === "community" && state.subtab === "sprints") {
+        persist();
+        renderCommunity();
+        return;
+      }
+      changed = true;
+    }
+    if (changed) persist();
+    // Live-patch crew bars + countdowns so the board feels alive without
+    // wiping whatever the user is typing in the create form.
+    $$("[data-crew-fill]").forEach((el) => {
+      const [sid, ci] = (el.dataset.crewFill || "").split(":");
+      const sp = (state.sprints || []).find((x) => x.id === sid);
+      const crew = sp ? sprintCrewWithMe(sp) : null;
+      const member = crew?.[Number(ci)];
+      if (!member) return;
+      el.style.width = `${Math.min(100, Math.max(2, member.pct || 0))}%`;
+      el.classList.toggle("live", Boolean(member.live && (member.left ?? 0) > 0));
+      const tag = document.querySelector(`[data-crew-tag="${sid}:${ci}"]`);
+      if (tag) {
+        const done = (member.left ?? 0) === 0;
+        tag.classList.toggle("live", !done);
+        tag.innerHTML = done ? sicon("check") + " done" : `${member.left} sprint${member.left === 1 ? "" : "s"} left`;
+      }
+    });
+    $$("[data-mission-cd]").forEach((el) => {
+      const sp = (state.sprints || []).find((x) => x.id === el.dataset.missionCd);
+      if (!sp) return;
+      const t = Date.now();
+      el.textContent =
+        t < sp.startsAt
+          ? "starts " + new Date(sp.startsAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+          : t < sp.startsAt + sp.durationSec * 1000
+            ? "● LIVE " + fmtCountdown(sp.startsAt + sp.durationSec * 1000 - t)
+            : "ended";
+    });
+    $$("[data-sprint-cd]").forEach((el) => {
+      const sp = (state.sprints || []).find(
+        (x) => x.id === el.dataset.sprintCd,
+      );
+      if (!sp) return;
+      const t = Date.now();
+      el.textContent =
+        t < sp.startsAt
+          ? "starts in " + fmtCountdown(sp.startsAt - t)
+          : t < sp.startsAt + sp.durationSec * 1000
+            ? "● LIVE " + fmtCountdown(sp.startsAt + sp.durationSec * 1000 - t)
+            : "ended";
+    });
+  }, 1000);
+}
+
+function renderCommunity() {
+  clearSprintTicker();
+  const t = $("#tab-community");
+  t.innerHTML = `${viewHead("Community", "Find people who are learning what you are learning, make a group, and keep the conversation moving.")}<div class="subnav">${[
+    ["discover", "Discover"],
+    ["mygroups", "My groups"],
+    ["friends", "Friends"],
+    ["messages", "Messages"],
+    ["sprints", "Sprints"],
+  ]
+    .map(
+      (x) =>
+        `<button data-subtab="${x[0]}" class="${state.subtab === x[0] ? "active" : ""}">${x[1]}</button>`,
+    )
+    .join("")}</div><div id="community-body"></div>`;
+  $$("[data-subtab]", t).forEach(
+    (b) =>
+      (b.onclick = () => {
+        state.subtab = b.dataset.subtab;
+        state.activeChat = null;
+        renderCommunity();
+      }),
+  );
+  const body = $("#community-body", t);
+  const panels = {
+    discover: renderDiscover,
+    mygroups: renderMyGroups,
+    friends: renderFriends,
+    messages: renderMessages,
+    sprints: renderSprints,
+  };
+  if (!panels[state.subtab]) state.subtab = "discover";
+  panels[state.subtab](body);
+  if (state.subtab === "sprints") ensureSprintTicker();
+  // Refresh the shared public group list in the background; repaint only when
+  // it actually changed (same token-guard pattern as the book library).
+  const seenCloudAt = cloudGroupsAt;
+  refreshCloudGroups(false).then(() => {
+    if (cloudGroupsAt === seenCloudAt || !cloudGroups.length) return;
+    if (state.tab === "community") renderCommunity();
+  }).catch(() => {});
+}
+
+function groupMatches(group) {
+  const interests = (state.profile.subjects || [])
+    .map((s) => String(s || "").toLowerCase().trim())
+    .filter(Boolean);
+  if (!interests.length) return null;
+  const haystack =
+    `${group.name} ${(group.tags || []).join(" ")} ${group.description || ""}`.toLowerCase();
+  const hits = interests.filter(
+    (interest) =>
+      haystack.includes(interest) ||
+      interest
+        .split(/\s+/)
+        .some((word) => word.length > 2 && haystack.includes(word)),
+  );
+  return hits.length ? hits : null;
+}
+
+function groupCardWithReason(g, hits) {
+  return groupCard(g).replace(
+    '<div class="group-top">',
+    `<div class="match-reason">${sicon("sparkle")} Matches your interest in ${esc(hits.slice(0, 2).join(", "))}</div><div class="group-top">`,
+  );
+}
+
+function renderSprints(body) {
+  body.innerHTML = `${leaderboardMarkup()}${sprintBoardMarkup()}${challengeMarkup()}${eventMarkup()}`;
+  bindSprints(body);
+}
+
+function leaderboardMarkup() {
+  const days = [];
+  const now = new Date();
+  const mondayOff = (now.getDay() + 6) % 7;
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(now);
+    d.setDate(now.getDate() - mondayOff + i);
+    const key = dayKey(d);
+    days.push({
+      label: ["M", "T", "W", "T", "F", "S", "S"][i],
+      min: (state.focusDays || {})[key] || 0,
+      today: key === dayKey(now),
+    });
+  }
+  const total = days.reduce((n, d) => n + d.min, 0);
+  const best = Math.max(...days.map((d) => d.min), 0);
+  const prevWk = weekKey(new Date(Date.now() - 7 * 86400000));
+  const delta = total - weekMinutes(prevWk);
+  const max = Math.max(best, 1);
+  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>This week's focus</h2><span class="tag">${total} min</span></div><div class="week-bars">${days.map((d) => `<div class="week-bar${d.today ? " today" : ""}" title="${d.min} min"><span style="height:${Math.round((d.min / max) * 100)}%"></span><small>${d.label}</small></div>`).join("")}</div><p class="muted" style="margin-top:10px">Best day ${best} min · ${delta >= 0 ? `+${delta}` : delta} min vs last week</p><div class="section-row" style="margin-top:12px"><h3>Global board</h3></div><p class="muted">${backendConfigured && state.user ? "Season board syncs with cloud accounts — invite friends from the Friends tab to race you." : sicon("globe") + " The global board unlocks with cloud accounts. Your week already counts — invite friends to race you."}</p><button class="ghost" data-invite-race>Copy race invite</button></div>`;
+}
+
+function sprintGroupName(sp) {
+  const g = allGroups().find((x) => x.id === sp.groupId);
+  return g ? g.name : "Open room";
+}
+
+/* ---------- sprint rooms pro: purpose, friends-only invites, crew pace ---------- */
+const SPRINT_PEER_NAMES = ["Maya", "Leo", "Ava", "Noah", "Zoe", "Eli", "Ivy", "Max", "Ada", "Sam"];
+
+function mySprintId() {
+  return chatKey();
+}
+
+function makeCrewPeer(name) {
+  const total = 3 + Math.floor(Math.random() * 4); // 3–6 sprints in the relay
+  const left = Math.max(0, Math.min(total, Math.floor(Math.random() * (total + 1))));
+  return {
+    id: "peer-" + uid(),
+    name,
+    total,
+    left,
+    pct: left === 0 ? 100 : 5 + Math.floor(Math.random() * 90),
+    live: Math.random() < 0.6,
+  };
+}
+
+function sanitizeSprint(sp) {
+  if (!sp || typeof sp !== "object") return sp;
+  if (sp.purpose == null) sp.purpose = "";
+  if (!sp.visibility) sp.visibility = "open";
+  if (!sp.ownerId) sp.ownerId = "";
+  if (!Array.isArray(sp.invites)) sp.invites = [];
+  if (!Array.isArray(sp.roster)) {
+    // Legacy rooms get a simulated crew so the pace board never looks empty.
+    const peers = [...SPRINT_PEER_NAMES].sort(() => Math.random() - 0.5).slice(0, 2 + Math.floor(Math.random() * 2));
+    sp.roster = peers.map(makeCrewPeer);
+  }
+  sp.invites = sp.invites.map((inv) =>
+    typeof inv === "string" ? { id: "inv-" + uid(), username: inv, status: "pending" } : inv,
+  );
+  return sp;
+}
+
+function ensureSprintFields() {
+  if (!Array.isArray(state.sprints)) state.sprints = [];
+  state.sprints.forEach(sanitizeSprint);
+  if (!Array.isArray(state.sprintInvites)) state.sprintInvites = [];
+  if (!state.sprints.length && !state.sprintInvites.length && !get("sf-inv-seed", false)) {
+    // One demo invite so the accept / decline flow is discoverable instantly.
+    state.sprintInvites.push({
+      id: "inv-demo-" + uid(),
+      title: "Evening deep-work relay",
+      purpose: "4 × 25-min rounds to finish the week's problem set together. Cameras optional, leaderboard mandatory.",
+      from: "Maya",
+      durationMin: 25,
+      startsAt: Date.now() + 8 * 60000,
+      status: "pending",
+      demo: true,
+    });
+    save("sf-inv-seed", true);
+    persist();
+  }
+}
+
+function isSprintOwner(sp) {
+  if (!sp) return false;
+  if (!sp.ownerId) return true; // legacy rooms: anyone may manage them
+  return sp.ownerId === mySprintId();
+}
+
+function sprintCrewWithMe(sp) {
+  const crew = [...(sp.roster || [])];
+  const mine = crew.find((c) => c.you);
+  if (!mine) {
+    crew.unshift({
+      id: "me",
+      name: "You",
+      you: true,
+      total: sp.roster?.[0]?.total || 4,
+      left: sp.result ? 0 : sp.roster?.[0]?.left ?? 4,
+      pct: sp.result?.status === "done" ? 100 : sessionInProgress() && state.sprintSession === sp.id ? 62 : 12,
+      live: Boolean(state.sprintSession === sp.id || (state.running && state.mode === "focus")),
+    });
+  } else {
+    mine.live = Boolean(state.sprintSession === sp.id || (state.running && state.mode === "focus"));
+    if (sp.result?.status === "done") {
+      mine.left = 0;
+      mine.pct = 100;
+    }
+  }
+  return crew;
+}
+
+function crewPaceMarkup(sp) {
+  const crew = sprintCrewWithMe(sp);
+  return `<div class="crew-pace"><div class="crew-head"><span>${sicon("users")} Crew pace</span><span class="muted">${crew.filter((c) => (c.left ?? 0) === 0).length}/${crew.length} done</span></div>${crew.map((c, ci) => {
+    const done = (c.left ?? 0) === 0;
+    return `<div class="crew-row${c.you ? " me" : ""}"><span class="crew-avatar">${esc((c.name || "?")[0].toUpperCase())}</span><div class="crew-meta"><div class="crew-line"><strong>${esc(c.name)}${c.you ? " · you" : ""}</strong><span class="tag ${done ? "" : "live"}" data-crew-tag="${sp.id}:${ci}">${done ? sicon("check") + " done" : `${c.left} sprint${c.left === 1 ? "" : "s"} left`}</span></div><div class="crew-track"><span class="crew-fill${c.live && !done ? " live" : ""}" data-crew-fill="${sp.id}:${ci}" style="width:${Math.min(100, Math.max(2, c.pct || 0))}%"></span></div></div>${c.live && !done ? '<span class="crew-dot" title="Focusing now"></span>' : ""}</div>`;
+  }).join("")}</div>`;
+}
+
+function inviteInboxMarkup() {
+  ensureSprintFields();
+  const pending = state.sprintInvites.filter((i) => i.status === "pending");
+  const decided = state.sprintInvites.filter((i) => i.status !== "pending").slice(-3).reverse();
+  if (!pending.length && !decided.length) return "";
+  return `<div class="card invite-inbox"><div class="section-row"><h2>${sicon("gift")} Sprint invites</h2><span class="tag">${pending.length} pending</span></div>${pending.map((inv) => `<div class="invite-card"><div class="invite-glow"></div><div><strong>${esc(inv.title)}</strong><br><small class="muted">from <b>@${esc(inv.from || "a friend")}</b> · ${inv.durationMin || 25} min · starts ${new Date(inv.startsAt || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small>${inv.purpose ? `<p class="purpose">“${esc(inv.purpose)}”</p>` : ""}</div><div class="invite-actions"><button class="primary" data-inv-accept="${inv.id}">Join sprint</button><button class="ghost" data-inv-decline="${inv.id}">Decline</button></div></div>`).join("")}${decided.map((inv) => `<div class="board-row"><span>${esc(inv.title)} · @${esc(inv.from || "?")}</span><span class="tag">${inv.status === "accepted" ? sicon("check") + " joined" : "declined"}</span></div>`).join("")}</div>`;
+}
+
+function sprintBoardMarkup() {
+  ensureSprintFields();
+  const now = Date.now();
+  const rooms = state.sprints || [];
+  const active = rooms.filter(
+    (s) => !s.result && s.startsAt + s.durationSec * 1000 > now - 60000,
+  );
+  const past = rooms
+    .filter((s) => s.result || s.startsAt + s.durationSec * 1000 <= now - 60000)
+    .slice(-5)
+    .reverse();
+  const groups = allGroups().filter((g) =>
+    get("sf-joined", []).includes(g.id),
+  );
+  const friends = state.friends || [];
+  return `${inviteInboxMarkup()}<div class="card sprint-pro" style="margin-bottom:18px"><div class="section-row"><h2>${sicon("bolt")} Sprint rooms</h2><span class="tag">together</span></div>${active.length ? active.map((sp) => {
+    const live = now >= sp.startsAt;
+    const inSession = state.sprintSession === sp.id || (state.running && state.mode === "focus");
+    const owner = isSprintOwner(sp);
+    const pend = (sp.invites || []).filter((i) => i.status === "pending").length;
+    const acc = (sp.invites || []).filter((i) => i.status === "accepted").length;
+    const dec = (sp.invites || []).filter((i) => i.status === "declined").length;
+    const inviteLine = sp.visibility === "friends"
+      ? `<span class="tag lock">${sicon("lock")} friends-only${pend ? ` · ${pend} pending` : ""}${acc ? ` · ${acc} in` : ""}${dec ? ` · ${dec} out` : ""}</span>`
+      : `<span class="tag">${sicon("globe")} open room${(sp.roster || []).length ? ` · ${(sp.roster || []).length + 1} racing` : ""}</span>`;
+    return `<div class="sprint-room pro${live ? " live" : ""}"><div class="sprint-beam"></div><div class="section-row"><strong>${esc(sp.title)}</strong><span style="display:flex;gap:6px;flex-wrap:wrap"><span class="tag ${live ? "live" : ""}" data-sprint-cd="${sp.id}">${live ? "● LIVE" : "scheduled"}</span>${inviteLine}</span></div><p class="muted">${esc(sprintGroupName(sp))} · ${Math.round(sp.durationSec / 60)} min${sp.joined ? " · you're in" : ""}</p>${sp.purpose ? `<p class="purpose">“${esc(sp.purpose)}”</p>` : ""}${sp.joined || sp.visibility === "open" ? crewPaceMarkup(sp) : '<p class="muted">Join to see the crew pace board.</p>'}${(sp.invites || []).length ? `<div class="invite-chips">${sp.invites.map((i) => `<span class="invite-chip ${i.status}">@${esc(i.username)} · ${i.status === "accepted" ? "joined " + sicon("check") : i.status === "declined" ? "passed" : "invited…"}</span>`).join("")}</div>` : ""}<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">${sp.joined ? `${live && !inSession ? `<button class="primary" data-sprint-late="${sp.id}">Join late</button><button class="ghost" data-sprint-leave="${sp.id}">Leave</button>` : ""}${live && inSession ? '<span class="tag live">you\'re focusing ' + sicon("fire") + '</span>' : ""}${!live ? `<button class="primary" data-sprint-now="${sp.id}">Start now</button><button class="ghost" data-sprint-leave="${sp.id}">Leave</button>` : ""}` : `<button class="primary" data-sprint-join="${sp.id}">Join sprint</button>`}${owner ? `<button class="ghost" data-sprint-edit="${sp.id}">Rename / purpose</button><button class="ghost" data-sprint-nudge="${sp.id}" title="Simulate a friend replying right now">Nudge replies</button><button class="delete" data-sprint-del="${sp.id}" title="Delete room">Delete</button>` : ""}</div></div>`;
+  }).join("") : '<p class="muted">No live rooms. Start one below — shared suffering bonds people.</p>'}${past.length ? `<div class="section-row" style="margin-top:14px"><h3>Finish board</h3></div>${past.map((sp) => `<div class="board-row"><span>${esc(sp.title)}</span><span class="tag">${sp.result?.status === "done" ? `${sicon("check")} ${sp.result.focusedMin}m focused` : sp.result?.status === "dnf" ? "DNF" : "missed"}</span></div>`).join("")}` : ""}<div class="section-row" style="margin-top:16px"><h3>New sprint</h3><span class="tag">pro</span></div><div class="grid two"><input class="input" id="sprint-title" placeholder="Sprint title, e.g. Morning grind"><select class="select" id="sprint-group"><option value="">No group</option>${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("")}</select><select class="select" id="sprint-dur"><option value="15">15 minutes</option><option value="25" selected>25 minutes</option><option value="30">30 minutes</option><option value="50">50 minutes</option></select><select class="select" id="sprint-in"><option value="2">Starts in 2 min</option><option value="5" selected>Starts in 5 min</option><option value="10">Starts in 10 min</option><option value="15">Starts in 15 min</option><option value="30">Starts in 30 min</option></select></div><textarea class="textarea autogrow" id="sprint-purpose" rows="2" placeholder="Purpose — why does this room exist? (shown to everyone)" style="margin-top:10px"></textarea><div style="margin-top:10px;position:relative"><select class="select" id="sprint-vis" style="width:100%" aria-label="Room visibility"><option value="open">Open — anyone can join</option><option value="friends">Friends — only people I pick</option></select><div class="friend-pick drop" id="sprint-friends" hidden><div class="eyebrow" style="margin-bottom:6px">Pick friends</div>${friends.map((f) => `<label class="pick-row"><input type="checkbox" value="${f.id}"> <span class="crew-avatar sm">${esc((f.username || "?")[0].toUpperCase())}</span> @${esc(f.username)}</label>`).join("") || '<p class="muted">No friends yet — add some in the Friends tab first.</p>'}</div></div><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button class="primary" id="sprint-create">Create sprint room</button><button class="ghost" id="sprint-friends-go" type="button">To friends → pick crew</button></div></div>`;
+}
+
+function challengeRow(c) {
+  sanitizeChallenge(c);
+  const pct = Math.min(100, Math.round((c.progress / Math.max(1, c.target)) * 100));
+  const g = allGroups().find((x) => x.id === c.groupId);
+  const board = [...(c.members || [])].sort(
+    (a, b) => challengeScore(c, b) - challengeScore(c, a) || (b.minutes || 0) - (a.minutes || 0),
+  );
+  const top = Math.max(1, challengeScore(c, board[0] || { sessions: 0, minutes: 0 }));
+  const locked = state.activeChallengeId === c.id && !c.done;
+  const otherLock = !locked && !c.done && !c.joined && otherActiveChallenge(c.id);
+  const medals = ["👑", "🥈", "🥉"];
+  return `<div class="challenge pro"><div class="section-row"><strong>${esc(c.title)}</strong><span style="display:flex;gap:6px;flex-wrap:wrap"><span class="tag pace-tag">⚡ ${fmtPace(c)}/session</span>${c.done ? `<span class="tag">done ${sicon("party")}</span>` : locked ? `<span class="tag live">🔒 locked in</span>` : `<span class="tag">${c.progress}/${c.target} ${c.unit}</span>`}</span></div><div class="complete-track"><span class="complete-fill" style="width:${pct}%"></span></div><small class="muted">${esc(g?.name || "Open challenge")}${c.ownerId && c.ownerId === chatKey() ? " · you host" : ""}</small>${c.done && c.winner ? `<p class="crown-line">👑 <b>@${esc(c.winner)}</b> takes the crown</p>` : ""}<div class="board-lead"><div class="crew-head"><span>${sicon("trophy")} Leaderboard</span><span class="muted">${board.length} racing</span></div>${board.slice(0, 5).map((m, i) => {
+    const sc = challengeScore(c, m);
+    return `<div class="lead-row${i === 0 ? " top" : ""}${m.you ? " me" : ""}"><span class="lead-rank">${medals[i] || `#${i + 1}`}</span><span class="crew-avatar sm">${esc((m.name || "?")[0].toUpperCase())}</span><div class="crew-meta"><div class="crew-line"><strong>${esc(m.name)}${m.you ? " · you" : ""}</strong><span class="muted">${m.sessions || 0} sess · ${m.minutes || 0}m</span></div><div class="crew-track"><span class="crew-fill${i === 0 && !c.done ? " live" : ""}" style="width:${Math.min(100, Math.max(3, Math.round((sc / top) * 100)))}%"></span></div></div></div>`;
+  }).join("")}</div>${!c.done ? `<div class="ch-actions">${c.joined ? `<button class="ghost" data-ch-leave="${c.id}">Leave challenge</button>` : `<button class="primary" data-ch-join="${c.id}"${otherLock ? " disabled title=\"Finish or leave your current challenge first\"" : ""} style="padding:8px 14px;font-size:12px">Join · locks timer to ${fmtPace(c)}</button>`}${!c.ownerId || c.ownerId === chatKey() ? `<button class="delete" data-ch-del="${c.id}" title="Delete challenge">Delete</button>` : ""}</div>` : `${!c.ownerId || c.ownerId === chatKey() ? `<div class="ch-actions"><button class="ghost" data-ch-del="${c.id}">Clear from board</button></div>` : ""}`}</div>`;
+}
+
+function challengeMarkup() {
+  ensureChallengeFields();
+  const wk = weekKey(new Date());
+  const list = (state.challenges || []).filter((c) => c.weekKey === wk);
+  const groups = allGroups().filter((g) =>
+    get("sf-joined", []).includes(g.id),
+  );
+  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Group challenges</h2><span class="tag">this week</span></div>${list.map(challengeRow).join("") || '<p class="muted">No active challenges — launch the first one.</p>'}<div class="section-row" style="margin-top:14px"><h3>New challenge</h3><span class="tag">you host</span></div><div class="grid two"><input class="input" id="ch-title" placeholder="e.g. 10 focus sessions"><select class="select" id="ch-group">${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("") || '<option value="">No joined groups yet</option>'}</select><div class="input-row" style="margin:0"><input class="input" id="ch-target" type="number" min="1" max="500" value="10" aria-label="Target"><select class="select" id="ch-unit" aria-label="Unit"><option value="sessions">sessions</option><option value="minutes">minutes</option></select></div><div class="input-row" style="margin:0" title="Every session in this challenge runs this long"><input class="input" id="ch-min" type="number" min="0" max="180" value="25" aria-label="Minutes per session"><span class="muted">min</span><input class="input" id="ch-sec" type="number" min="0" max="59" value="0" aria-label="Seconds per session"><span class="muted">sec</span></div></div><p class="muted" style="margin:8px 0 0">⚡ Pace setter — every session runs this long, and joiners' timers lock to it until they leave.</p><div><button class="primary" id="ch-create">Launch</button></div></div>`;
+}
+
+function eventWhen(e) {
+  return new Date(e.at).toLocaleString([], {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function eventMarkup() {
+  ensureEventFields();
+  const now = Date.now();
+  const upcoming = (state.events || [])
+    .filter((e) => e.at + e.durationMin * 60000 > now)
+    .sort((a, b) => a.at - b.at)
+    .slice(0, 6);
+  const groups = allGroups().filter((g) =>
+    get("sf-joined", []).includes(g.id),
+  );
+  return `${eventInboxMarkup()}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Scheduled sessions</h2><span class="tag">commit</span></div>${upcoming.length ? upcoming.map((e) => {
+    const live = now >= e.at && now < e.at + e.durationMin * 60000;
+    const g = allGroups().find((x) => x.id === e.groupId);
+    const owner = isEventOwner(e);
+    const pend = (e.invites || []).filter((i) => i.status === "pending").length;
+    const going = (e.invites || []).filter((i) => i.status === "accepted").length + (e.mine ? 1 : 0);
+    return `<div class="event-row pro"><div><strong>${sicon("calendar")} ${esc(e.title)}</strong><br><small class="muted">${eventWhen(e)} · ${e.durationMin} min${g ? ` · ${esc(g.name)}` : ""}${e.visibility === "friends" ? ` · ${sicon("lock")} friends` : ""} · ${going} going</small>${(e.invites || []).length ? `<div class="invite-chips">${e.invites.map((i) => `<span class="invite-chip ${i.status}">@${esc(i.username)} · ${i.status === "accepted" ? "in " + sicon("check") : i.status === "declined" ? "out" : "invited…"}</span>`).join("")}</div>` : ""}</div><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${live ? `<span class="tag">● LIVE</span><button class="primary" data-event-start="${e.id}" style="padding:8px 12px;font-size:12px">Start</button>` : ""}<button class="${e.mine ? "ghost" : "primary"}" data-event-rsvp="${e.id}" style="padding:8px 12px;font-size:12px">${e.mine ? "Going " + sicon("check") : "RSVP"}</button>${owner ? `${pend ? `<button class="ghost" data-event-nudge="${e.id}" style="padding:8px 12px;font-size:12px" title="Simulate a friend replying now">Nudge</button>` : ""}<button class="delete" data-event-del="${e.id}" title="Remove">×</button>` : ""}</div></div>`;
+  }).join("") : '<p class="muted">Nothing scheduled. Put study on the calendar and show up.</p>'}<div class="section-row" style="margin-top:14px"><h3>New session</h3><span class="tag">you host</span></div><div class="grid two"><input class="input" id="ev-title" placeholder="e.g. Calc sprint"><select class="select" id="ev-aud" aria-label="Who is this for"><option value="self">Just me</option><option value="group">A group</option><option value="friends">Specific friends</option></select><select class="select" id="ev-group"><option value="">No group</option>${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("")}</select><input class="input" id="ev-at" type="datetime-local" aria-label="Date and time"><select class="select" id="ev-dur"><option value="15">15 min</option><option value="25" selected>25 min</option><option value="30">30 min</option><option value="50">50 min</option><option value="60">60 min</option><option value="90">90 min</option></select></div><p class="muted" style="margin:8px 0 0">Friends get an invite they can accept or decline — replies land here and on your Focus desk.</p><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center;position:relative"><button class="primary" id="ev-create">Schedule</button><button class="ghost" id="ev-crew-toggle" type="button" hidden></button><div class="friend-pick drop" id="ev-friends" hidden><div class="eyebrow" style="margin-bottom:6px">Pick friends</div>${(state.friends || []).map((f) => `<label class="pick-row"><input type="checkbox" value="${f.id}"> <span class="crew-avatar sm">${esc((f.username || "?")[0].toUpperCase())}</span> @${esc(f.username)}</label>`).join("") || '<p class="muted">No friends yet — add some in the Friends tab first.</p>'}</div></div></div>`;
+}
+
+/* ---------- scheduled sessions pro: friends invites, host controls ---------- */
+function isEventOwner(e) {
+  if (!e) return false;
+  if (!e.ownerId) return true; // legacy sessions: anyone may manage them
+  return e.ownerId === mySprintId();
+}
+
+function ensureEventFields() {
+  if (!Array.isArray(state.events)) state.events = [];
+  if (!Array.isArray(state.eventInvites)) state.eventInvites = [];
+  const now = Date.now();
+  // Sessions over a week cold leave the plan — the list stays a plan, not an archive.
+  const fresh = state.events.filter((e) => e && e.at + (e.durationMin || 25) * 60000 > now - 7 * 86400000);
+  if (fresh.length !== state.events.length) {
+    state.events = fresh;
+    persist();
+  }
+  state.events.forEach((e) => {
+    if (!e.ownerId) e.ownerId = "";
+    if (!e.visibility) e.visibility = e.groupId ? "open" : "self";
+    if (!Array.isArray(e.invites)) e.invites = [];
+  });
+  if (!state.events.length && !state.eventInvites.length && !get("sf-ev-seed", false)) {
+    state.eventInvites.push({
+      id: "evinv-demo-" + uid(),
+      title: "Saturday study marathon",
+      purpose: "Past-paper relay before the mocks — bring questions, leave with answers.",
+      from: "Leo",
+      at: Date.now() + 26 * 3600000,
+      durationMin: 50,
+      status: "pending",
+      demo: true,
+    });
+    save("sf-ev-seed", true);
+    persist();
+  }
+}
+
+function eventInboxMarkup() {
+  const pending = (state.eventInvites || []).filter((i) => i.status === "pending");
+  const decided = (state.eventInvites || []).filter((i) => i.status !== "pending").slice(-3).reverse();
+  if (!pending.length && !decided.length) return "";
+  return `<div class="card invite-inbox"><div class="section-row"><h2>${sicon("calendar")} Session invites</h2><span class="tag">${pending.length} pending</span></div>${pending.map((inv) => `<div class="invite-card"><div class="invite-glow"></div><div><strong>${esc(inv.title)}</strong><br><small class="muted">from <b>@${esc(inv.from || "a friend")}</b> · ${new Date(inv.at || Date.now()).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })} · ${inv.durationMin || 25} min</small>${inv.purpose ? `<p class="purpose">“${esc(inv.purpose)}”</p>` : ""}</div><div class="invite-actions"><button class="primary" data-ev-inv-accept="${inv.id}">RSVP yes</button><button class="ghost" data-ev-inv-decline="${inv.id}">Decline</button></div></div>`).join("")}${decided.map((inv) => `<div class="board-row"><span>${esc(inv.title)} · @${esc(inv.from || "?")}</span><span class="tag">${inv.status === "accepted" ? sicon("check") + " going" : "declined"}</span></div>`).join("")}</div>`;
+}
+
+function resolveOneEventInvite(e, force) {
+  const pend = (e.invites || []).find((i) => i.status === "pending");
+  if (!pend) return false;
+  pend.status = force || Math.random() < 0.68 ? "accepted" : "declined";
+  if (pend.status === "accepted")
+    addNotification("Session invite accepted", `@${pend.username} is going to “${e.title}”.`, "calendar");
+  return true;
+}
+
+function postGroupMessage(groupId, text, icon, from) {
+  if (!groupId) return;
+  state.messages[groupId] = [
+    ...(state.messages[groupId] || []),
+    { id: uid(), me: !from, sysName: from || "", icon: icon || "", text: cleanText(text), ts: Date.now() },
+  ];
+}
+
+// System posts used to embed sicon() SVG straight into the message text, and
+// chat renders text with esc() — so rooms showed raw "<svg ...>" markup.
+// Icons now travel in their own field; this also heals messages already saved
+// with the old flaw.
+function cleanText(value) {
+  return stripIcon(value);
+}
+
+function resolveOneInvite(sp, force) {
+  const pend = (sp.invites || []).find((i) => i.status === "pending");
+  if (!pend) return false;
+  const accept = force || Math.random() < 0.68;
+  pend.status = accept ? "accepted" : "declined";
+  if (accept) {
+    const crew = sp.roster || (sp.roster = []);
+    if (!crew.some((c) => c.id === pend.friendId))
+      crew.push({ id: pend.friendId || "peer-" + uid(), name: pend.username || "Friend", total: 4, left: 4, pct: 6, live: false });
+    addNotification("Sprint invite accepted", `@${pend.username} joined “${sp.title}”.`, "bolt");
+  }
+  return true;
+}
+
+function openSprintEditor(id) {
+  const sp = state.sprints.find((x) => x.id === id);
+  if (!sp) return notify("That room no longer exists");
+  if (!isSprintOwner(sp)) return notify("Only the room creator can rename it");
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Sprint room · edit</div><h2>Shape the room</h2><label class="field-label">Room name<input class="input" data-sp-title maxlength="60" value="${esc(sp.title)}"></label><label class="field-label">Purpose — why was this room created?<textarea class="textarea autogrow" data-sp-purpose rows="3" maxlength="280" placeholder="e.g. Finish chapter 4 together before Friday">${esc(sp.purpose || "")}</textarea></label><p class="muted">The purpose shows under the title so everyone knows what they are signing up for.</p><div class="modal-actions"><button class="ghost" data-sp-cancel>Cancel</button><button class="primary" data-sp-save>Save room</button></div></div>`;
+  $("#modal-root").append(modal);
+  const titleInput = modal.querySelector("[data-sp-title]");
+  setTimeout(() => { try { titleInput.focus(); titleInput.select(); } catch { /* ignore */ } }, 0);
+  const close = () => modal.remove();
+  modal.querySelector("[data-sp-cancel]").onclick = close;
+  modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
+  modal.querySelector("[data-sp-save]").onclick = () => {
+    const t = titleInput.value.trim();
+    if (!t) return notify("Give the room a name");
+    sp.title = t.slice(0, 60);
+    sp.purpose = modal.querySelector("[data-sp-purpose]").value.trim().slice(0, 280);
+    persist();
+    close();
+    renderCommunity();
+    notify("Room updated");
+  };
+}
+
+/* ---------- Focus Desk live mission (sprints + challenges + scheduled) ---------- */
+function missionDeskMarkup() {
+  ensureSprintFields();
+  const now = Date.now();
+  const live = (state.sprints || []).find((s) => s.joined && !s.result && now >= s.startsAt && now < s.startsAt + s.durationSec * 1000);
+  const next = (state.sprints || [])
+    .filter((s) => s.joined && !s.result && s.startsAt + s.durationSec * 1000 > now && (!live || s.id !== live.id))
+    .sort((a, b) => a.startsAt - b.startsAt)[0];
+  const focus = live || next;
+  const wk = weekKey(new Date());
+  const challenges = (state.challenges || []).filter((c) => c.weekKey === wk && !c.done).slice(0, 2);
+  const upcomingEv = (state.events || [])
+    .filter((e) => e.mine && e.at + e.durationMin * 60000 > now)
+    .sort((a, b) => a.at - b.at)[0];
+  if (!focus && !challenges.length && !upcomingEv) {
+    return `<div class="card mission-desk idle"><div class="mission-top"><span class="mission-eyebrow">${sicon("bolt")} Live mission</span><button class="ghost" data-mission-goto>Open Sprints</button></div><p class="muted">Nothing racing right now. Launch a sprint room and it will dock here so you never have to hunt for it.</p></div>`;
+  }
+  const inSession = focus && (state.sprintSession === focus.id || (state.running && state.mode === "focus"));
+  return `<div class="card mission-desk${live ? " live" : ""}"><div class="mission-glow"></div><div class="mission-top"><span class="mission-eyebrow"><span class="mission-dot"></span> Live mission · Focus desk</span><button class="ghost" data-mission-goto>Open Sprints</button></div>${focus ? `<div class="mission-sprint"><div><strong>${esc(focus.title)}</strong><br><small class="muted">${live ? "happening now" : "starts " + new Date(focus.startsAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${Math.round(focus.durationSec / 60)} min${focus.purpose ? ` · ${esc(focus.purpose.slice(0, 80))}${focus.purpose.length > 80 ? "…" : ""}` : ""}</small></div><span class="tag ${live ? "live" : ""}" data-mission-cd="${focus.id}">${live ? "● LIVE" : "scheduled"}</span></div>${focus && live && !inSession ? `<button class="primary" data-mission-join="${focus.id}">Jump in — start focus</button>` : ""}${focus && live && inSession ? `<span class="tag live">${sicon("fire")} you're racing this one</span>` : ""}` : ""}${challenges.map((c) => {
+    const pct = Math.min(100, Math.round((c.progress / Math.max(1, c.target)) * 100));
+    const locked = state.activeChallengeId === c.id && !c.done;
+    return `<div class="mission-row"><span>${sicon("trophy")} ${locked ? "🔒 " : ""}${esc(c.title)}</span><span class="tag">${c.progress}/${c.target}</span></div><div class="crew-track slim"><span class="crew-fill" style="width:${pct}%"></span></div>`;
+  }).join("")}${upcomingEv ? `<div class="mission-row"><span>${sicon("calendar")} ${esc(upcomingEv.title)} · ${new Date(upcomingEv.at).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}</span>${Date.now() >= upcomingEv.at ? `<button class="primary" data-mission-event="${upcomingEv.id}" style="padding:7px 12px;font-size:12px">Start</button>` : '<span class="tag">committed</span>'}</div>` : ""}</div>`;
+}
+
+function bindMissionDesk(root) {
+  $$("[data-mission-goto]", root).forEach(
+    (b) => (b.onclick = () => {
+      state.tab = "community";
+      state.subtab = "sprints";
+      persist();
+      shell();
+    }),
+  );
+  $$("[data-mission-join]", root).forEach(
+    (b) => (b.onclick = () => {
+      const sp = (state.sprints || []).find((x) => x.id === b.dataset.missionJoin);
+      if (!sp || sessionInProgress()) return;
+      const mjLock = challengeLock();
+      if (mjLock) return notify(`Challenge lock holds your timer — leave “${mjLock.title}” first`);
+      const remain = Math.max(60, Math.round((sp.startsAt + sp.durationSec * 1000 - Date.now()) / 1000));
+      state.mode = "focus";
+      state.time = remain;
+      state.sessionDuration = remain;
+      state.sprintSession = sp.id;
+      startTimer();
+      persist();
+      updateTimerDom();
+      shell();
+      notify("Locked in — make the crew proud " + sicon("fire"));
+    }),
+  );
+  $$("[data-mission-event]", root).forEach(
+    (b) => (b.onclick = () => {
+      const e = (state.events || []).find((x) => x.id === b.dataset.missionEvent);
+      if (!e || sessionInProgress()) return;
+      const meLock = challengeLock();
+      if (meLock) return notify(`Challenge lock holds your timer — leave “${meLock.title}” first`);
+      state.mode = "focus";
+      state.time = e.durationMin * 60;
+      state.sessionDuration = e.durationMin * 60;
+      startTimer();
+      persist();
+      updateTimerDom();
+      shell();
+    }),
+  );
+}
+
+// Friends pickers float above the form so ticking a crew never stretches the
+// box. One shared outside-click closer for every picker on the page.
+if (!window.__sfCrewBound) {
+  window.__sfCrewBound = true;
+  document.addEventListener("click", (e) => {
+    if (e.target?.closest?.(".friend-pick.drop")) return;
+    if (e.target?.closest?.("#sprint-friends-go, #ev-crew-toggle")) return;
+    document.querySelectorAll(".friend-pick.drop").forEach((el) => {
+      el.hidden = true;
+    });
+  });
+}
+
+function paintCrewBtn(body) {
+  const btn = $("#sprint-friends-go", body);
+  const box = $("#sprint-friends", body);
+  if (!btn) return;
+  const friendsOnly = $("#sprint-vis", body)?.value === "friends";
+  const n = box ? box.querySelectorAll('input[type="checkbox"]:checked').length : 0;
+  btn.textContent = friendsOnly ? `Pick friends (${n}) ▾` : "To friends → pick crew";
+}
+
+function paintEvCrewBtn(body) {
+  const btn = $("#ev-crew-toggle", body);
+  const box = $("#ev-friends", body);
+  if (!btn) return;
+  const friendsOnly = $("#ev-aud", body)?.value === "friends";
+  btn.hidden = !friendsOnly;
+  if (!friendsOnly) return;
+  const n = box ? box.querySelectorAll('input[type="checkbox"]:checked').length : 0;
+  btn.textContent = `Pick friends (${n}) ▾`;
+}
+
+function bindSprints(body) {
+  $("[data-invite-race]", body)?.addEventListener("click", async () => {
+    const text = `🏁 Race me on StudyFlow this week! Add me with @${state.profile.handle} — most focus minutes wins.`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: "StudyFlow race", text });
+        return;
+      }
+      await navigator.clipboard.writeText(text);
+      notify("Race invite copied");
+    } catch {
+      notify("Invite ready — tell them your username");
+    }
+  });
+  $("#sprint-create", body).onclick = () => {
+    const dur = Math.min(120, Math.max(5, parseInt($("#sprint-dur", body).value, 10) || 25));
+    const mins = parseInt($("#sprint-in", body).value, 10) || 5;
+    const groupId = $("#sprint-group", body).value || "";
+    const title = $("#sprint-title", body).value.trim() || `${dur}-min sprint`;
+    const purpose = $("#sprint-purpose", body)?.value.trim().slice(0, 280) || "";
+    const visibility = $("#sprint-vis", body)?.value === "friends" ? "friends" : "open";
+    const picked = [...body.querySelectorAll('#sprint-friends input[type="checkbox"]:checked')].map((c) => c.value);
+    if (visibility === "friends" && !picked.length)
+      return notify("Friends-only? Tick at least one friend below");
+    const byId = new Map((state.friends || []).map((f) => [f.id, f]));
+    const invites = picked.map((id) => ({
+      id: "inv-" + uid(),
+      friendId: id,
+      username: byId.get(id)?.username || "friend",
+      status: "pending",
+    }));
+    const crewSeeds = visibility === "open"
+      ? [...SPRINT_PEER_NAMES].sort(() => Math.random() - 0.5).slice(0, 3).map(makeCrewPeer)
+      : invites.map((i) => ({ id: i.friendId, name: i.username, total: 4, left: 4, pct: 4, live: false }));
+    const sp = sanitizeSprint({
+      id: uid(),
+      title,
+      purpose,
+      groupId,
+      durationSec: dur * 60,
+      startsAt: Date.now() + mins * 60000,
+      joined: true,
+      liveNotified: false,
+      result: null,
+      ownerId: mySprintId(),
+      visibility,
+      invites,
+      roster: crewSeeds,
+    });
+    state.sprints.push(sp);
+    if (groupId)
+      postGroupMessage(groupId, `Sprint room open: “${title}”${purpose ? ` — ${purpose}` : ""} — ${dur} min, starts in ${mins} min. Join from Community → Sprints.`, "bolt");
+    if (visibility === "friends")
+      addNotification("Sprint invites sent", `“${title}” — ${invites.map((i) => "@" + i.username).join(", ")}. They can join or pass.`, "gift");
+    persist();
+    renderCommunity();
+    notify(visibility === "friends" ? `Room created — invites sent to ${invites.length} friend${invites.length === 1 ? "" : "s"}` : "Sprint room created — see you at the start");
+  };
+  $("#sprint-vis", body).onchange = (e) => {
+    const crewBox = $("#sprint-friends", body);
+    if (crewBox) crewBox.hidden = true;
+    paintCrewBtn(body);
+    if (e.target.value === "friends" && !(state.friends || []).length) {
+      state.subtab = "friends";
+      renderCommunity();
+      notify("Add friends first — then pick your sprint crew");
+    }
+  };
+  $("#sprint-friends-go", body).onclick = () => {
+    // Doubles as the dropdown toggle in friends mode — the picker floats, so
+    // the box never grows no matter how many friends you tick.
+    if ($("#sprint-vis", body)?.value === "friends") {
+      const crewBox = $("#sprint-friends", body);
+      if (crewBox) crewBox.hidden = !crewBox.hidden;
+      return;
+    }
+    const vis = $("#sprint-vis", body);
+    if (vis) vis.value = "friends";
+    paintCrewBtn(body);
+    if (!(state.friends || []).length) {
+      state.subtab = "friends";
+      renderCommunity();
+      notify("Add friends first — then pick your sprint crew");
+    } else {
+      const crewBox = $("#sprint-friends", body);
+      if (crewBox) crewBox.hidden = false;
+      notify("Tick your crew, then hit Create");
+    }
+  };
+  $$('#sprint-friends input[type="checkbox"]', body).forEach((c) =>
+    c.addEventListener("change", () => paintCrewBtn(body)),
+  );
+  paintCrewBtn(body);
+  $$("[data-inv-accept]", body).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const inv = state.sprintInvites.find((x) => x.id === b.dataset.invAccept);
+        if (!inv || inv.status !== "pending") return;
+        inv.status = "accepted";
+        const dur = inv.durationMin || 25;
+        state.sprints.push(sanitizeSprint({
+          id: inv.sprintId || uid(),
+          title: inv.title || `${dur}-min sprint`,
+          purpose: inv.purpose || "",
+          groupId: "",
+          durationSec: dur * 60,
+          startsAt: inv.startsAt || Date.now() + 2 * 60000,
+          joined: true,
+          liveNotified: false,
+          result: null,
+          ownerId: "",
+          visibility: "friends",
+          invites: [],
+          roster: [makeCrewPeer(inv.from || "Host")],
+        }));
+        persist();
+        renderCommunity();
+        celebrate(false);
+        notify(`You're in “${inv.title}” — see it on your Focus desk`);
+      }),
+  );
+  $$("[data-inv-decline]", body).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const inv = state.sprintInvites.find((x) => x.id === b.dataset.invDecline);
+        if (!inv) return;
+        inv.status = "declined";
+        persist();
+        renderCommunity();
+        notify("Invite passed — no hard feelings");
+      }),
+  );
+  $$("[data-sprint-edit]", body).forEach(
+    (b) => (b.onclick = () => openSprintEditor(b.dataset.sprintEdit)),
+  );
+  $$("[data-sprint-del]", body).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const sp = state.sprints.find((x) => x.id === b.dataset.sprintDel);
+        if (!sp) return;
+        if (!isSprintOwner(sp)) return notify("Only the room creator can delete it");
+        confirmBox(
+          `Delete “${sp.title}”?`,
+          "The room, its invites and the crew pace board go with it. This cannot be undone.",
+          () => {
+            if (state.sprintSession === sp.id) state.sprintSession = null;
+            state.sprints = state.sprints.filter((x) => x.id !== sp.id);
+            persist();
+            renderCommunity();
+            notify("Sprint room deleted");
+          },
+          { eyebrow: "Sprint rooms", yesLabel: "Delete room", noLabel: "Keep it" },
+        );
+      }),
+  );
+  $$("[data-sprint-nudge]", body).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const sp = state.sprints.find((x) => x.id === b.dataset.sprintNudge);
+        if (!sp) return;
+        if (resolveOneInvite(sp)) {
+          persist();
+          renderCommunity();
+        } else {
+          notify("Everyone has replied already");
+        }
+      }),
+  );
+  $$("[data-sprint-join]", body).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const sp = state.sprints.find((x) => x.id === b.dataset.sprintJoin);
+        if (!sp) return;
+        sp.joined = true;
+        persist();
+        renderCommunity();
+      }),
+  );
+  $$("[data-sprint-leave]", body).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const sp = state.sprints.find((x) => x.id === b.dataset.sprintLeave);
+        if (!sp) return;
+        sp.joined = false;
+        if (state.sprintSession === sp.id) state.sprintSession = null;
+        persist();
+        renderCommunity();
+      }),
+  );
+  $$("[data-sprint-now]", body).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const sp = state.sprints.find((x) => x.id === b.dataset.sprintNow);
+        if (!sp) return;
+        sp.startsAt = Date.now();
+        sp.joined = true;
+        persist();
+        renderCommunity();
+      }),
+  );
+  $$("[data-sprint-late]", body).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const sp = state.sprints.find((x) => x.id === b.dataset.sprintLate);
+        if (!sp || sessionInProgress()) return;
+        const lateLock = challengeLock();
+        if (lateLock) return notify(`Challenge lock holds your timer — leave “${lateLock.title}” first`);
+        const remain = Math.max(
+          60,
+          Math.round((sp.startsAt + sp.durationSec * 1000 - Date.now()) / 1000),
+        );
+        state.mode = "focus";
+        state.time = remain;
+        state.sessionDuration = remain;
+        state.sprintSession = sp.id;
+        startTimer();
+        persist();
+        updateTimerDom();
+        shell();
+        notify("Jumped in late — make it count " + sicon("fire"));
+      }),
+  );
+  $("#ch-create", body).onclick = () => {
+    const target = Math.min(500, Math.max(1, parseInt($("#ch-target", body).value, 10) || 10));
+    const groupId = $("#ch-group", body).value || "";
+    if (!groupId) return notify("Join a group first to challenge it");
+    const unit = $("#ch-unit", body).value === "minutes" ? "minutes" : "sessions";
+    const title = $("#ch-title", body).value.trim() || `${target} ${unit} this week`;
+    let paceMin = Math.min(180, Math.max(0, parseInt($("#ch-min", body)?.value, 10)));
+    let paceSec = Math.min(59, Math.max(0, parseInt($("#ch-sec", body)?.value, 10)));
+    if (!Number.isFinite(paceMin)) paceMin = 25;
+    if (!Number.isFinite(paceSec)) paceSec = 0;
+    if (paceMin === 0 && paceSec === 0) return notify("Pace can't be 0:00 — set at least a few seconds");
+    const ch = sanitizeChallenge({
+      id: uid(),
+      groupId,
+      title,
+      target,
+      unit,
+      weekKey: weekKey(new Date()),
+      progress: 0,
+      done: false,
+      sessionMin: paceMin,
+      sessionSec: paceSec,
+      ownerId: chatKey(),
+      joined: false,
+      members: [],
+    });
+    state.challenges.push(ch);
+    postGroupMessage(groupId, `New challenge: “${title}” — ${target} ${unit} this week at ${fmtPace(ch)} a session. Who's in?`, "trophy");
+    const seated = joinChallenge(ch.id);
+    persist();
+    renderCommunity();
+    notify(seated ? `Challenge launched — your timer is locked to ${fmtPace(ch)}` : "Challenge launched — leave your current race to join it");
+  };
+  $$("[data-ch-join]", body).forEach(
+    (b) =>
+      (b.onclick = () => {
+        if (joinChallenge(b.dataset.chJoin)) {
+          persist();
+          renderCommunity();
+          const c = state.challenges.find((x) => x.id === b.dataset.chJoin);
+          notify(`Locked in — every session runs ${c ? fmtPace(c) : "the set pace"} ${sicon("bolt")}`);
+        }
+      }),
+  );
+  $$("[data-ch-del]", body).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const c = state.challenges.find((x) => x.id === b.dataset.chDel);
+        if (!c) return;
+        if (c.ownerId && c.ownerId !== chatKey()) return notify("Only the host can delete this challenge");
+        confirmBox(
+          `Delete “${c.title}”?`,
+          "The leaderboard and everyone's progress in this race go with it. This cannot be undone.",
+          () => {
+            if (state.activeChallengeId === c.id) state.activeChallengeId = null;
+            state.challenges = state.challenges.filter((x) => x.id !== c.id);
+            try {
+              applyDurations();
+            } catch {
+              /* ignore */
+            }
+            persist();
+            renderCommunity();
+            notify("Challenge deleted");
+          },
+          { eyebrow: "Group challenges", yesLabel: "Delete", noLabel: "Keep it" },
+        );
+      }),
+  );
+  $$("[data-ch-leave]", body).forEach(
+    (b) =>
+      (b.onclick = () =>
+        confirmBox(
+          "Leave this challenge?",
+          "Your timer unlocks and your leaderboard row resets. The group keeps racing.",
+          () => {
+            leaveChallenge(b.dataset.chLeave);
+            renderCommunity();
+            notify("Challenge left — timer is yours again");
+          },
+          { eyebrow: "Group challenges", yesLabel: "Leave", noLabel: "Stay in" },
+        )),
+  );
+  $("#ev-aud", body).onchange = (e) => {
+    const crewBox = $("#ev-friends", body);
+    if (crewBox) crewBox.hidden = true;
+    paintEvCrewBtn(body);
+    if (e.target.value === "friends" && !(state.friends || []).length) {
+      state.subtab = "friends";
+      renderCommunity();
+      notify("Add friends first — then pick your session crew");
+    }
+  };
+  $("#ev-crew-toggle", body).onclick = () => {
+    const crewBox = $("#ev-friends", body);
+    if (crewBox) crewBox.hidden = !crewBox.hidden;
+  };
+  $$('#ev-friends input[type="checkbox"]', body).forEach((c) =>
+    c.addEventListener("change", () => paintEvCrewBtn(body)),
+  );
+  paintEvCrewBtn(body);
+  $("#ev-create", body).onclick = () => {
+    const title = $("#ev-title", body).value.trim() || "Study session";
+    const at = new Date($("#ev-at", body).value).getTime();
+    if (!at || at < Date.now()) return notify("Pick a future date and time");
+    const aud = $("#ev-aud", body)?.value || "self";
+    const groupId = $("#ev-group", body).value || "";
+    if (aud === "group" && !groupId) return notify("Pick a group — or switch to Just me / Friends");
+    const picked = [...body.querySelectorAll('#ev-friends input[type="checkbox"]:checked')].map((c) => c.value);
+    if (aud === "friends" && !picked.length) return notify("Friends session? Tick at least one friend");
+    const byId = new Map((state.friends || []).map((f) => [f.id, f]));
+    const invites = picked.map((id) => ({
+      id: "evinv-" + uid(),
+      friendId: id,
+      username: byId.get(id)?.username || "friend",
+      status: "pending",
+    }));
+    const durationMin = parseInt($("#ev-dur", body).value, 10) || 25;
+    const e = {
+      id: uid(),
+      title,
+      groupId: aud === "self" ? "" : groupId,
+      at,
+      durationMin,
+      mine: true,
+      reminded: false,
+      ownerId: mySprintId(),
+      visibility: aud === "friends" ? "friends" : groupId && aud !== "self" ? "open" : "self",
+      invites: aud === "friends" ? invites : [],
+    };
+    state.events.push(e);
+    if (e.groupId)
+      postGroupMessage(e.groupId, `Scheduled: “${title}” — ${new Date(at).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}. RSVP in Community → Sprints.`, "calendar");
+    if (e.visibility === "friends")
+      addNotification("Session invites sent", `“${title}” — ${invites.map((i) => "@" + i.username).join(", ")}. They can RSVP or pass.`, "gift");
+    persist();
+    renderCommunity();
+    notify(e.visibility === "friends" ? `Scheduled — invites sent to ${invites.length} friend${invites.length === 1 ? "" : "s"}` : "Session scheduled — I'll remind you");
+  };
+  $$("[data-ev-inv-accept]", body).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const inv = (state.eventInvites || []).find((x) => x.id === b.dataset.evInvAccept);
+        if (!inv || inv.status !== "pending") return;
+        inv.status = "accepted";
+        state.events.push({
+          id: uid(),
+          title: inv.title || "Study session",
+          groupId: "",
+          at: inv.at || Date.now() + 3600000,
+          durationMin: inv.durationMin || 25,
+          mine: true,
+          reminded: false,
+          ownerId: "",
+          visibility: "friends",
+          invites: [],
+        });
+        persist();
+        renderCommunity();
+        celebrate(false);
+        notify(`You're going to “${inv.title}” — it's on your Focus desk`);
+      }),
+  );
+  $$("[data-ev-inv-decline]", body).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const inv = (state.eventInvites || []).find((x) => x.id === b.dataset.evInvDecline);
+        if (!inv) return;
+        inv.status = "declined";
+        persist();
+        renderCommunity();
+        notify("Invite passed — no hard feelings");
+      }),
+  );
+  $$("[data-event-nudge]", body).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const e = state.events.find((x) => x.id === b.dataset.eventNudge);
+        if (!e) return;
+        if (resolveOneEventInvite(e)) {
+          persist();
+          renderCommunity();
+        } else {
+          notify("Everyone has replied already");
+        }
+      }),
+  );
+  $$("[data-event-rsvp]", body).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const e = state.events.find((x) => x.id === b.dataset.eventRsvp);
+        if (!e) return;
+        e.mine = !e.mine;
+        if (e.mine) e.reminded = false;
+        persist();
+        renderCommunity();
+      }),
+  );
+  $$("[data-event-del]", body).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const e = state.events.find((x) => x.id === b.dataset.eventDel);
+        if (!e) return;
+        if (!isEventOwner(e)) return notify("Only the host can remove this session");
+        confirmBox(
+          `Remove “${e.title}”?`,
+          "RSVPs go with it. Friends who accepted will keep their own copy.",
+          () => {
+            state.events = state.events.filter((x) => x.id !== e.id);
+            persist();
+            renderCommunity();
+            notify("Session removed");
+          },
+          { eyebrow: "Scheduled sessions", yesLabel: "Remove", noLabel: "Keep it" },
+        );
+      }),
+  );
+  $$("[data-event-start]", body).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const e = state.events.find((x) => x.id === b.dataset.eventStart);
+        if (!e || sessionInProgress()) return;
+        const evLock = challengeLock();
+        if (evLock) return notify(`Challenge lock holds your timer — leave “${evLock.title}” first`);
+        state.mode = "focus";
+        state.time = e.durationMin * 60;
+        state.sessionDuration = e.durationMin * 60;
+        startTimer();
+        persist();
+        updateTimerDom();
+        shell();
+        notify(`${sicon("check")} “${esc(e.title)}” started — show up for yourself`);
+      }),
+  );
+}
+
+function timeAgo(ts) {
+  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (s < 60) return "just now";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + "m ago";
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + "h ago";
+  const d = Math.floor(h / 24);
+  if (d === 1) return "yesterday";
+  if (d < 7) return d + "d ago";
+  return new Date(ts).toLocaleDateString();
+}
+
+function isSeen(key) {
+  return Boolean((state.statusSeen || {})[key]);
+}
+
+function markSeen(key) {
+  state.statusSeen = state.statusSeen || {};
+  if (!state.statusSeen[key]) {
+    state.statusSeen[key] = Date.now();
+    const keys = Object.keys(state.statusSeen);
+    if (keys.length > 300)
+      keys
+        .slice(0, keys.length - 300)
+        .forEach((k) => delete state.statusSeen[k]);
+    persist();
+  }
+}
+
+function statusDuration(item) {
+  if (!item) return 5000;
+  if (item.type === "video") return item.durationMs || 7000;
+  return 5000;
+}
+
+function buildStatusSequence() {
+  const me = {
+    id: "me",
+    name: (state.profile && state.profile.name) || "You",
+    photo: (state.profile && state.profile.photo) || "",
+    fallback: (state.profile && state.profile.avatar) || "?",
+  };
+  const seq = [];
+  liveStories()
+    .slice()
+    .sort((a, b) => a.ts - b.ts)
+    .forEach((s) =>
+      seq.push({
+        key: "story:" + s.id,
+        type: "story",
+        kind: s.kind === "video" ? "video" : s.photo ? "photo" : "flex",
+        author: me,
+        ts: s.ts,
+        text: s.text || "",
+        photo: s.photo || "",
+        video: s.video || "",
+        id: s.id,
+      }),
+    );
+  const count = (state.streak && state.streak.count) || 0;
+  const best = state.bestStreak || count;
+  const cards = [
+    {
+      id: "current",
+      emoji: sicon("fire"),
+      title: `${count}-day streak`,
+      sub: `${state.sessions || 0} sessions all time`,
+    },
+    {
+      id: "best",
+      emoji: sicon("trophy"),
+      title: `Best: ${best} day${best === 1 ? "" : "s"}`,
+      sub: "personal record",
+    },
+    {
+      id: "week",
+      emoji: sicon("bolt"),
+      title: `${weekMinutes(weekKey(new Date()))} min this week`,
+      sub: "keep it burning",
+    },
+  ];
+  cards.forEach((c) =>
+    seq.push({
+      key: "streak:" + c.id,
+      type: "streak",
+      author: me,
+      ts: Date.now(),
+      emoji: c.emoji,
+      title: c.title,
+      sub: c.sub,
+      id: c.id,
+    }),
+  );
+  return seq;
+}
+
+function pruneExpiredStories() {
+  const now = Date.now();
+  const before = (state.stories || []).length;
+  state.stories = (state.stories || [])
+    .filter((s) => s && now - s.ts < 86400000)
+    .slice(0, 30);
+  if (state.statusSeen) {
+    const liveIds = new Set(state.stories.map((s) => "story:" + s.id));
+    Object.keys(state.statusSeen).forEach((k) => {
+      if (k.startsWith("story:") && !liveIds.has(k))
+        delete state.statusSeen[k];
+    });
+  }
+  if ((state.stories || []).length !== before) persist();
+}
+
+function ownStory(id) {
+  return (state.stories || []).find((s) => s && s.id === id) || null;
+}
+
+function deleteStatus(id) {
+  const target = ownStory(id);
+  if (!target)
+    return { ok: false, error: "That status no longer exists." };
+  state.stories = (state.stories || []).filter((s) => s && s.id !== id);
+  if (ownStory(id))
+    return { ok: false, error: "Couldn't remove that status. Try again." };
+  if (state.statusSeen) delete state.statusSeen["story:" + id];
+  persist();
+  return { ok: true };
+}
+
+function liveStories() {
+  const now = Date.now();
+  return (state.stories || []).filter((s) => now - s.ts < 86400000);
+}
+
+function storiesMarkup() {
+  const live = liveStories();
+  const unseen = live.filter((s) => !isSeen("story:" + s.id)).length;
+  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Stories</h2><span class="tag">24h${unseen ? ` · ${unseen} new` : ""}</span></div><div class="story-strip"><button class="story-add" data-status-play title="Play the full status loop">${sicon("play")}<small>Status</small></button><button class="story-add" data-story-flex title="Flex your streak">${sicon("fire")}<small>Flex</small></button><button class="story-add" data-story-photo title="Post a photo or video">${sicon("camera")}<small>Photo</small></button><input type="file" id="story-file" accept="image/*,video/*" hidden>${live.map((s) => `<button class="story-ring${isSeen("story:" + s.id) ? " seen" : ""}" data-story-view="${s.id}" title="${ownStory(s.id) ? "View in status loop — right-click to delete" : "View in status loop"}"><span>${s.photo ? `<img src="${s.photo}" alt="Story">` : s.kind === "video" ? sicon("film") : sicon("fire")}</span><small>${esc(s.author.length > 8 ? s.author.slice(0, 7) + "…" : s.author)}</small></button>`).join("")}</div></div>`;
+}
+
+function bindStories(body) {
+  $("[data-story-flex]", body).onclick = () => {
+    state.stories.unshift({
+      id: uid(),
+      kind: "flex",
+      text: `${state.streak.count}-day streak · ${state.sessions} sessions`,
+      author: state.profile.name,
+      ts: Date.now(),
+    });
+    state.stories = state.stories.filter((s) => Date.now() - s.ts < 86400000).slice(0, 30);
+    persist();
+    renderCommunity();
+    notify("Streak flexed for 24h " + sicon("fire"));
+  };
+  $("[data-story-photo]", body).onclick = () =>
+    $("#story-file", body)?.click();
+  $("#story-file", body).onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const isVideo = file.type.startsWith("video/");
+    if (!file.type.startsWith("image/") && !isVideo)
+      return notify("Choose an image or video");
+    if (!isVideo && file.size > 1.5 * 1024 * 1024)
+      return notify("Photos must be under 1.5 MB");
+    if (isVideo && file.size > 8 * 1024 * 1024)
+      return notify("Videos must be under 8 MB");
+    const reader = new FileReader();
+    reader.onload = () => {
+      state.stories.unshift({
+        id: uid(),
+        kind: isVideo ? "video" : "photo",
+        photo: isVideo ? "" : reader.result,
+        video: isVideo ? reader.result : "",
+        text: "",
+        author: state.profile.name,
+        ts: Date.now(),
+      });
+      state.stories = state.stories.filter((s) => Date.now() - s.ts < 86400000).slice(0, 30);
+      persist();
+      renderCommunity();
+      notify(isVideo ? "Video story live for 24h " + sicon("film") : "Story live for 24h " + sicon("camera"));
+    };
+    reader.readAsDataURL(file);
+  };
+  $("[data-status-play]", body).onclick = () => openStatus();
+  $$("[data-story-view]", body).forEach(
+    (b) => (b.onclick = () => openStatus("story:" + b.dataset.storyView)),
+  );
+}
+
+let statusSeq = [];
+
+let statusIdx = 0;
+
+let statusTimer = null;
+
+let statusItemStart = 0;
+
+let statusItemDur = 5000;
+
+let statusElapsed = 0;
+
+let statusPaused = false;
+
+let statusHoldTimer = null;
+
+let statusHolding = false;
+
+let statusTouch = null;
+
+let statusNavToken = 0;
+
+function statusNextIdx(i) {
+  return statusSeq.length ? (i + 1) % statusSeq.length : 0;
+}
+
+function statusPrevIdx(i) {
+  return statusSeq.length ? (i - 1 + statusSeq.length) % statusSeq.length : 0;
+}
+
+function statusRemaining(elapsed, duration) {
+  return Math.max(0, duration - elapsed);
+}
+
+function clearStatusTimer() {
+  if (statusTimer) {
+    clearTimeout(statusTimer);
+    statusTimer = null;
+  }
+  if (statusHoldTimer) {
+    clearTimeout(statusHoldTimer);
+    statusHoldTimer = null;
+  }
+}
+
+function openStatus(startKey) {
+  closeStatus(true);
+  pruneExpiredStories();
+  statusSeq = buildStatusSequence();
+  if (!statusSeq.length) {
+    notify("No status yet — post your first story " + sicon("fire"));
+    return;
+  }
+  let idx = statusSeq.findIndex((it) => it.key === startKey);
+  if (idx < 0) idx = statusSeq.findIndex((it) => !isSeen(it.key));
+  if (idx < 0) idx = 0;
+  const overlay = document.createElement("div");
+  overlay.id = "status-viewer";
+  overlay.innerHTML = `<div class="st-progress" data-st-progress></div><div class="st-head"><span class="st-avatar" data-st-avatar></span><span class="st-who"><strong data-st-name></strong><small data-st-time></small></span><button data-st-mute title="Mute">${sicon("volume")}</button><button data-st-menu title="Status options">⋮</button><button data-st-close title="Close">${sicon("x")}</button></div><div class="st-body" data-st-body></div><div class="st-cap" data-st-cap></div><button class="st-arrow left" data-st-prev title="Previous">‹</button><button class="st-arrow right" data-st-next title="Next">›</button>`;
+  document.body.append(overlay);
+  overlay.querySelector("[data-st-close]").onclick = (e) => {
+    e.stopPropagation();
+    closeStatus();
+  };
+  overlay.querySelector("[data-st-prev]").onclick = (e) => {
+    e.stopPropagation();
+    goStatus(-1);
+  };
+  overlay.querySelector("[data-st-next]").onclick = (e) => {
+    e.stopPropagation();
+    goStatus(1);
+  };
+  overlay.querySelector("[data-st-mute]").onclick = (e) => {
+    e.stopPropagation();
+    const v = overlay.querySelector("video");
+    if (!v) return;
+    v.muted = !v.muted;
+    overlay.querySelector("[data-st-mute]").textContent = v.muted
+      ? sicon("mute")
+      : sicon("volume");
+  };
+  overlay.querySelector("[data-st-menu]").onclick = (e) => {
+    e.stopPropagation();
+    toggleStatusMenu();
+  };
+  overlay.addEventListener("pointerdown", statusPointerDown);
+  overlay.addEventListener("pointerup", statusPointerUp);
+  overlay.addEventListener("pointercancel", statusPointerCancel);
+  document.addEventListener("keydown", statusKeys);
+  statusIdx = idx;
+  showStatusItem();
+}
+
+function closeStatus(silent) {
+  clearStatusTimer();
+  document.removeEventListener("keydown", statusKeys);
+  const overlay = document.querySelector("#status-viewer");
+  if (overlay) overlay.remove();
+  statusSeq = [];
+  statusIdx = 0;
+  statusPaused = false;
+  statusHolding = false;
+  statusTouch = null;
+  if (!silent && state.tab === "community") renderCommunity();
+}
+
+function closeStatusMenu() {
+  document.querySelector("[data-st-menu-pop]")?.remove();
+}
+
+function toggleStatusMenu() {
+  const overlay = document.querySelector("#status-viewer");
+  if (!overlay) return;
+  const existing = overlay.querySelector("[data-st-menu-pop]");
+  if (existing) {
+    existing.remove();
+    return;
+  }
+  const item = statusSeq[statusIdx];
+  if (!item || item.type !== "story" || !ownStory(item.id)) {
+    notify("Only your own statuses can be deleted");
+    return;
+  }
+  const pop = document.createElement("div");
+  pop.className = "st-menu";
+  pop.setAttribute("data-st-menu-pop", "");
+  pop.innerHTML = `<button data-st-menu-del>${sicon("trash")} Delete status</button>`;
+  overlay.append(pop);
+  pop.querySelector("[data-st-menu-del]").onclick = (e) => {
+    e.stopPropagation();
+    pop.remove();
+    askDeleteStatus(item);
+  };
+}
+
+function askDeleteStatus(item) {
+  if (!item || item.type !== "story") return;
+  if (!ownStory(item.id)) {
+    notify("That status no longer exists");
+    return;
+  }
+  pauseStatus();
+  closeStatusMenu();
+  document.querySelector("[data-st-confirm]")?.remove();
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.setAttribute("data-st-confirm", "");
+  modal.innerHTML = `<div class="modal st-confirm"><h2>Delete this status?</h2><p class="muted">This status will be permanently removed.</p><p class="st-confirm-err" data-st-confirm-err hidden></p><div class="modal-actions"><button class="ghost" data-st-confirm-cancel>Cancel</button><button class="danger-button" data-st-confirm-del>Delete</button></div></div>`;
+  document.body.append(modal);
+  const done = (resume) => {
+    modal.remove();
+    document.removeEventListener("keydown", onKey);
+    if (resume) resumeStatus();
+  };
+  const onKey = (e) => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      done(true);
+    }
+  };
+  document.addEventListener("keydown", onKey);
+  modal.querySelector("[data-st-confirm-cancel]").onclick = () => done(true);
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) done(true);
+  });
+  modal.querySelector("[data-st-confirm-del]").onclick = () => {
+    const btn = modal.querySelector("[data-st-confirm-del]");
+    const err = modal.querySelector("[data-st-confirm-err]");
+    btn.disabled = true;
+    btn.textContent = "Deleting…";
+    err.hidden = true;
+    setTimeout(() => {
+      const result = deleteStatus(item.id);
+      if (!result.ok) {
+        err.textContent =
+          result.error || "Couldn't delete that status. Try again.";
+        err.hidden = false;
+        btn.disabled = false;
+        btn.textContent = "Delete";
+        return;
+      }
+      done(false);
+      afterStatusDeleted(item.key);
+      notify("Status deleted");
+      renderCommunity(); // refresh the story strip when deleted from outside the viewer
+    }, 60);
+  };
+}
+
+function afterStatusDeleted(key) {
+  const at = statusSeq.findIndex((it) => it.key === key);
+  if (at >= 0) statusSeq.splice(at, 1);
+  if (!statusSeq.length) {
+    closeStatus();
+    return;
+  }
+  if (at >= 0 && at < statusIdx) statusIdx -= 1;
+  statusIdx = Math.min(statusIdx, statusSeq.length - 1);
+  showStatusItem();
+}
+
+function statusKeys(e) {
+  if (document.querySelector("[data-st-confirm]")) return;
+  if (e.key === "Escape") {
+    if (document.querySelector("[data-st-menu-pop]")) {
+      closeStatusMenu();
+      return;
+    }
+    closeStatus();
+    return;
+  }
+  if (e.key === "ArrowRight") goStatus(1);
+  else if (e.key === "ArrowLeft") goStatus(-1);
+  else if (e.key === " ") {
+    e.preventDefault();
+    if (statusPaused) resumeStatus();
+    else pauseStatus();
+  }
+}
+
+function goStatus(dir) {
+  if (document.querySelector("[data-st-confirm]")) return;
+  if (!statusSeq.length) {
+    closeStatus();
+    return;
+  }
+  statusIdx = dir > 0 ? statusNextIdx(statusIdx) : statusPrevIdx(statusIdx);
+  showStatusItem();
+}
+
+function showStatusItem() {
+  const overlay = document.querySelector("#status-viewer");
+  const item = statusSeq[statusIdx];
+  if (!overlay || !item) {
+    closeStatus();
+    return;
+  }
+  markSeen(item.key);
+  const token = ++statusNavToken;
+  renderStatusProgress(overlay, 0);
+  const av = overlay.querySelector("[data-st-avatar]");
+  if (item.author.photo)
+    av.innerHTML = `<img src="${item.author.photo}" alt="">`;
+  else av.textContent = item.author.fallback;
+  overlay.querySelector("[data-st-name]").textContent = item.author.name;
+  const stTime = overlay.querySelector("[data-st-time]");
+  if (item.type === "streak") {
+    // SVG markup must go through innerHTML — textContent would print the raw tags.
+    stTime.innerHTML = sicon("fire") + " live stat";
+  } else {
+    stTime.textContent = timeAgo(item.ts);
+  }
+  overlay.querySelector("[data-st-mute]").style.display =
+    item.kind === "video" ? "" : "none";
+  overlay.querySelector("[data-st-menu]").style.display =
+    item.type === "story" ? "" : "none";
+  overlay.querySelector("[data-st-menu-pop]")?.remove();
+  const body = overlay.querySelector("[data-st-body]");
+  const cap = overlay.querySelector("[data-st-cap]");
+  body.innerHTML = "";
+  cap.innerHTML = "";
+  if (item.type === "story" && item.kind === "photo") {
+    body.innerHTML = `<img class="st-media" src="${item.photo}" alt="Story">`;
+    if (item.text) cap.textContent = item.text;
+    startStatusPlayback(item, token, statusDuration(item));
+  } else if (item.type === "story" && item.kind === "video") {
+    body.innerHTML = `<video class="st-media" src="${item.video}" muted playsinline></video>`;
+    if (item.text) cap.textContent = item.text;
+    const v = body.querySelector("video");
+    const begin = () => startStatusPlayback(item, token, statusDuration(item));
+    v.addEventListener(
+      "loadedmetadata",
+      () => {
+        if (Number.isFinite(v.duration) && v.duration > 0)
+          item.durationMs = Math.min(45000, Math.round(v.duration * 1000));
+        if (token === statusNavToken && statusSeq[statusIdx] === item)
+          begin();
+      },
+      { once: true },
+    );
+    v.addEventListener("ended", () => goStatus(1));
+    v.addEventListener("error", () => goStatus(1));
+    v.play().catch(() => {});
+    if (v.readyState >= 1) begin();
+  } else if (item.type === "story") {
+    body.innerHTML = `<div class="st-flex"><span>${sicon("sparkle")}</span><strong>${esc(item.text || "")}</strong><small>${esc(item.author.name)}</small></div>`;
+    startStatusPlayback(item, token, statusDuration(item));
+  } else {
+    body.innerHTML = `<div class="st-streak"><span class="st-streak-emoji">${item.emoji}</span><strong>${esc(item.title)}</strong><small>${esc(item.sub)}</small></div>`;
+    startStatusPlayback(item, token, statusDuration(item));
+  }
+}
+
+function renderStatusProgress(overlay, frac) {
+  const bar = overlay.querySelector("[data-st-progress]");
+  if (!bar) return;
+  bar.innerHTML = statusSeq
+    .map(
+      (_, i) =>
+        `<span class="st-seg${i < statusIdx ? " done" : i === statusIdx ? " current" : ""}"><i data-st-fill="${i}" style="width:${i < statusIdx ? 100 : 0}%"></i></span>`,
+    )
+    .join("");
+  void bar.offsetWidth;
+}
+
+function setStatusFill(frac, transitionMs) {
+  const overlay = document.querySelector("#status-viewer");
+  if (!overlay) return;
+  const fill = overlay.querySelector(`[data-st-fill="${statusIdx}"]`);
+  if (!fill) return;
+  fill.style.transition = transitionMs
+    ? `width ${transitionMs}ms linear`
+    : "none";
+  fill.style.width = `${Math.max(0, Math.min(100, frac * 100))}%`;
+}
+
+function startStatusPlayback(item, token, durationMs) {
+  clearStatusTimer();
+  statusItemDur = durationMs;
+  statusElapsed = 0;
+  statusPaused = false;
+  statusItemStart = Date.now();
+  setStatusFill(0, 0);
+  requestAnimationFrame(() => setStatusFill(1, durationMs));
+  statusTimer = setTimeout(() => {
+    if (token === statusNavToken) goStatus(1);
+  }, durationMs);
+}
+
+function pauseStatus() {
+  if (statusPaused || !statusSeq.length) return;
+  statusElapsed += Date.now() - statusItemStart;
+  statusPaused = true;
+  clearStatusTimer();
+  setStatusFill(statusElapsed / statusItemDur, 0);
+  const overlay = document.querySelector("#status-viewer");
+  const v = overlay && overlay.querySelector("video");
+  if (v) v.pause();
+  if (overlay) overlay.classList.add("paused");
+}
+
+function resumeStatus() {
+  if (!statusPaused || !statusSeq.length) return;
+  statusPaused = false;
+  statusItemStart = Date.now();
+  const remaining = statusRemaining(statusElapsed, statusItemDur);
+  const overlay = document.querySelector("#status-viewer");
+  if (overlay) overlay.classList.remove("paused");
+  setStatusFill(1, remaining);
+  const v = overlay && overlay.querySelector("video");
+  if (v) v.play().catch(() => {});
+  const token = statusNavToken;
+  statusTimer = setTimeout(() => {
+    if (token === statusNavToken) goStatus(1);
+  }, remaining);
+}
+
+function statusPointerDown(e) {
+  if (
+    e.target.closest &&
+    (e.target.closest("button") || e.target.closest("[data-st-menu-pop]"))
+  )
+    return;
+  const pop = document.querySelector("[data-st-menu-pop]");
+  if (pop) {
+    pop.remove();
+    statusTouch = null;
+    return;
+  }
+  statusTouch = { x: e.clientX, y: e.clientY, t: Date.now() };
+  statusHolding = false;
+  clearTimeout(statusHoldTimer);
+  statusHoldTimer = setTimeout(() => {
+    statusHolding = true;
+    pauseStatus();
+  }, 250);
+}
+
+function statusPointerUp(e) {
+  clearTimeout(statusHoldTimer);
+  if (!statusTouch) return;
+  const dx = e.clientX - statusTouch.x;
+  const dy = e.clientY - statusTouch.y;
+  const dt = Date.now() - statusTouch.t;
+  const wasHold = statusHolding;
+  statusHolding = false;
+  statusTouch = null;
+  if (wasHold) {
+    resumeStatus();
+    return;
+  }
+  if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
+    if (dx < 0) goStatus(1);
+    else goStatus(-1);
+    return;
+  }
+  if (dt > 600) return;
+  const w = window.innerWidth || 1;
+  if (e.clientX < w * 0.3) goStatus(-1);
+  else if (e.clientX > w * 0.7) goStatus(1);
+}
+
+function statusPointerCancel() {
+  clearTimeout(statusHoldTimer);
+  if (statusHolding) {
+    statusHolding = false;
+    resumeStatus();
+  }
+  statusTouch = null;
+}
+
+function renderDiscover(body) {
+  const subjects = [
+    "All subjects",
+    "Mathematics",
+    "Computer science",
+    "Languages",
+    "Medicine",
+    "Arts & design",
+  ];
+  const activeSubject = state.groupCategory || "All subjects";
+  const subjectGroups = allGroups().filter(
+    (group) =>
+      activeSubject === "All subjects" ||
+      subjectForGroup(group) === activeSubject,
+  );
+  const joinedIds = get("sf-joined", []);
+  const recommended = allGroups()
+    .map((g) => ({ group: g, hits: groupMatches(g) }))
+    .filter((x) => x.hits && !joinedIds.includes(x.group.id))
+    .slice(0, 3);
+  const recommendMarkup = recommended.length
+    ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Recommended for you</h2><span class="tag">matched</span></div><div class="grid three">${recommended.map((x) => groupCardWithReason(x.group, x.hits)).join("")}</div></div>`
+    : "";
+  body.innerHTML = `${storiesMarkup()}${recommendMarkup}<div class="community-layout"><div class="card"><div class="eyebrow" style="margin-bottom:10px">Subjects</div><div class="category-list">${subjects.map((subject) => `<button class="${activeSubject === subject ? "active" : ""}" data-group-category="${subject}">${subject}</button>`).join("")}</div></div><div><div class="input-row"><input class="input" id="group-search" placeholder="Search groups and topics" aria-label="Search groups and topics"></div><div class="grid three" id="groups-grid">${subjectGroups.map(groupCard).join("") || '<p class="muted">No groups match this subject yet.</p>'}</div></div></div>`;
+  $$("[data-group-category]", body).forEach(
+    (button) =>
+      (button.onclick = () => {
+        state.groupCategory = button.dataset.groupCategory;
+        renderDiscover(body);
+      }),
+  );
+  $("#group-search", body).oninput = (e) => {
+    $$("#groups-grid .group-card").forEach(
+      (card) =>
+        (card.style.display = card.textContent
+          .toLowerCase()
+          .includes(e.target.value.toLowerCase())
+          ? ""
+          : "none"),
+    );
+  };
+  bindGroupButtons(body);
+  bindStories(body);
+  body.insertAdjacentHTML("beforeend", `<section class="feed-section"><div class="section-row"><div><div class="eyebrow">Community feed</div><h2 style="margin:5px 0 0">Study notes from the community</h2></div><span class="tag">${visiblePosts().length} posts</span></div><div class="card composer"><textarea class="textarea autogrow" id="post-composer" rows="2" placeholder="Share a useful study insight, milestone, or question..."></textarea><div class="composer-actions"><span class="muted">Be generous with what you learn.</span><button class="primary" id="publish-post">Publish note</button></div></div><div class="feed-list">${visiblePosts().length ? visiblePosts().map((post) => `<article class="card post" data-post="${post.id}"><div class="post-author"><div class="avatar">${avatarMarkup(post.photo, post.avatar || state.profile.avatar)}</div><div><strong>${esc(post.author || state.profile.name)}</strong><small>@${esc(post.handle || state.profile.handle)}${post.university ? ` · ${esc(post.university)}` : ""} · ${new Date(post.time).toLocaleDateString()}</small></div>${postMenuMarkup(post)}</div><div class="post-text" data-post-text="${post.id}"><p>${esc(post.text)}</p>${post.editedAt ? '<small class="muted">(edited)</small>' : ""}</div><div class="post-actions"><button data-like-post="${post.id}" class="${(post.likedBy || []).includes(postOwnerId()) ? "liked" : ""}">${(post.likedBy || []).includes(postOwnerId()) ? sicon("heart-filled") : sicon("heartOutline")} ${post.likes || 0}</button><button data-comment-toggle="${post.id}">${sicon("chat")} ${(post.comments || []).length ? `${post.comments.length} ` : ""}Comments</button></div><div class="post-comments" data-comments="${post.id}" hidden></div></article>`).join("") : '<div class="card empty-state"><div class="emoji">' + sicon("sparkle") + '</div><h3>The feed is waiting for your first note</h3><p class="muted">Share a small insight and make someone else’s study session easier.</p></div>'}</div></section>`);
+  bindFeed(body);
+}
+
+function postOwnerId() {
+  return state.user?.id || state.deviceId || "local";
+}
+function visiblePosts() {
+  const names = new Set(
+    Object.values(state.blocks || {})
+      .map((b) => b.username)
+      .filter(Boolean),
+  );
+  return (state.posts || []).filter(
+    (p) => !names.has(p.handle) && !names.has(p.author),
+  );
+}
+function postMenuMarkup(post) {
+  const own = isOwnPost(post);
+  return `<div class="post-menu-wrap"><button class="icon-btn post-menu-btn" data-post-menu="${post.id}" title="Note options" aria-label="Note options">⋮</button><div class="post-menu" data-post-pop="${post.id}" hidden>${own ? `<button data-post-edit="${post.id}">Edit</button><button class="danger" data-post-del="${post.id}">Delete</button>` : `<button data-post-block="${esc(post.handle || post.author || "")}" data-post-name="${esc(post.author || post.handle || "this user")}">Block author</button>`}</div></div>`;
+}
+function isOwnPost(p) {
+  if (!p) return false;
+  if (p.ownerId) return p.ownerId === postOwnerId();
+  return p.handle === state.profile.handle;
+}
+function closePostMenus() {
+  document.querySelectorAll("[data-post-pop],[data-chat-pop]").forEach((el) => {
+    el.hidden = true;
+  });
+}
+function togglePostMenu(id) {
+  const pop = document.querySelector(`[data-post-pop="${id}"]`);
+  if (!pop) return;
+  const open = pop.hidden;
+  closePostMenus();
+  pop.hidden = !open;
+}
+function startPostEdit(id) {
+  const post = state.posts.find((p) => p.id === id);
+  if (!post || !isOwnPost(post))
+    return notify("You can only edit your own notes");
+  closePostMenus();
+  const article = document.querySelector(`[data-post="${id}"]`);
+  const wrap = article && article.querySelector("[data-post-text]");
+  if (!wrap) return;
+  wrap.innerHTML = `<textarea class="textarea autogrow" data-post-editor rows="3">${esc(post.text)}</textarea><div class="post-edit-actions"><button class="ghost" data-post-cancel>Cancel</button><button class="primary" data-post-save>Save</button></div>`;
+  const ed = wrap.querySelector("[data-post-editor]");
+  fitTextarea(ed);
+  try {
+    ed.focus();
+  } catch {
+    /* ignore */
+  }
+  wrap.querySelector("[data-post-cancel]").onclick = () => renderCommunity();
+  wrap.querySelector("[data-post-save]").onclick = () => {
+    const v = ed.value.trim();
+    if (!v) return notify("Note cannot be empty");
+    const fresh = state.posts.find((p) => p.id === id);
+    if (!fresh || !isOwnPost(fresh))
+      return notify("You can only edit your own notes");
+    fresh.text = v;
+    fresh.editedAt = Date.now();
+    persist();
+    renderCommunity();
+    notify("Note updated");
+  };
+}
+function askDeletePost(id) {
+  const post = state.posts.find((p) => p.id === id);
+  if (!post || !isOwnPost(post))
+    return notify("You can only delete your own notes");
+  closePostMenus();
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Delete note</div><h2>Delete this study note?</h2><p class="muted">This action cannot be undone.</p><p class="st-confirm-err" data-post-del-err hidden></p><div class="modal-actions"><button class="ghost" data-post-del-cancel>Cancel</button><button class="danger-button" data-post-del-go>Delete</button></div></div>`;
+  $("#modal-root").append(modal);
+  const err = modal.querySelector("[data-post-del-err]");
+  const go = modal.querySelector("[data-post-del-go]");
+  modal.querySelector("[data-post-del-cancel]").onclick = () => modal.remove();
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal && !go.disabled) modal.remove();
+  });
+  go.onclick = () => {
+    go.disabled = true;
+    go.textContent = "Deleting…";
+    err.hidden = true;
+    setTimeout(() => {
+      const fresh = state.posts.find((p) => p.id === id);
+      if (!fresh || !isOwnPost(fresh)) {
+        err.textContent = "That note is already gone or is not yours.";
+        err.hidden = false;
+        go.disabled = false;
+        go.textContent = "Delete";
+        return;
+      }
+      state.posts = state.posts.filter((p) => p.id !== id);
+      persist();
+      modal.remove();
+      renderCommunity();
+      notify("Note deleted");
+    }, 60);
+  };
+}
+function bindFeed(root) {
+  const publish = $("#publish-post", root);
+  if (publish)
+    publish.onclick = () => {
+      const input = $("#post-composer", root);
+      if (!input.value.trim())
+        return notify("Write something before publishing");
+      state.posts.unshift({
+        id: uid(),
+        text: input.value.trim(),
+        author: state.profile.name,
+        handle: state.profile.handle,
+        ownerId: postOwnerId(),
+        avatar: state.profile.avatar,
+        photo: state.profile.photo || "",
+        university: state.profile.university || "",
+        time: Date.now(),
+        likes: 0,
+        likedBy: [],
+        comments: [],
+      });
+      persist();
+      addNotification(
+        "Note published",
+        "Your study note is now visible in the community feed.",
+        "sparkle",
+      );
+      renderCommunity();
+      notify("Note published");
+    };
+  $$("[data-like-post]", root).forEach(
+    (button) =>
+      (button.onclick = () => {
+        const post = state.posts.find(
+          (item) => item.id === button.dataset.likePost,
+        );
+        if (!post) return;
+        // Toggling: a second tap takes the like back instead of inflating
+        // the counter, and the count always mirrors who actually liked it.
+        const me = postOwnerId();
+        const likedBy = new Set(post.likedBy || []);
+        if (likedBy.has(me)) likedBy.delete(me);
+        else likedBy.add(me);
+        post.likedBy = [...likedBy];
+        post.likes = likedBy.size;
+        persist();
+        renderCommunity();
+      }),
+  );
+  $$("[data-comment-toggle]", root).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const box = $(`[data-comments="${b.dataset.commentToggle}"]`, root);
+        if (!box) return;
+        if (box.hidden) {
+          renderComments(box, b.dataset.commentToggle);
+          box.hidden = false;
+        } else {
+          box.hidden = true;
+        }
+      }),
+  );
+  if (!window.__sfPostMenuBound) {
+    window.__sfPostMenuBound = true;
+    document.addEventListener("click", (e) => {
+      if (
+        e.target.closest &&
+        e.target.closest(
+          "[data-post-pop],[data-post-menu],[data-chat-pop],[data-chat-menu]",
+        )
+      )
+        return;
+      closePostMenus();
+      document
+        .querySelectorAll("[data-chat-pop]")
+        .forEach((el) => (el.hidden = true));
+    });
+  }
+  $$("[data-post-menu]", root).forEach(
+    (b) =>
+      (b.onclick = (e) => {
+        e.stopPropagation();
+        togglePostMenu(b.dataset.postMenu);
+      }),
+  );
+  $$("[data-post-edit]", root).forEach(
+    (b) =>
+      (b.onclick = (e) => {
+        e.stopPropagation();
+        startPostEdit(b.dataset.postEdit);
+      }),
+  );
+  $$("[data-post-del]", root).forEach(
+    (b) =>
+      (b.onclick = (e) => {
+        e.stopPropagation();
+        askDeletePost(b.dataset.postDel);
+      }),
+  );
+  $$("[data-post-block]", root).forEach(
+    (b) =>
+      (b.onclick = (e) => {
+        e.stopPropagation();
+        closePostMenus();
+        askBlockUser({
+          username: b.dataset.postBlock,
+          name: b.dataset.postName || b.dataset.postBlock,
+        });
+      }),
+  );
+}
+
+function renderComments(box, postId) {
+  const post = state.posts.find((item) => item.id === postId);
+  if (!post) return;
+  const comments = post.comments || [];
+  box.innerHTML = `${comments.map((c) => `<div class="comment"><div class="avatar avatar-sm">${avatarMarkup(c.photo, c.avatar || "?")}</div><div class="comment-body"><strong>${esc(c.author)}</strong><small> @${esc(c.handle)} · ${new Date(c.time).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</small><p>${esc(c.text)}</p></div></div>`).join("")}<div class="input-row"><textarea class="input autogrow" data-comment-input rows="1" placeholder="Write a comment... (Shift + Enter for a new line)" aria-label="Write a comment"></textarea><button class="primary" data-comment-send>Post</button></div>`;
+  const input = $("[data-comment-input]", box);
+  const send = () => {
+    const text = input.value.trim();
+    if (!text) return;
+    post.comments = [
+      ...(post.comments || []),
+      {
+        id: uid(),
+        author: state.profile.name,
+        handle: state.profile.handle,
+        avatar: state.profile.avatar,
+        photo: state.profile.photo || "",
+        text,
+        time: Date.now(),
+      },
+    ];
+    persist();
+    renderComments(box, postId);
+    const toggle = $(`[data-comment-toggle="${postId}"]`);
+    if (toggle)
+      toggle.innerHTML = `${sicon("chat")} ${post.comments.length} Comments`;
+  };
+  $("[data-comment-send]", box).onclick = send;
+  input.onkeydown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  };
+}
+
+function subjectForGroup(group) {
+  const text = `${group.name} ${(group.tags || []).join(" ")}`.toLowerCase();
+  if (text.includes("calculus") || text.includes("math")) return "Mathematics";
+  if (text.includes("web") || text.includes("ai") || text.includes("computer"))
+    return "Computer science";
+  if (text.includes("language") || text.includes("english")) return "Languages";
+  if (text.includes("medicine") || text.includes("clinical")) return "Medicine";
+  if (text.includes("art") || text.includes("design")) return "Arts & design";
+  return "All subjects";
+}
+
+function groupCard(g) {
+  const joined = get("sf-joined", []).includes(g.id);
+  return `<article class="card group-card"><div class="group-top"><div class="group-logo">${g.emoji}</div><div><h3>${esc(g.name)}</h3><span class="muted">${g.members || 1} learners</span></div></div><p class="muted" style="margin-top:13px">${esc(g.description)}</p><div>${(g.tags || []).map((tag) => `<span class="tag" style="margin-right:4px">#${esc(tag)}</span>`).join("")}</div><div class="actions">${joined ? `<button class="primary" data-open-group="${g.id}" style="flex:1;padding:9px">Open chat</button><button class="ghost" data-leave-group="${g.id}">Leave</button>` : `<button class="ghost" data-join-group="${g.id}" style="flex:1">Join group</button>`}</div></article>`;
+}
+
+function bindGroupButtons(root) {
+  $$("[data-join-group]", root).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const joined = get("sf-joined", []);
+        save("sf-joined", [...new Set([...joined, b.dataset.joinGroup])]);
+        notify("Group joined");
+        renderCommunity();
+        if (backendConfigured && state.user) {
+          joinCloudGroup(b.dataset.joinGroup).catch(() => {});
+        }
+      }),
+  );
+  $$("[data-open-group]", root).forEach(
+    (b) =>
+      (b.onclick = () => {
+        state.subtab = "messages";
+        state.activeChat = b.dataset.openGroup;
+        renderCommunity();
+      }),
+  );
+  $$("[data-leave-group]", root).forEach(
+    (b) =>
+      (b.onclick = () => {
+        save(
+          "sf-joined",
+          get("sf-joined", []).filter((id) => id !== b.dataset.leaveGroup),
+        );
+        renderCommunity();
+        if (backendConfigured && state.user) {
+          leaveCloudGroup(b.dataset.leaveGroup).catch(() => {});
+        }
+      }),
+  );
+}
+
+function renderMyGroups(body) {
+  body.innerHTML = `<div class="card" style="margin-bottom:18px"><h2>Create a study group</h2><div class="grid two"><input class="input" id="new-group-name" placeholder="Group name"><select class="select" id="new-group-logo" aria-label="Group icon" style="max-width:190px">${["book", "fire", "star", "target", "users", "globe", "rocket", "palette", "music", "brain", "chat", "trophy"].map((n) => `<option value="${n}">${n[0].toUpperCase() + n.slice(1)}</option>`).join("")}</select><input class="input" id="new-group-focus" placeholder="Focus topics, separated by commas"><textarea class="textarea autogrow" id="new-group-description" placeholder="Describe what your group studies"></textarea></div><p class="muted" style="margin:8px 0 0">Every group is public — other learners can discover it and join.</p><button class="primary" id="create-group" style="margin-top:12px">Create group</button></div><div class="grid three">${
+    allGroups()
+      .filter((g) => get("sf-joined", []).includes(g.id))
+      .map(groupCard)
+      .join("") ||
+    '<p class="muted">No groups yet. Create one above — it appears in Discover for everyone.</p>'
+  }</div>`;
+  $("#create-group", body).onclick = async () => {
+    const name = $("#new-group-name").value.trim(),
+      desc = $("#new-group-description").value.trim();
+    if (!name || !desc) return notify("Add a name and description first");
+    const g = {
+      id: "custom-" + uid(),
+      name,
+      emoji: sicon($("#new-group-logo")?.value || "book"),
+      logoName: $("#new-group-logo")?.value || "book",
+      ownerId: chatKey(),
+      description: desc,
+      tags: $("#new-group-focus")
+        .value.split(",")
+        .map((x) => x.trim())
+        .filter(Boolean),
+      members: 1,
+      visibility: "public",
+      color: "#47765a",
+    };
+    state.customGroups.push(g);
+    save("sf-groups", state.customGroups);
+    const joined = get("sf-joined", []);
+    save("sf-joined", [...joined, g.id]);
+    notify("Group created — it is public and joinable");
+    renderCommunity();
+    // Cloud copy: signed-in users get their group shared with everyone, plus an
+    // owner membership row so group chat inserts pass RLS on the server.
+    if (backendConfigured && state.user) {
+      try {
+        await createCloudGroup({
+          id: g.id, name: g.name, description: g.description,
+          logo: g.logoName || "book", focus_topics: g.tags,
+          visibility: "public",
+        });
+        await joinCloudGroup(g.id, "owner");
+        await refreshCloudGroups(true);
+      } catch {
+        notify("Group saved on this device; cloud sync failed");
+      }
+    }
+  };
+  bindGroupButtons(body);
+}
+
+function inviteText() {
+  // Plain text only — this fills a readonly input and goes to clipboards.
+  return `Join me on StudyFlow 📚 — add me as a friend with the username @${state.profile.handle}. Let's stay consistent together!`;
+}
+
+function myReferralCode() {
+  if (!state.referrals) state.referrals = { code: "", redeemed: [] };
+  if (!state.referrals.code) {
+    const abc = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+    let c = "";
+    for (let i = 0; i < 6; i++)
+      c += abc[Math.floor(Math.random() * abc.length)];
+    state.referrals.code = "SF-" + c;
+    persist();
+  }
+  return state.referrals.code;
+}
+
+function referralMarkup() {
+  const code = myReferralCode();
+  const count = (state.referrals.redeemed || []).length;
+  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Referral rewards</h2><span class="tag">+30 ${sicon("coin")}</span></div><p class="muted">Your code <strong>${esc(code)}</strong> · ${count} redeemed. Friends who redeem it get +30 coins instantly — yours lands when cloud accounts connect.</p><div class="input-row"><input class="input" id="referral-code" placeholder="Enter a friend's code" aria-label="Referral code"><button class="primary" id="referral-redeem">Redeem</button><button class="ghost" id="referral-share">Share mine</button></div></div>`;
+}
+
+function redeemReferral(root) {
+  const input = $("#referral-code", root);
+  const code = (input?.value || "").trim().toUpperCase();
+  if (!/^SF-[A-Z0-9]{6}$/.test(code))
+    return notify("Codes look like SF-AB12CD");
+  if (code === myReferralCode())
+    return notify("That's your own code — share it instead");
+  const redeemed = state.referrals.redeemed || [];
+  if (redeemed.includes(code)) return notify("Code already redeemed");
+  redeemed.push(code);
+  state.referrals.redeemed = redeemed;
+  addCoins(30);
+  persist();
+  renderCommunity();
+  celebrate(false);
+  notify("Referral accepted · +30 coins");
+}
+
+function renderFriends(body) {
+  body.innerHTML = `<div class="card" style="margin-bottom:18px"><h2>Invite study buddies</h2><p class="muted">Friends join with your username. Share this invite anywhere — anyone who installs StudyFlow can add you in seconds.</p><div class="input-row"><input class="input" id="invite-link" readonly value="${esc(inviteText())}"><button class="primary" id="copy-invite">Copy</button><button class="ghost" id="share-invite">Share</button></div></div>${referralMarkup()}<div class="card"><h2>Friends & gifting</h2><p class="muted">Add study partners here. They will also appear as gift recipients in the Rewards store.</p><div class="input-row"><input class="input" id="friend-name" placeholder="Username" aria-label="Friend username"><button class="primary" id="add-friend">Add friend</button></div><div class="grid">${state.friends.map((f) => `<div class="task"><div class="avatar">${f.username[0].toUpperCase()}</div><span class="task-text">@${esc(f.username)}</span><span class="friend-actions"><button class="ghost" data-chat-friend="${f.id}">Message</button><button class="ghost" data-block-friend="${f.id}">Block</button><button class="delete" data-remove-friend="${f.id}" title="Remove friend">×</button></span></div>`).join("") || '<p class="muted">Add a friend to send gifts and messages.</p>'}</div>${blockedSectionMarkup()}</div></div>`;
+  $("#add-friend", body).onclick = () => {
+    const name = $("#friend-name").value.trim();
+    if (!name) return;
+    if (state.friends.some((f) => f.username === name))
+      return notify("Friend already added");
+    state.friends.push({ id: uid(), username: name });
+    persist();
+    renderFriends(body);
+  };
+  $("#referral-redeem", body).onclick = () => redeemReferral(body);
+  $("#referral-share", body).onclick = async () => {
+    const text = `Join me on StudyFlow 📚 — redeem my code ${myReferralCode()} for +30 coins!`;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: "StudyFlow referral", text });
+      } catch {
+        /* dismissed */
+      }
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      notify("Referral copied");
+    } catch {
+      notify("Copy this code: " + myReferralCode());
+    }
+  };
+  const copyInvite = async () => {
+    const text = $("#invite-link", body).value;
+    try {
+      await navigator.clipboard.writeText(text);
+      notify("Invite copied — share it anywhere");
+    } catch {
+      $("#invite-link", body).select();
+      document.execCommand?.("copy");
+      notify("Invite copied — share it anywhere");
+    }
+  };
+  $("#copy-invite", body).onclick = copyInvite;
+  $("#share-invite", body).onclick = async () => {
+    const text = $("#invite-link", body).value;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: "Join me on StudyFlow", text });
+      } catch {
+        /* dismissed */
+      }
+      return;
+    }
+    copyInvite();
+  };
+  $$("[data-chat-friend]", body).forEach(
+    (b) =>
+      (b.onclick = () => {
+        state.subtab = "messages";
+        state.activeChat = b.dataset.chatFriend;
+        renderCommunity();
+      }),
+  );
+  $$("[data-remove-friend]", body).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const f = (state.friends || []).find(
+          (x) => x.id === b.dataset.removeFriend,
+        );
+        confirmBox(
+          `Remove @${f ? f.username : "friend"}?`,
+          "They will leave your friends list. You can add them back later.",
+          () => {
+            state.friends = (state.friends || []).filter(
+              (x) => x.id !== b.dataset.removeFriend,
+            );
+            persist();
+            renderFriends(body);
+            notify("Friend removed");
+          },
+        );
+      }),
+  );
+  $$("[data-block-friend]", body).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const f = (state.friends || []).find(
+          (x) => x.id === b.dataset.blockFriend,
+        );
+        if (!f) return;
+        askBlockUser({
+          id: f.id,
+          username: f.username,
+          name: "@" + f.username,
+          context: "friends",
+        });
+      }),
+  );
+  $$("[data-unblock]", body).forEach(
+    (b) => (b.onclick = () => unblockUser(b.dataset.unblock)),
+  );
+}
+
+const BLOCK_REASONS = ["Fraud or scam", "Harassment", "Bullying", "Hate or offensive behavior", "Bad language", "Spam", "Inappropriate content", "Impersonation", "Threatening behavior", "Repeated unwanted contact", "Other"];
+function isUuid(v) {
+  return typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+}
+function blockKeyFor(ref) {
+  if (!ref) return "";
+  return ref.id || ref.username || ref.handle || "";
+}
+function isBlockedKey(key) {
+  return Boolean(key && (state.blocks || {})[key]);
+}
+function askBlockUser(ref) {
+  const key = blockKeyFor(ref);
+  const name = ref.name || (ref.username ? "@" + ref.username : "this user");
+  if (!key) return notify("Could not identify that user");
+  if ((ref.username && ref.username === state.profile.handle) || key === postOwnerId())
+    return notify("You cannot block yourself");
+  closePostMenus();
+  const existing = (state.blocks || {})[key];
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Safety & privacy</div><h2>Block ${esc(name)}?</h2><p class="muted">Blocking will limit interactions between you and this account — no more direct messages, and their notes leave your feed.${existing ? " You have reported them before — continuing updates your report." : ""}</p><div class="modal-actions"><button class="ghost" data-block-cancel>Cancel</button><button class="danger-button" data-block-continue>Block User</button></div></div>`;
+  $("#modal-root").append(modal);
+  modal.querySelector("[data-block-cancel]").onclick = () => modal.remove();
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) modal.remove();
+  });
+  modal.querySelector("[data-block-continue]").onclick = () => {
+    modal.remove();
+    blockReasonDialog(ref);
+  };
+}
+function blockReasonDialog(ref) {
+  const name = ref.name || (ref.username ? "@" + ref.username : "this user");
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Report · ${esc(name)}</div><h2>Why are you blocking this user?</h2><p class="muted">Pick the closest reason. Reports go to moderation — never public.</p><div class="reason-list" data-block-reasons>${BLOCK_REASONS.map((r) => `<label><input type="radio" name="block-reason" value="${esc(r)}"> ${esc(r)}</label>`).join("")}</div><label class="field-label" data-block-other-wrap hidden>Tell us more about what happened<textarea class="textarea autogrow" data-block-other rows="3" placeholder="What did they do? Which content was inappropriate?"></textarea></label><p class="st-confirm-err" data-block-err hidden></p><div class="modal-actions"><button class="ghost" data-block-back>Back</button><button class="danger-button" data-block-submit>Submit</button></div></div>`;
+  $("#modal-root").append(modal);
+  const err = modal.querySelector("[data-block-err]");
+  const otherWrap = modal.querySelector("[data-block-other-wrap]");
+  const otherBox = modal.querySelector("[data-block-other]");
+  const submitBtn = modal.querySelector("[data-block-submit]");
+  modal.querySelectorAll('input[name="block-reason"]').forEach((radio) =>
+    radio.addEventListener("change", () => {
+      const show = modal.querySelector('input[name="block-reason"]:checked')?.value === "Other";
+      otherWrap.hidden = !show;
+      if (show) fitTextarea(otherBox);
+    }),
+  );
+  modal.querySelector("[data-block-back]").onclick = () => {
+    modal.remove();
+    askBlockUser(ref);
+  };
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal && !submitBtn.disabled) modal.remove();
+  });
+  submitBtn.onclick = async () => {
+    const reason = modal.querySelector('input[name="block-reason"]:checked')?.value || "";
+    const complaint = otherBox.value.trim();
+    if (!reason) {
+      err.textContent = "Choose a reason first.";
+      err.hidden = false;
+      return;
+    }
+    if (reason === "Other" && !complaint) {
+      err.textContent = "Describe what happened, or pick a specific reason instead.";
+      err.hidden = false;
+      return;
+    }
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Submitting…";
+    err.hidden = true;
+    const ok = await submitBlock(ref, [reason], complaint);
+    if (ok) modal.remove();
+    else {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Submit";
+    }
+  };
+}
+async function submitBlock(ref, reasons, complaint) {
+  const key = blockKeyFor(ref);
+  if (!key) {
+    notify("Could not identify that user");
+    return false;
+  }
+  if ((ref.username && ref.username === state.profile.handle) || key === postOwnerId()) {
+    notify("You cannot block yourself");
+    return false;
+  }
+  const entry = {
+    key,
+    id: ref.id || null,
+    username: ref.username || ref.handle || "",
+    name: ref.name || ref.username || ref.handle || "Unknown user",
+    reasons: reasons.slice(0, 8),
+    complaint: String(complaint || "").slice(0, 2000),
+    ts: Date.now(),
+    status: "active",
+  };
+  state.blocks = { ...(state.blocks || {}), [key]: entry };
+  const report = {
+    id: uid(),
+    reporter: state.profile.handle,
+    reportedKey: key,
+    reportedName: entry.name,
+    reasons: entry.reasons,
+    complaint: entry.complaint,
+    ts: Date.now(),
+    status: "pending",
+    context: ref.context || "community",
+  };
+  state.reports = [...(state.reports || []).filter((r) => r.reportedKey !== key), report];
+  if (ref.id) state.friends = (state.friends || []).filter((f) => f.id !== ref.id);
+  persist();
+  let cloudOk = true;
+  try {
+    const { error } = await reportUser({
+      reportedUserId: isUuid(ref.id) ? ref.id : null,
+      reasons: entry.reasons,
+      details: `Reported user: ${entry.username || entry.name}\nComplaint: ${entry.complaint || "—"}\nContext: ${report.context}`,
+    });
+    if (error) cloudOk = false;
+  } catch {
+    cloudOk = false;
+  }
+  renderCommunity();
+  notify(cloudOk ? "User blocked and reported" : "User blocked — report saved on this device");
+  return true;
+}
+function unblockUser(key) {
+  const blocks = { ...(state.blocks || {}) };
+  if (!blocks[key]) return;
+  delete blocks[key];
+  state.blocks = blocks;
+  persist();
+  renderCommunity();
+  notify("User unblocked");
+}
+function blockedSectionMarkup() {
+  const list = Object.values(state.blocks || {});
+  if (!list.length) return "";
+  return `<div class="section-row" style="margin-top:18px"><h3>Blocked users (${list.length})</h3><span class="tag">private</span></div><p class="muted">They cannot message you, and their notes stay out of your feed. Reports remain with moderation.</p><div class="grid">${list.map((b) => `<div class="task"><div class="avatar">⊘</div><span class="task-text"><strong>${esc(b.name)}</strong><br><small class="muted">${esc((b.reasons || []).join(" · "))}${b.ts ? ` · ${new Date(b.ts).toLocaleDateString()}` : ""}</small></span><span class="friend-actions"><button class="ghost" data-unblock="${esc(b.key)}">Unblock</button></span></div>`).join("")}</div>`;
+}
+function renderMessages(body) {
+  const chats = [
+    ...allGroups().filter((g) => get("sf-joined", []).includes(g.id)),
+    ...(state.friends || []).filter((f) => !isBlockedKey(f.id)),
+  ];
+  if (state.activeChat && isBlockedKey(state.activeChat)) state.activeChat = null;
+  body.innerHTML = `<div class="card messages"><div class="conversation">${chats.map((c) => `<button class="${state.activeChat === c.id ? "active" : ""}" data-select-chat="${c.id}">${c.emoji || "●"} ${esc(c.name || "@" + c.username)}${isChatMuted(c.id) ? ` <span class="mute-ico" title="Muted">${sicon("mute")}</span>` : ""}</button>`).join("") || '<span class="muted">No conversations yet.</span>'}</div><div class="chat">${state.activeChat ? (groupSearch && groupSearch.id === state.activeChat ? groupSearchMarkup(state.activeChat) : chatMarkup(state.activeChat)) : '<div style="margin:auto" class="muted">Select a group or friend to start messaging.</div>'}</div></div>`;
+  $$("[data-select-chat]", body).forEach(
+    (b) =>
+      (b.onclick = () => {
+        if (state.activeChat !== b.dataset.selectChat) {
+          groupSearch = null;
+          groupNav = null;
+        }
+        state.activeChat = b.dataset.selectChat;
+        renderMessages(body);
+      }),
+  );
+  if (state.activeChat) {
+    if (groupSearch && groupSearch.id === state.activeChat) bindGroupSearch(body, state.activeChat);
+    else bindChat(body, state.activeChat);
+    // New messages land at the bottom; without this the reader is left
+    // wherever the previous render left the scroll position.
+    const chatBody = $(".chat-body", body);
+    if (chatBody) chatBody.scrollTop = chatBody.scrollHeight;
+  }
+}
+
+function chatKey() {
+  return state.user?.id || state.profile.handle || "local-user";
+}
+
+// Reaction identities are stable keys (not SVG markup!) — the old code used the
+// raw sicon() SVG string as the reaction key, which corrupted data-react
+// attributes, broke chip rendering, and stored garbage in localStorage.
+const REACT_EMOJI = ["heart", "thumbsUp", "laugh", "wow", "cry", "clap"];
+const REACT_LABELS = {
+  heart: "❤️",
+  thumbsUp: "👍",
+  laugh: "😂",
+  wow: "😮",
+  cry: "😢",
+  clap: "👏",
+};
+
+function escSnippet(s, n) {
+  const t = String(s || "");
+  return esc(t.length > n ? t.slice(0, n - 1) + "…" : t);
+}
+
+function messageText(m) {
+  if (m.kind === "voice") return `Voice message (${m.dur || 0}s)`;
+  if (m.kind === "poll") return m.question || m.text || "Poll";
+  if (m.kind === "file")
+    return m.mime && m.mime.startsWith("image/")
+      ? `Photo${m.file ? ": " + m.file : ""}`
+      : `File${m.file ? ": " + m.file : ""}`;
+  return cleanText(m.text || "");
+}
+
+function pollVotes(m) {
+  const counts = (m.options || []).map(() => 0);
+  Object.values(m.voters || {}).forEach((i) => {
+    if (counts[i] != null) counts[i]++;
+  });
+  return counts;
+}
+
+function messageHtml(m) {
+  const key = chatKey();
+  let body = "";
+  if (m.kind === "voice" && m.audio) {
+    body = `<audio controls preload="metadata" src="${m.audio}" class="voice-player"></audio><div class="muted" style="font-size:11px">Voice message · ${m.dur || 0}s</div>`;
+  } else if (m.kind === "poll" && m.options) {
+    const counts = pollVotes(m);
+    const cast = counts.reduce((a, b) => a + b, 0);
+    const mine = (m.voters || {})[key];
+    body = `<div class="poll-q">${sicon("chart")} ${esc(m.question || "Poll")}</div>${m.options.map((opt, i) => {
+      const pct = Math.round((counts[i] / (cast || 1)) * 100);
+      return `<button class="poll-opt${mine === i ? " mine" : ""}" data-poll-vote="${m.id}:${i}"><span class="poll-bar" style="width:${pct}%"></span><span class="poll-label">${esc(opt.text)}${mine === i ? " " + sicon("check") : ""}</span><span class="poll-pct">${pct}%</span></button>`;
+    }).join("")}<div class="muted" style="font-size:11px">${cast} vote${cast === 1 ? "" : "s"} · tap to ${mine != null ? "change" : "cast"} your vote</div>`;
+  } else if (m.kind === "file" && m.url) {
+    if (m.mime && m.mime.startsWith("image/")) {
+      body = `<a href="${m.url}" download="${esc(m.file || "image")}"><img class="chat-img" src="${m.url}" alt="${esc(m.file || "image")}"></a><div class="muted" style="font-size:11px">${esc(m.file || "")}</div>`;
+    } else if (m.mime && m.mime.startsWith("video/")) {
+      body = `<video controls class="chat-img" src="${m.url}"></video><div class="muted" style="font-size:11px">${esc(m.file || "")}</div>`;
+    } else if (m.mime && m.mime.startsWith("audio/")) {
+      body = `<audio controls class="voice-player" src="${m.url}"></audio><div class="muted" style="font-size:11px">${esc(m.file || "")}</div>`;
+    } else {
+      body = `<a class="file-link" href="${m.url}" download="${esc(m.file || "file")}">${sicon("clip")} ${esc(m.file || "File")}</a>`;
+    }
+  } else if (m.kind === "file") {
+    body = sicon("clip") + " " + esc(m.file);
+  } else if (m.kind === "poll") {
+    body = sicon("chart") + " " + esc(cleanText(m.text));
+  } else {
+    body = esc(cleanText(m.text)).replace(
+      /@([\w]+)/g,
+      "<b class='mention'>@$1</b>",
+    );
+  }
+  const sysIcon = m.icon ? `<span class="sys-ico">${sicon(m.icon)}</span>` : "";
+  const quote = m.reply
+    ? `<div class="reply-quote"><strong>${esc(m.reply.author)}</strong><span>${escSnippet(cleanText(m.reply.text), 90)}</span></div>`
+    : "";
+  const chips = Object.entries(m.reactions || {})
+    .filter(([, users]) => users && users.length)
+    .map(
+      ([emoji, users]) =>
+        `<button class="react-chip${users.includes(key) ? " mine" : ""}" data-react="${m.id}:${esc(emoji)}" title="${esc(REACT_LABELS[emoji] || emoji)}">${REACT_LABELS[emoji] || sicon(emoji)} <span>${users.length}</span></button>`,
+    )
+    .join("");
+  const status = m.me
+    ? state.messageStatus[m.id] === "read"
+      ? "· Read"
+      : state.messageStatus[m.id] === "delivered"
+        ? "· Delivered"
+        : "· Sent"
+    : "";
+  return `${quote}${sysIcon}${body}<div class="bubble-tools"><small class="message-meta">${new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} ${status}</small><span class="bubble-actions"><button data-react-open="${m.id}" title="React">${sicon("smile")}</button><button data-reply-to="${m.id}" title="Reply">${sicon("reply")}</button><button data-pin="${m.id}" title="Pin message">${sicon("pin")}</button></span></div>${chips ? `<div class="react-row">${chips}</div>` : ""}<div class="react-picker" data-picker="${m.id}" hidden>${REACT_EMOJI.map((e) => `<button data-react="${m.id}:${e}" title="${REACT_LABELS[e]}" aria-label="React ${REACT_LABELS[e]}">${REACT_LABELS[e]}</button>`).join("")}</div>`;
+}
+
+// ---------- group chat options (three-dot menu + utilities) ----------
+const MUTE_CHOICES = [
+  { id: "1h", label: "1 hour", ms: 3600000 },
+  { id: "8h", label: "8 hours", ms: 8 * 3600000 },
+  { id: "1w", label: "1 week", ms: 7 * 86400000 },
+  { id: "forever", label: "Always", ms: Infinity },
+];
+const GROUP_LOGOS = ["book", "fire", "star", "target", "users", "globe", "rocket", "palette", "music", "brain", "chat", "trophy"];
+let groupSearch = null; // { id, q }
+let groupNav = null; // { id, matches: [msgIdx], pos }
+let groupMedia = null; // { id, tab, shown }
+let mediaViewer = null; // { items: [{url,name,mime}], pos, title }
+
+function isGroupChat(id) {
+  return allGroups().some((g) => g.id === id);
+}
+function groupById(id) {
+  return allGroups().find((g) => g.id === id);
+}
+function isGroupOwner(id) {
+  const g = groupById(id);
+  return Boolean(g && g.ownerId && g.ownerId === chatKey());
+}
+function muteRecord(id) {
+  return (state.mutedChats || {})[id];
+}
+function isChatMuted(id) {
+  const rec = muteRecord(id);
+  if (rec == null) return false;
+  if (rec === "forever") return true;
+  const until = Number(rec);
+  if (!Number.isFinite(until)) return false;
+  if (until <= Date.now()) {
+    const next = { ...(state.mutedChats || {}) };
+    delete next[id];
+    state.mutedChats = next;
+    persist();
+    return false;
+  }
+  return true;
+}
+function muteLabel(id) {
+  const rec = muteRecord(id);
+  if (rec === "forever") return "Muted · always";
+  const ms = Number(rec) - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) return "";
+  const mins = Math.max(1, Math.round(ms / 60000));
+  if (mins < 60) return `Muted · ${mins}m left`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 48) return `Muted · ${hours}h left`;
+  return `Muted · ${Math.round(hours / 24)}d left`;
+}
+function setChatMute(id, choiceId) {
+  if (!isGroupChat(id)) return false;
+  const c = MUTE_CHOICES.find((x) => x.id === choiceId);
+  if (!c) return false;
+  state.mutedChats = {
+    ...(state.mutedChats || {}),
+    [id]: c.ms === Infinity ? "forever" : Date.now() + c.ms,
+  };
+  persist();
+  rerenderChat();
+  const g = groupById(id);
+  notify(c.id === "forever" ? `Muted ${g?.name || "group"} · always` : `Muted ${g?.name || "group"} · ${c.label}`);
+  return true;
+}
+function clearChatMute(id) {
+  if (!isChatMuted(id)) return false;
+  const next = { ...(state.mutedChats || {}) };
+  delete next[id];
+  state.mutedChats = next;
+  persist();
+  rerenderChat();
+  notify(`Unmuted ${groupById(id)?.name || "group"}`);
+  return true;
+}
+function rerenderChat() {
+  renderMessages($("#tab-messages") || $("#community-body"));
+}
+function senderLabel(m) {
+  if (!m) return "Group member";
+  if (m.me) return "You";
+  return m.sysName || "Group member";
+}
+function groupRoster(id) {
+  const roster = new Map();
+  for (const m of state.messages[id] || []) {
+    const key = m.me ? `me:${chatKey()}` : `other:${m.sender_id || "member"}`;
+    if (!roster.has(key)) {
+      roster.set(key, { key, you: Boolean(m.me), count: 0, last: 0 });
+    }
+    const entry = roster.get(key);
+    entry.count += 1;
+    entry.last = Math.max(entry.last, m.ts || 0);
+  }
+  return [...roster.values()].sort((a, b) => (b.you ? 1 : 0) - (a.you ? 1 : 0) || b.last - a.last);
+}
+function groupMenuMarkup(id) {
+  const owner = isGroupOwner(id);
+  const muted = isChatMuted(id);
+  const item = (act, icon, label, sub) => `<button data-gact="${act}" data-gid="${esc(id)}"><span class="gact-ico">${sicon(icon)}</span><span class="gact-txt"><strong>${label}</strong>${sub ? `<small>${sub}</small>` : ""}</span></button>`;
+  return `${item("search", "search", "Search messages", "Find text, files and links")}`
+    + `${item(muted ? "unmute" : "mute", muted ? "volume" : "mute", muted ? "Unmute notifications" : "Mute notifications", muted ? esc(muteLabel(id)) : "Silence this group")}`
+    + `${item("media", "film", "Media, files & links", "Photos, videos, files")}`
+    + `${item("members", "users", "Members", `${groupRoster(id).length || "No"} active here`)}`
+    + `${item("info", "book", "Group info", "About this group")}`
+    + `<hr class="gsep">`
+    + `${owner ? item("settings", "gear", "Group settings", "Name, description, topics") : ""}`
+    + `${item("clear", "trash", "Clear local history", "Removes messages on this device")}`
+    + `${owner ? "" : item("report", "flag", "Report group", "Alert moderation")}`
+    + `${owner ? item("disband", "trash", "Delete group", "Remove this group") : item("leave", "run", "Leave group", "Stop receiving messages")}`;
+}
+
+// Pin helpers — state.pins[chatId] is an ARRAY of pinned message ids so
+// multiple messages can stay pinned (the old single-slot design silently
+// discarded the previous pin whenever a new one was added).
+function pinnedIdsFor(id) {
+  const raw = (state.pins || {})[id];
+  if (!raw) return [];
+  // migrate the legacy single-string format
+  if (typeof raw === "string") return [raw];
+  return Array.isArray(raw) ? raw.filter(Boolean) : [];
+}
+
+function togglePinMessage(id, msgId) {
+  const pins = { ...(state.pins || {}) };
+  const list = pinnedIdsFor(id);
+  const idx = list.indexOf(msgId);
+  if (idx >= 0) list.splice(idx, 1);
+  else list.unshift(msgId); // newest pin first
+  if (list.length) pins[id] = list.slice(0, 30);
+  else delete pins[id];
+  state.pins = pins;
+  persist();
+}
+
+function chatMarkup(id) {
+  const target =
+    allGroups().find((g) => g.id === id) ||
+    state.friends.find((f) => f.id === id);
+  const msgs = state.messages[id] || [];
+  const pinned = pinnedIdsFor(id)
+    .map((pid) => msgs.find((m) => m.id === pid))
+    .filter(Boolean);
+  const pinbar = pinned.length
+    ? `<div class="pin-bar" role="list" aria-label="Pinned messages"><span class="pin-count">${sicon("pin")} ${pinned.length}</span><div class="pin-scroll" role="listbox">${pinned
+        .map(
+          (pm) =>
+            `<button class="pin-item" role="option" data-pin-jump="${pm.id}" title="Jump to pinned message"><b>${esc(senderLabel(pm))}</b><span>${escSnippet(messageText(pm), 60)}</span></button>`,
+        )
+        .join("")}</div><button class="icon-btn" data-pins-all title="All pinned messages" aria-label="Show all pinned messages">${sicon("list")}</button><button class="icon-btn" data-unpin-latest title="Unpin latest" aria-label="Unpin latest pinned message">×</button></div>`
+    : "";
+  const typing = state.typing[id]
+    ? '<div class="typing-indicator">Someone is typing…</div>'
+    : "";
+  const others =
+    presenceInfo.chatId === id ? presenceInfo.users.length : 0;
+  const presence =
+    backendConfigured && state.user
+      ? `<span class="presence" title="People in this chat right now"><i class="${others ? "on" : ""}"></i>${others ? `${others} here now` : "only you here"}</span>`
+      : "";
+  const reply =
+    chatReply && chatReply.chatId === id
+      ? `<div class="reply-strip"><div><strong>Replying to ${esc(chatReply.author)}</strong><span>${escSnippet(chatReply.text, 80)}</span></div><button data-reply-cancel title="Cancel reply">×</button></div>`
+      : "";
+  const rec = voiceRec
+    ? `<div class="rec-bar"><span data-rec-time>● 0s / 60s</span><button class="ghost" data-rec-cancel>Cancel</button><button class="primary" data-rec-send>Send</button></div>`
+    : "";
+  const isFriendChat = (state.friends || []).some((f) => f.id === id);
+  const isGroup = allGroups().some((g) => g.id === id);
+  const mutedTag = isGroup && isChatMuted(id) ? ' <span class="tag">muted</span>' : "";
+  const nav = groupNav && groupNav.id === id && groupNav.matches.length
+    ? `<div class="msg-nav"><button data-gnav="prev" aria-label="Previous match">‹</button><span>${groupNav.pos + 1} / ${groupNav.matches.length}</span><button data-gnav="next" aria-label="Next match">›</button><button data-gnav="close" aria-label="Close search navigation">×</button></div>`
+    : "";
+  return `<div class="chat-head"><div><strong>${esc(target?.name || "@" + target?.username)}</strong>${mutedTag}${typing}${presence}</div><span class="friend-actions"><button class="primary" data-start-call="${id}" style="padding:8px 12px;font-size:11px">Video call</button>${isFriendChat ? `<span class="post-menu-wrap"><button class="icon-btn" data-chat-menu="${id}" title="Conversation options" aria-label="Conversation options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden><button data-chat-block="${id}">Block user</button></span></span>` : ""}${isGroup && !isFriendChat ? `<span class="post-menu-wrap"><button class="icon-btn" data-chat-menu="${id}" title="Group options" aria-label="Group options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden>${groupMenuMarkup(id)}</span></span>` : ""}</span></div>${pinbar}${nav}<div class="chat-body">${msgs.map((m, i) => `<div class="bubble ${m.me ? "me" : ""}" data-midx="${i}">${messageHtml(m)}</div>`).join("") || '<span class="muted">No messages yet. Start the conversation.</span>'}</div>${reply}${rec}<div class="chat-input"><label class="icon-btn" style="display:grid;place-items:center"><input type="file" id="chat-file" hidden>${sicon("clip")}</label><button class="icon-btn" id="poll-button" title="Create a poll">${sicon("chart")}</button><button class="icon-btn" id="voice-button" title="Voice message">${sicon("mic")}</button><textarea class="input autogrow chat-textarea" id="chat-text" rows="1" data-grow-max="150" placeholder="Type a message (Shift + Enter for a new line)" aria-label="Type a message"></textarea><button class="primary" id="send-message">Send</button></div>`;
+}
+
+function bindChat(root, id) {
+  subscribeToChat(id);
+  subscribePresenceFor(id);
+  $("#send-message", root).onclick = () => {
+    const input = $("#chat-text", root);
+    const value = input.value;
+    input.value = "";
+    input.style.height = "";
+    sendChat(id, value);
+    input.focus();
+  };
+  $("[data-chat-menu]", root)?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const pop = root.querySelector(`[data-chat-pop="${id}"]`);
+    if (!pop) return;
+    const open = pop.hidden;
+    closePostMenus();
+    document
+      .querySelectorAll("[data-chat-pop]")
+      .forEach((el) => (el.hidden = true));
+    pop.hidden = !open;
+    if (!pop.hidden) {
+      const first = pop.querySelector("button");
+      if (first) first.focus();
+    }
+  });
+  bindGroupMenuActions(root);
+  $$("[data-chat-block]", root).forEach(
+    (b) =>
+      (b.onclick = (e) => {
+        e.stopPropagation();
+        const target = (state.friends || []).find((f) => f.id === b.dataset.chatBlock);
+        if (!target) return;
+        askBlockUser({
+          id: target.id,
+          username: target.username,
+          name: "@" + target.username,
+          context: "chat",
+        });
+      }),
+  );
+  $("#chat-text", root).oninput = (event) => {
+    // Typing pings are broadcast throttled so every keystroke doesn't spam
+    // the realtime channel.
+    const now = Date.now();
+    const isTyping = Boolean(event.target.value.trim());
+    if (isTyping && now - (chatTypingSentAt || 0) > 2500) {
+      chatTypingSentAt = now;
+      conversationSubscription?.sendTyping(
+        state.user?.id || "local-user",
+        true,
+      );
+    } else if (!isTyping && chatTypingSentAt) {
+      chatTypingSentAt = 0;
+      conversationSubscription?.sendTyping(
+        state.user?.id || "local-user",
+        false,
+      );
+    }
+    const input = event.target;
+    let pop = $("#mention-pop", root);
+    const match = input.value.match(/@([\w]*)$/);
+    const cands = match
+      ? state.friends
+          .filter((f) =>
+            f.username.toLowerCase().startsWith(match[1].toLowerCase()),
+          )
+          .slice(0, 5)
+      : [];
+    if (!cands.length) {
+      pop?.remove();
+      return;
+    }
+    if (!pop) {
+      pop = document.createElement("div");
+      pop.id = "mention-pop";
+      pop.className = "mention-pop";
+      input.parentElement?.append(pop);
+    }
+    pop.innerHTML = cands
+      .map(
+        (f) =>
+          `<button data-mention="${esc(f.username)}">@${esc(f.username)}</button>`,
+      )
+      .join("");
+    $$("[data-mention]", pop).forEach(
+      (b) =>
+        (b.onclick = () => {
+          input.value = input.value.replace(
+            /@[\w]*$/,
+            "@" + b.dataset.mention + " ",
+          );
+          pop.remove();
+          input.focus();
+        }),
+    );
+  };
+  $("#chat-text", root).onkeydown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      const input = e.target;
+      const value = input.value;
+      input.value = "";
+      input.style.height = "";
+      sendChat(id, value);
+      input.focus();
+    }
+  };
+  $("#chat-file", root).onchange = (e) => {
+    if (isBlockedKey(id)) {
+      renderCommunity();
+      return notify("You have blocked this conversation");
+    }
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 3 * 1024 * 1024)
+      return notify("Files must be under 3 MB");
+    const reader = new FileReader();
+    reader.onload = () => {
+      state.messages[id] = [
+        ...(state.messages[id] || []),
+        {
+          id: uid(),
+          me: true,
+          kind: "file",
+          file: file.name,
+          url: reader.result,
+          mime: file.type || "",
+          size: file.size,
+          ts: Date.now(),
+        },
+      ];
+      persist();
+      renderMessages(root);
+    };
+    reader.readAsDataURL(file);
+  };
+  $("#poll-button", root).onclick = () => openPollBuilder(id, root);
+  $("#voice-button", root).onclick = () => {
+    if (voiceRec) stopRecording("send");
+    else startRecording(id, root);
+  };
+  $("[data-rec-send]", root)?.addEventListener("click", () =>
+    stopRecording("send"),
+  );
+  $("[data-rec-cancel]", root)?.addEventListener("click", () =>
+    stopRecording("cancel"),
+  );
+  $("[data-reply-cancel]", root)?.addEventListener("click", () => {
+    chatReply = null;
+    renderMessages(root);
+  });
+  $$("[data-pin]", root).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const wasPinned = pinnedIdsFor(id).includes(b.dataset.pin);
+        togglePinMessage(id, b.dataset.pin);
+        renderMessages(root);
+        notify(wasPinned ? "Message unpinned" : sicon("pin") + " Message pinned");
+      }),
+  );
+  $("[data-unpin-latest]", root)?.addEventListener("click", () => {
+    const list = pinnedIdsFor(id);
+    if (!list.length) return;
+    togglePinMessage(id, list[0]);
+    renderMessages(root);
+    notify("Latest pin removed");
+  });
+  $$("[data-pin-jump]", root).forEach(
+    (b) =>
+      (b.onclick = () => jumpToPinnedMessage(id, b.dataset.pinJump)),
+  );
+  $("[data-pins-all]", root)?.addEventListener("click", () => {
+    openPinnedList(id);
+  });
+  $$("[data-react-open]", root).forEach(
+    (b) =>
+      (b.onclick = (e) => {
+        e.stopPropagation();
+        const picker = $(`[data-picker="${b.dataset.reactOpen}"]`, root);
+        if (!picker) return;
+        const willOpen = picker.hidden;
+        // Only one reaction picker stays open at a time.
+        if (willOpen) $$("[data-picker]", root).forEach((p) => (p.hidden = true));
+        picker.hidden = !willOpen;
+      }),
+  );
+  $$("[data-react]", root).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const v = b.dataset.react;
+        const sep = v.indexOf(":");
+        const mid = v.slice(0, sep);
+        const emoji = v.slice(sep + 1);
+        const msg = (state.messages[id] || []).find((m) => m.id === mid);
+        if (!msg) return;
+        msg.reactions = msg.reactions || {};
+        const users = msg.reactions[emoji] || [];
+        const key = chatKey();
+        msg.reactions[emoji] = users.includes(key)
+          ? users.filter((u) => u !== key)
+          : [...users, key];
+        if (!msg.reactions[emoji].length) delete msg.reactions[emoji];
+        persist();
+        renderMessages(root);
+      }),
+  );
+  $$("[data-reply-to]", root).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const msg = (state.messages[id] || []).find(
+          (m) => m.id === b.dataset.replyTo,
+        );
+        if (!msg) return;
+        const target =
+          allGroups().find((g) => g.id === id) ||
+          state.friends.find((f) => f.id === id);
+        chatReply = {
+          chatId: id,
+          author: msg.me
+            ? "You"
+            : target?.name || (target ? "@" + target.username : "Them"),
+          text: messageText(msg),
+        };
+        renderMessages(root);
+        $("#chat-text", root)?.focus();
+      }),
+  );
+  $$("[data-poll-vote]", root).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const v = b.dataset.pollVote;
+        const sep = v.indexOf(":");
+        const mid = v.slice(0, sep);
+        const idx = Number(v.slice(sep + 1));
+        const msg = (state.messages[id] || []).find((m) => m.id === mid);
+        if (!msg || !msg.options) return;
+        msg.voters = msg.voters || {};
+        if (msg.voters[chatKey()] === idx) delete msg.voters[chatKey()];
+        else msg.voters[chatKey()] = idx;
+        persist();
+        renderMessages(root);
+      }),
+  );
+  const call = $("[data-start-call]", root);
+  if (call)
+    call.onclick = () => {
+      const target = allGroups().find((g) => g.id === id);
+      state.call = target || {
+        id,
+        name: "Friend call",
+        emoji: "◉",
+        color: "#47765a",
+      };
+      state.callMinimized = false;
+      renderCall();
+    };
+}
+
+function extractLinks(text) {
+  const out = [];
+  const seen = new Set();
+  const re = /https?:\/\/[^\s)>\]]+/gi;
+  let m;
+  while ((m = re.exec(String(text || ""))) && out.length < 200) {
+    const clean = m[0].replace(/[.,;!?]+$/, "");
+    try {
+      const u = new URL(clean);
+      if (u.protocol !== "http:" && u.protocol !== "https:") continue;
+      if (!seen.has(u.href)) {
+        seen.add(u.href);
+        out.push(u.href);
+      }
+    } catch { /* malformed URL — skip */ }
+  }
+  return out;
+}
+function fileIcon(mime, name) {
+  const t = String(mime || "");
+  const n = String(name || "");
+  if (t.startsWith("image/")) return "camera";
+  if (t.startsWith("video/")) return "film";
+  if (t.startsWith("audio/")) return "music";
+  if (t.includes("pdf") || /\.pdf$/i.test(n)) return "doc";
+  if (/word|document|sheet|excel|csv|presentation|powerpoint|zip|officedocument/i.test(t) || /\.(docx?|xlsx?|csv|pptx?|txt|md|zip|rar)$/i.test(n)) return "doc";
+  return "clip";
+}
+function groupShared(id) {
+  const images = [];
+  const videos = [];
+  const files = [];
+  const links = [];
+  for (const [idx, m] of (state.messages[id] || []).entries()) {
+    if (m.kind === "file" && m.url) {
+      const item = {
+        idx,
+        name: m.file || "file",
+        url: m.url,
+        mime: m.mime || "",
+        size: m.size || 0,
+        ts: m.ts || Date.now(),
+        sender: senderLabel(m),
+      };
+      if (item.mime.startsWith("image/")) images.push(item);
+      else if (item.mime.startsWith("video/")) videos.push(item);
+      else files.push(item);
+    }
+    for (const url of extractLinks(messageText(m))) {
+      let domain = "";
+      try { domain = new URL(url).hostname.replace(/^www\./, ""); } catch { /* ignore */ }
+      links.push({ idx, url, domain, ts: m.ts || Date.now(), sender: senderLabel(m) });
+    }
+  }
+  const byTs = (a, b) => b.ts - a.ts;
+  images.sort(byTs);
+  videos.sort(byTs);
+  files.sort(byTs);
+  links.sort(byTs);
+  return { images, videos, files, links };
+}
+function fmtSharedDate(ts) {
+  try {
+    return new Date(ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return "";
+  }
+}
+function openGroupMedia(id) {
+  if (!isGroupChat(id)) return;
+  groupMedia = { id, tab: "media", shown: 30 };
+  paintGroupMedia();
+}
+function groupMediaCounts(id) {
+  const s = groupShared(id);
+  return { media: s.images.length + s.videos.length, files: s.files.length, links: s.links.length };
+}
+function paintGroupMedia() {
+  if (!groupMedia) return;
+  const { id, tab } = groupMedia;
+  const g = groupById(id);
+  if (!g) {
+    groupMedia = null;
+    return;
+  }
+  const s = groupShared(id);
+  const counts = groupMediaCounts(id);
+  let list = [];
+  if (tab === "media") list = [...s.images.map((x) => ({ ...x, kind: "image" })), ...s.videos.map((x) => ({ ...x, kind: "video" }))].sort((a, b) => b.ts - a.ts);
+  else if (tab === "files") list = s.files;
+  else list = s.links;
+  const shown = list.slice(0, groupMedia.shown);
+  const rest = list.length - shown.length;
+  const empty = { media: "No media shared yet.", files: "No files shared yet.", links: "No links shared yet." };
+  const head = (t, label, n) => `<button class="filter ${tab === t ? "active" : ""}" data-gm-tab="${t}">${label} (${n})</button>`;
+  let body = "";
+  if (!list.length) {
+    body = `<p class="muted" style="padding:16px 4px">${empty[tab]}</p>`;
+  } else if (tab === "media") {
+    body = `<div class="media-grid">${shown.map((it, i) => it.kind === "image"
+      ? `<button class="media-thumb" data-gm-view="${i}" title="${esc(it.name)}"><img src="${it.url}" alt="${esc(it.name)}" loading="lazy"></button>`
+      : `<button class="media-thumb" data-gm-view="${i}" title="${esc(it.name)}"><video src="${it.url}" preload="metadata" muted playsinline></video><span class="media-play">${sicon("play")}</span></button>`).join("")}</div>`;
+  } else if (tab === "files") {
+    body = `<div class="file-list">${shown.map((it) => `<div class="file-row"><span class="file-ico">${sicon(fileIcon(it.mime, it.name))}</span><span class="file-meta"><strong title="${esc(it.name)}">${esc(it.name)}</strong><small class="muted">${esc(it.sender)} · ${fmtSharedDate(it.ts)}${it.size ? ` · ${fmtSize(it.size)}` : ""}</small></span><a class="ghost" href="${it.url}" download="${esc(it.name)}" title="Open or download">Open</a></div>`).join("")}</div>`;
+  } else {
+    body = `<div class="file-list">${shown.map((it) => `<div class="file-row"><span class="file-ico">${sicon("globe")}</span><span class="file-meta"><strong title="${esc(it.url)}">${esc(it.domain || it.url)}</strong><small class="muted">${esc(it.sender)} · ${fmtSharedDate(it.ts)}</small></span><a class="ghost" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer" title="Open link">Visit</a></div>`).join("")}</div>`;
+  }
+  if (rest > 0) body += `<div style="text-align:center;margin-top:12px"><button class="ghost" data-gm-more>Show more (${rest} remaining)</button></div>`;
+  let modal = $("#group-media-modal");
+  if (!modal) {
+    modal = document.createElement("div");
+    modal.className = "modal-backdrop";
+    modal.id = "group-media-modal";
+    $("#modal-root").append(modal);
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) closeGroupMedia();
+    });
+  }
+  modal.innerHTML = `<div class="modal wide"><div class="eyebrow">Shared in ${esc(g.name)}</div><h2>Media, files & links</h2><div class="filter-bar">${head("media", "Media", counts.media)}${head("files", "Files", counts.files)}${head("links", "Links", counts.links)}</div><div style="margin-top:12px;max-height:min(52vh,440px);overflow-y:auto">${body}</div><div class="modal-actions"><button class="ghost" data-gm-close>Close</button></div></div>`;
+  $$("[data-gm-tab]", modal).forEach((b) => (b.onclick = () => {
+    groupMedia.tab = b.dataset.gmTab;
+    groupMedia.shown = 30;
+    paintGroupMedia();
+  }));
+  const more = $("[data-gm-more]", modal);
+  if (more) more.onclick = () => {
+    groupMedia.shown += 30;
+    paintGroupMedia();
+  };
+  $$("[data-gm-view]", modal).forEach((b) => (b.onclick = () => openMediaViewer(id, Number(b.dataset.gmView))));
+  $("[data-gm-close]", modal).onclick = () => closeGroupMedia();
+}
+function closeGroupMedia() {
+  groupMedia = null;
+  $("#group-media-modal")?.remove();
+}
+function openMediaViewer(id, pos) {
+  const s = groupShared(id);
+  const items = [...s.images.map((x) => ({ ...x, kind: "image" })), ...s.videos.map((x) => ({ ...x, kind: "video" }))].sort((a, b) => b.ts - a.ts);
+  if (!items.length) return;
+  mediaViewer = { items, pos: Math.min(Math.max(0, pos), items.length - 1), title: groupById(id)?.name || "Group" };
+  paintMediaViewer();
+}
+function paintMediaViewer() {
+  if (!mediaViewer) return;
+  const { items, pos, title } = mediaViewer;
+  const it = items[pos];
+  if (!it) {
+    mediaViewer = null;
+    return;
+  }
+  let modal = $("#media-viewer-modal");
+  if (!modal) {
+    modal = document.createElement("div");
+    modal.className = "modal-backdrop viewer-backdrop";
+    modal.id = "media-viewer-modal";
+    $("#modal-root").append(modal);
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) closeMediaViewer();
+    });
+  }
+  modal.innerHTML = `<div class="viewer"><div class="viewer-head"><span class="muted">${esc(title)} · ${pos + 1} / ${items.length}</span><button class="icon-btn" data-mv-close aria-label="Close viewer">×</button></div><div class="viewer-body">${it.kind === "image" ? `<img src="${it.url}" alt="${esc(it.name)}">` : `<video src="${it.url}" controls autoplay playsinline></video>`}<button class="viewer-arrow left" data-mv-prev aria-label="Previous">‹</button><button class="viewer-arrow right" data-mv-next aria-label="Next">›</button></div><div class="viewer-foot muted">${esc(it.name)} · ${esc(it.sender)} · ${fmtSharedDate(it.ts)}</div></div>`;
+  $("[data-mv-close]", modal).onclick = () => closeMediaViewer();
+  $("[data-mv-prev]", modal).onclick = (e) => {
+    e.stopPropagation();
+    mediaViewer.pos = (mediaViewer.pos - 1 + items.length) % items.length;
+    paintMediaViewer();
+  };
+  $("[data-mv-next]", modal).onclick = (e) => {
+    e.stopPropagation();
+    mediaViewer.pos = (mediaViewer.pos + 1) % items.length;
+    paintMediaViewer();
+  };
+}
+function closeMediaViewer() {
+  mediaViewer = null;
+  $("#media-viewer-modal")?.remove();
+}
+function openMuteModal(id) {
+  const g = groupById(id);
+  if (!g) return;
+  const cur = muteRecord(id);
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Notifications</div><h2>Mute ${esc(g.name)}?</h2><p class="muted">You can still open the group and read everything. Only notifications pause.${isChatMuted(id) ? ` Currently: <strong>${esc(muteLabel(id))}</strong>.` : ""}</p><div class="reason-list">${MUTE_CHOICES.map((c) => `<label><input type="radio" name="mute-choice" value="${c.id}"${cur === "forever" && c.id === "forever" ? " checked" : ""}> ${c.id === "forever" ? "Always (until turned back on)" : c.label}</label>`).join("")}</div><p class="st-confirm-err" data-mute-err hidden></p><div class="modal-actions"><button class="ghost" data-mute-cancel>Cancel</button>${isChatMuted(id) ? `<button class="ghost" data-mute-off>Unmute</button>` : ""}<button class="primary" data-mute-save>Save</button></div></div>`;
+  $("#modal-root").append(modal);
+  const err = modal.querySelector("[data-mute-err]");
+  modal.querySelector("[data-mute-cancel]").onclick = () => modal.remove();
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) modal.remove();
+  });
+  const off = modal.querySelector("[data-mute-off]");
+  if (off) off.onclick = () => {
+    modal.remove();
+    clearChatMute(id);
+  };
+  modal.querySelector("[data-mute-save]").onclick = () => {
+    const choice = modal.querySelector('input[name="mute-choice"]:checked')?.value || "";
+    if (!choice) {
+      err.textContent = "Pick a duration first.";
+      err.hidden = false;
+      return;
+    }
+    if (!setChatMute(id, choice)) {
+      err.textContent = "Couldn't save that setting — try again.";
+      err.hidden = false;
+      return;
+    }
+    modal.remove();
+  };
+}
+function openGroupInfo(id) {
+  const g = groupById(id);
+  if (!g) return;
+  const counts = groupMediaCounts(id);
+  const roster = groupRoster(id);
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Group info</div><h2>${esc(g.name)}</h2><p class="muted">${esc(g.description || "A study group.")}</p><div class="book-facts">${(g.tags || []).map((t) => `<span class="tag">#${esc(t)}</span>`).join("")}<span class="tag">${typeof g.members === "number" ? `~${g.members} members` : `${roster.length || "No"} active here`}</span>${isChatMuted(id) ? `<span class="tag">${esc(muteLabel(id))}</span>` : ""}</div><div class="book-facts"><span class="tag">${counts.media} media</span><span class="tag">${counts.files} files</span><span class="tag">${counts.links} links</span></div><div class="modal-actions"><button class="ghost" data-info-media>View shared</button><button class="primary" data-info-close>Done</button></div></div>`;
+  $("#modal-root").append(modal);
+  modal.querySelector("[data-info-close]").onclick = () => modal.remove();
+  modal.querySelector("[data-info-media]").onclick = () => {
+    modal.remove();
+    openGroupMedia(id);
+  };
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) modal.remove();
+  });
+}
+function openGroupMembers(id) {
+  const g = groupById(id);
+  if (!g) return;
+  const roster = groupRoster(id);
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Members</div><h2>${esc(g.name)}</h2>${typeof g.members === "number" && !g.ownerId ? `<p class="muted">About ${g.members} learners follow this group. Recently active here:</p>` : `<p class="muted">People who have sent messages here:</p>`}${roster.length ? `<div class="grid">${roster.map((r) => `<div class="task"><div class="avatar">${r.you ? esc((state.profile.handle || "Y")[0].toUpperCase()) : "M"}</div><span class="task-text"><strong>${r.you ? "You" : "Group member"}</strong><br><small class="muted">${r.count} message${r.count === 1 ? "" : "s"}</small></span><span>${r.you ? `<span class="tag">you</span>` : ""}${r.you && g.ownerId === chatKey() ? `<span class="tag">owner</span>` : ""}${!r.you && g.ownerId && r.key === `other:${g.ownerId}` ? `<span class="tag">owner</span>` : ""}</span></div>`).join("")}</div>` : `<p class="muted">No messages here yet — members appear once they write.</p>`}<div class="modal-actions"><button class="primary" data-members-close>Done</button></div></div>`;
+  $("#modal-root").append(modal);
+  modal.querySelector("[data-members-close]").onclick = () => modal.remove();
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) modal.remove();
+  });
+}
+function openGroupSettings(id) {
+  const g = (state.customGroups || []).find((x) => x.id === id);
+  if (!g || !isGroupOwner(id)) return notify("Only the group owner can change settings");
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Group settings</div><h2>${esc(g.name)}</h2><label class="field-label">Name<input class="input" data-gs-name value="${esc(g.name)}" maxlength="80"></label><label class="field-label">Description<textarea class="textarea autogrow" data-gs-desc rows="2" maxlength="500">${esc(g.description || "")}</textarea></label><label class="field-label">Topics (comma separated)<input class="input" data-gs-tags value="${esc((g.tags || []).join(", "))}" maxlength="200"></label><label class="field-label">Icon<select class="select" data-gs-logo>${GROUP_LOGOS.map((n) => `<option value="${n}"${g.logoName === n ? " selected" : ""}>${n[0].toUpperCase() + n.slice(1)}</option>`).join("")}</select></label><p class="st-confirm-err" data-gs-err hidden></p><div class="modal-actions"><button class="ghost" data-gs-cancel>Cancel</button><button class="primary" data-gs-save>Save</button></div></div>`;
+  $("#modal-root").append(modal);
+  const err = modal.querySelector("[data-gs-err]");
+  modal.querySelector("[data-gs-cancel]").onclick = () => modal.remove();
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) modal.remove();
+  });
+  modal.querySelector("[data-gs-save]").onclick = () => {
+    const name = modal.querySelector("[data-gs-name]").value.trim();
+    if (!name) {
+      err.textContent = "The group needs a name.";
+      err.hidden = false;
+      return;
+    }
+    g.name = name.slice(0, 80);
+    g.description = modal.querySelector("[data-gs-desc]").value.trim().slice(0, 500);
+    g.tags = modal.querySelector("[data-gs-tags]").value.split(",").map((x) => x.trim()).filter(Boolean).slice(0, 8);
+    const logo = modal.querySelector("[data-gs-logo]").value;
+    g.logoName = logo;
+    g.emoji = sicon(logo);
+    persist();
+    save("sf-groups", state.customGroups);
+    modal.remove();
+    renderCommunity();
+    notify("Group settings saved");
+  };
+}
+function openGroupReport(id) {
+  const g = groupById(id);
+  if (!g || isGroupOwner(id)) return;
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Report · ${esc(g.name)}</div><h2>What's wrong with this group?</h2><p class="muted">Pick the closest reason. Reports go to moderation — never public.</p><div class="reason-list">${BLOCK_REASONS.map((r) => `<label><input type="radio" name="group-report-reason" value="${esc(r)}"> ${esc(r)}</label>`).join("")}</div><label class="field-label">Details (optional)<textarea class="textarea autogrow" data-group-report-details rows="2" maxlength="2000" placeholder="What happened in this group?"></textarea></label><p class="st-confirm-err" data-group-report-err hidden></p><div class="modal-actions"><button class="ghost" data-group-report-cancel>Cancel</button><button class="primary" data-group-report-send>Send report</button></div></div>`;
+  $("#modal-root").append(modal);
+  const err = modal.querySelector("[data-group-report-err]");
+  modal.querySelector("[data-group-report-cancel]").onclick = () => modal.remove();
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) modal.remove();
+  });
+  modal.querySelector("[data-group-report-send]").onclick = async () => {
+    const reason = modal.querySelector('input[name="group-report-reason"]:checked')?.value || "";
+    if (!reason) {
+      err.textContent = "Choose a reason first.";
+      err.hidden = false;
+      return;
+    }
+    const details = modal.querySelector("[data-group-report-details]").value.trim().slice(0, 2000);
+    const btn = modal.querySelector("[data-group-report-send]");
+    btn.disabled = true;
+    btn.textContent = "Sending…";
+    const report = {
+      id: uid(),
+      reporter: state.profile.handle,
+      reportedKey: `group:${id}`,
+      reportedName: g.name,
+      reasons: [reason],
+      complaint: details,
+      ts: Date.now(),
+      status: "pending",
+      context: "group-chat",
+    };
+    state.reports = [...(state.reports || []).filter((r) => r.reportedKey !== report.reportedKey), report];
+    persist();
+    let cloudOk = true;
+    try {
+      const { error } = await reportUser({
+        reportedUserId: null,
+        reasons: [reason],
+        details: `Group report: ${g.name} (${id})\nComplaint: ${details || "—"}`,
+      });
+      if (error) cloudOk = false;
+    } catch {
+      cloudOk = false;
+    }
+    modal.remove();
+    notify(cloudOk ? "Group reported — moderation will review" : "Report saved on this device");
+  };
+}
+function askClearGroupHistory(id) {
+  if (!isGroupChat(id)) return;
+  const g = groupById(id);
+  confirmBox(`Clear ${g?.name || "group"} history?`, "Messages on this device will be removed. New messages still arrive.", () => {
+    const msgs = { ...(state.messages || {}) };
+    delete msgs[id];
+    state.messages = msgs;
+    const pins = { ...(state.pins || {}) };
+    delete pins[id];
+    state.pins = pins;
+    if (groupNav?.id === id) groupNav = null;
+    if (groupSearch?.id === id) groupSearch = null;
+    persist();
+    rerenderChat();
+    notify("Local chat history cleared");
+  });
+}
+function leaveGroupById(id) {
+  save("sf-joined", get("sf-joined", []).filter((x) => x !== id));
+  if (state.activeChat === id) state.activeChat = null;
+  if (groupNav?.id === id) groupNav = null;
+  if (groupSearch?.id === id) groupSearch = null;
+  persist();
+  renderCommunity();
+}
+function askLeaveGroup(id) {
+  const g = groupById(id);
+  if (!g) return;
+  confirmBox(`Leave ${g.name}?`, "You stop receiving its messages. Your sent messages stay visible to others.", () => {
+    leaveGroupById(id);
+    notify(`Left ${g.name}`);
+  });
+}
+function askDisbandGroup(id) {
+  const g = (state.customGroups || []).find((x) => x.id === id);
+  if (!g || !isGroupOwner(id)) return notify("Only the group owner can delete it");
+  confirmBox(`Delete ${g.name}?`, "The group disappears for everyone, along with its messages.", () => {
+    state.customGroups = (state.customGroups || []).filter((x) => x.id !== id);
+    save("sf-groups", state.customGroups);
+    save("sf-joined", get("sf-joined", []).filter((x) => x !== id));
+    const msgs = { ...(state.messages || {}) };
+    delete msgs[id];
+    state.messages = msgs;
+    if (state.activeChat === id) state.activeChat = null;
+    if (groupNav?.id === id) groupNav = null;
+    if (groupSearch?.id === id) groupSearch = null;
+    persist();
+    renderCommunity();
+    notify(`Deleted ${g.name}`);
+    if (backendConfigured && state.user) {
+      deleteCloudGroup(id).then(({ error } = {}) => {
+        if (error) notify("Removed locally; cloud delete failed");
+        refreshCloudGroups(true).catch(() => {});
+      }).catch(() => {});
+    }
+  });
+}
+
+function bindGroupMenuActions(root) {
+  $$("[data-gact]", root).forEach(
+    (b) =>
+      (b.onclick = (e) => {
+        e.stopPropagation();
+        document.querySelectorAll("[data-chat-pop]").forEach((el) => (el.hidden = true));
+        groupAction(b.dataset.gact, b.dataset.gid, root);
+      }),
+  );
+  $$("[data-gnav]", root).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const nav = groupNav;
+        if (!nav || !nav.matches.length) return;
+        if (b.dataset.gnav === "close") {
+          groupNav = null;
+          rerenderChat();
+          return;
+        }
+        nav.pos = (nav.pos + (b.dataset.gnav === "next" ? 1 : -1) + nav.matches.length) % nav.matches.length;
+        rerenderChat();
+        flashBubble(nav.matches[nav.pos]);
+      }),
+  );
+}
+function groupAction(act, id, root) {
+  if (!id || !isGroupChat(id)) return;
+  if (act === "search") openGroupSearch(id);
+  else if (act === "mute") openMuteModal(id);
+  else if (act === "unmute") clearChatMute(id);
+  else if (act === "media") openGroupMedia(id);
+  else if (act === "members") openGroupMembers(id);
+  else if (act === "info") openGroupInfo(id);
+  else if (act === "settings") {
+    if (!isGroupOwner(id)) return notify("Only the group owner can change settings");
+    openGroupSettings(id);
+  } else if (act === "clear") askClearGroupHistory(id);
+  else if (act === "report") {
+    if (isGroupOwner(id)) return notify("You own this group — use settings instead");
+    openGroupReport(id);
+  } else if (act === "leave") askLeaveGroup(id);
+  else if (act === "disband") {
+    if (!isGroupOwner(id)) return notify("Only the group owner can delete it");
+    askDisbandGroup(id);
+  }
+}
+if (!window.__sfGroupKeysBound) {
+  window.__sfGroupKeysBound = true;
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    const pop = document.querySelector('[data-chat-pop]:not([hidden])');
+    if (pop) {
+      pop.hidden = true;
+      return;
+    }
+    if (mediaViewer) {
+      closeMediaViewer();
+      return;
+    }
+    if (groupSearch) {
+      groupSearch = null;
+      rerenderChat();
+    }
+  });
+}
+function flashBubble(idx) {
+  const raf = window.requestAnimationFrame || ((fn) => setTimeout(fn, 16));
+  raf(() => {
+    const bubbles = document.querySelectorAll(".chat-body .bubble");
+    const el = bubbles[idx];
+    if (!el) return;
+    try {
+      if (el.scrollIntoView) el.scrollIntoView({ block: "center" });
+    } catch { /* ignore */ }
+    el.classList.add("msg-flash");
+    setTimeout(() => el.classList.remove("msg-flash"), 2600);
+  });
+}
+// Scroll the chat to a pinned message by id and flash it.
+function jumpToPinnedMessage(id, msgId) {
+  const msgs = state.messages[id] || [];
+  const idx = msgs.findIndex((m) => m.id === msgId);
+  if (idx < 0) {
+    notify("That pinned message is no longer in this chat");
+    return;
+  }
+  const el = document.querySelector(`.chat-body .bubble[data-midx="${idx}"]`);
+  if (!el) return;
+  try {
+    el.scrollIntoView({ block: "center", behavior: state.reduceMotion ? "auto" : "smooth" });
+  } catch {
+    /* ignore */
+  }
+  el.classList.add("msg-flash");
+  setTimeout(() => el.classList.remove("msg-flash"), 2600);
+}
+
+// Modal listing every pinned message in the chat, newest first.
+function openPinnedList(id) {
+  $("#pins-modal")?.remove();
+  const msgs = state.messages[id] || [];
+  const pinned = pinnedIdsFor(id)
+    .map((pid) => msgs.find((m) => m.id === pid))
+    .filter(Boolean);
+  const target = allGroups().find((g) => g.id === id) || state.friends.find((f) => f.id === id);
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.id = "pins-modal";
+  modal.innerHTML = `<div class="modal pins-modal"><div class="eyebrow">${esc(target?.name || "Chat")}</div><h2>${sicon("pin")} Pinned messages</h2>${pinned.length ? `<div class="pins-list">${pinned
+    .map(
+      (pm) =>
+        `<div class="pin-entry"><button class="pin-entry-main" data-pin-jump-modal="${pm.id}"><b>${esc(senderLabel(pm))}</b><span>${escSnippet(messageText(pm), 110)}</span><small>${new Date(pm.ts).toLocaleDateString([], { month: "short", day: "numeric" })} · ${new Date(pm.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small></button><button class="ghost" data-pin-remove="${pm.id}" title="Unpin">${sicon("trash")}</button></div>`,
+    )
+    .join("")}</div>` : '<p class="muted">Nothing pinned yet. Hover a message and press the pin icon.</p>'}<div class="modal-actions"><button class="primary" data-pins-close>Done</button></div></div>`;
+  $("#modal-root").append(modal);
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) modal.remove();
+  });
+  $("[data-pins-close]", modal).onclick = () => modal.remove();
+  $$('[data-pin-jump-modal]', modal).forEach(
+    (b) =>
+      (b.onclick = () => {
+        modal.remove();
+        jumpToPinnedMessage(id, b.dataset.pinJumpModal);
+      }),
+  );
+  $$('[data-pin-remove]', modal).forEach(
+    (b) =>
+      (b.onclick = () => {
+        togglePinMessage(id, b.dataset.pinRemove);
+        modal.remove();
+        openPinnedList(id);
+        rerenderChat();
+      }),
+  );
+}
+
+function jumpToGroupMessage(id, idx) {
+  const matches = groupNav && groupNav.id === id ? [...groupNav.matches] : [];
+  let pos = matches.indexOf(idx);
+  if (pos < 0) {
+    matches.push(idx);
+    pos = matches.length - 1;
+  }
+  groupNav = { id, matches, pos };
+  groupSearch = null;
+  rerenderChat();
+  flashBubble(idx);
+}
+function snippetHtml(text, needle) {
+  const t = String(text || "");
+  const n = String(needle || "").toLowerCase();
+  const i = t.toLowerCase().indexOf(n);
+  if (!n || i < 0) return esc(t.slice(0, 90));
+  const s = Math.max(0, i - 40);
+  const e = Math.min(t.length, i + n.length + 40);
+  return `${s > 0 ? "…" : ""}${esc(t.slice(s, i))}<mark>${esc(t.slice(i, i + n.length))}</mark>${esc(t.slice(i + n.length, e))}${e < t.length ? "…" : ""}`;
+}
+function searchGroupMessages(id, q) {
+  const needle = String(q || "").trim().toLowerCase();
+  if (!needle) return [];
+  const out = [];
+  for (const [idx, m] of (state.messages[id] || []).entries()) {
+    const text = messageText(m);
+    const hay = `${text} ${m.file || ""} ${senderLabel(m)} ${extractLinks(text).join(" ")}`.toLowerCase();
+    if (!hay.includes(needle)) continue;
+    const tags = [];
+    if (m.kind === "file") tags.push(m.mime && m.mime.startsWith("image/") ? "photo" : m.mime && m.mime.startsWith("video/") ? "video" : "file");
+    else if (m.kind === "voice") tags.push("voice");
+    else if (m.kind === "poll") tags.push("poll");
+    if (extractLinks(text).length) tags.push("link");
+    out.push({
+      idx,
+      sender: senderLabel(m),
+      ts: m.ts || Date.now(),
+      snippet: snippetHtml(m.file && !text ? m.file : text, needle),
+      tags,
+    });
+    if (out.length >= 100) break;
+  }
+  return out;
+}
+function openGroupSearch(id) {
+  if (!isGroupChat(id)) return;
+  groupSearch = { id, q: "" };
+  groupNav = null;
+  state.activeChat = id;
+  rerenderChat();
+}
+function groupSearchMarkup(id) {
+  const g = groupById(id);
+  const q = groupSearch?.q || "";
+  const results = searchGroupMessages(id, q);
+  return `<div class="chat-head"><button class="icon-btn" data-gs-back aria-label="Back to chat">‹</button><div style="flex:1;min-width:0"><strong>${esc(g?.name || "Group")}</strong><div class="muted" style="font-size:11px">Search this group</div></div><span class="tag">${results.length}</span></div><div class="input-row" style="margin:12px 14px 0"><span class="song-search-ico" style="position:static;transform:none" aria-hidden="true">${sicon("search")}</span><input class="input" id="gs-input" style="flex:1" placeholder="Search messages, files, links…" value="${esc(q)}" aria-label="Search group messages" autocomplete="off"></div><div class="chat-body" id="gs-results">${groupSearchResultsHtml(id, results)}</div>`;
+}
+function groupSearchResultsHtml(id, results) {
+  if (!results.length) {
+    const q = groupSearch?.q || "";
+    return `<p class="muted" style="padding:16px">${q ? "No messages match that search." : "Type above to search this group's stored messages."}</p>`;
+  }
+  return results.map((r) => `<button class="gs-row" data-gs-jump="${r.idx}"><span class="gs-who">${esc(r.sender)} · ${new Date(r.ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}${r.tags.length ? ` · ${r.tags.join(" · ")}` : ""}</span><span class="gs-snippet">${r.snippet}</span></button>`).join("");
+}
+function paintGroupSearchResults(id) {
+  const box = $("#gs-results");
+  if (!box) return;
+  box.innerHTML = groupSearchResultsHtml(id, searchGroupMessages(id, groupSearch?.q || ""));
+  $$("[data-gs-jump]", box).forEach(
+    (b) => (b.onclick = () => jumpToGroupMessage(id, Number(b.dataset.gsJump))),
+  );
+  const tag = document.querySelector(".chat-head .tag");
+  if (tag) tag.textContent = String(searchGroupMessages(id, groupSearch?.q || "").length);
+}
+function bindGroupSearch(body, id) {
+  $("[data-gs-back]", body).onclick = () => {
+    groupSearch = null;
+    renderMessages(body);
+  };
+  const inp = $("#gs-input", body);
+  if (inp) {
+    inp.focus();
+    try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch { /* ignore */ }
+    inp.oninput = () => {
+      groupSearch = { id, q: inp.value };
+      paintGroupSearchResults(id);
+    };
+    inp.onkeydown = (e) => {
+      if (e.key === "Enter") {
+        const first = $("[data-gs-jump]", body);
+        if (first) jumpToGroupMessage(id, Number(first.dataset.gsJump));
+      }
+    };
+  }
+  paintGroupSearchResults(id);
+}
+
+function openPollBuilder(id, root) {
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">New poll</div><h2>Ask the group</h2><label class="field-label">Question<input class="input" id="poll-q" placeholder="e.g. Sprint at 6pm?"></label>${[1, 2, 3, 4].map((n) => `<label class="field-label">Option ${n}${n > 2 ? " (optional)" : ""}<input class="input" data-poll-opt placeholder="Option ${n}"></label>`).join("")}<div class="modal-actions"><button class="ghost" data-poll-cancel>Cancel</button><button class="primary" data-poll-create>Create poll</button></div></div>`;
+  $("#modal-root").append(modal);
+  $("[data-poll-cancel]", modal).onclick = () => modal.remove();
+  $("[data-poll-create]", modal).onclick = () => {
+    if (isBlockedKey(id)) {
+      modal.remove();
+      renderCommunity();
+      return notify("You have blocked this conversation");
+    }
+    const question = $("#poll-q", modal).value.trim();
+    const options = $$("[data-poll-opt]", modal)
+      .map((input) => input.value.trim())
+      .filter(Boolean)
+      .map((text) => ({ text }));
+    if (!question) return notify("Give your poll a question");
+    if (options.length < 2) return notify("Add at least two options");
+    state.messages[id] = [
+      ...(state.messages[id] || []),
+      {
+        id: uid(),
+        me: true,
+        kind: "poll",
+        question,
+        options,
+        voters: {},
+        ts: Date.now(),
+      },
+    ];
+    persist();
+    modal.remove();
+    renderMessages(root);
+  };
+}
+
+function startRecording(id, root) {
+  if (!window.MediaRecorder)
+    return notify("Voice messages need a microphone-capable browser");
+  if (!navigator.mediaDevices?.getUserMedia)
+    return notify("Microphone unavailable in this browser");
+  if (voiceRec) return;
+  navigator.mediaDevices
+    .getUserMedia({ audio: true })
+    .then((stream) => {
+      const rec = new MediaRecorder(stream);
+      const chunks = [];
+      rec.ondataavailable = (e) => {
+        if (e.data && e.data.size) chunks.push(e.data);
+      };
+      rec.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        if (voiceRec?.timer) clearInterval(voiceRec.timer);
+        const action = voiceRec?.action || "cancel";
+        const startedAt = voiceRec?.startedAt || Date.now();
+        voiceRec = null;
+        renderMessages(root);
+        if (action === "send") {
+          const blob = new Blob(chunks, {
+            type: rec.mimeType || "audio/webm",
+          });
+          if (blob.size) saveVoice(id, blob, startedAt, root);
+        }
+      };
+      rec.start();
+      voiceRec = {
+        rec,
+        chunks,
+        startedAt: Date.now(),
+        timer: setInterval(() => {
+          const s = Math.floor((Date.now() - voiceRec.startedAt) / 1000);
+          const label = $("[data-rec-time]");
+          if (label) label.textContent = `● ${s}s / 60s`;
+          if (s >= 60) stopRecording("send");
+        }, 500),
+      };
+      renderMessages(root);
+    })
+    .catch(() => notify("Microphone blocked — allow it to send voice notes"));
+}
+
+function stopRecording(action) {
+  if (!voiceRec) return;
+  voiceRec.action = action;
+  try {
+    voiceRec.rec.stop();
+  } catch {
+    // A recorder that already stopped never fires onstop, so clean up
+    // here or the mic indicator and rec-bar would stay on screen.
+    try {
+      voiceRec.rec.stream?.getTracks?.().forEach((t) => t.stop());
+    } catch {
+      /* ignore */
+    }
+    if (voiceRec.timer) clearInterval(voiceRec.timer);
+    voiceRec = null;
+    renderCommunity();
+  }
+}
+
+function saveVoice(id, blob, startedAt, root) {
+  if (isBlockedKey(id)) {
+    renderCommunity();
+    return notify("You have blocked this conversation");
+  }
+  if (blob.size > 5 * 1024 * 1024) return notify("Voice note too large");
+  const dur = Math.max(
+    1,
+    Math.round((Date.now() - startedAt) / 1000),
+  );
+  const reader = new FileReader();
+  reader.onload = () => {
+    state.messages[id] = [
+      ...(state.messages[id] || []),
+      {
+        id: uid(),
+        me: true,
+        kind: "voice",
+        audio: reader.result,
+        dur,
+        ts: Date.now(),
+      },
+    ];
+    persist();
+    renderMessages(root);
+  };
+  reader.readAsDataURL(blob);
+}
+
+export function disconnectRealtime() {
+  try {
+    conversationSubscription?.unsubscribe();
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (presenceSub) presenceSub.untrack();
+  } catch {
+    /* ignore */
+  }
+}
+function subscribePresenceFor(id) {
+  if (presenceSub) {
+    try {
+      presenceSub.untrack();
+    } catch {
+      /* ignore */
+    }
+    presenceSub = null;
+  }
+  presenceInfo = { chatId: id, users: [] };
+  if (!backendConfigured || !state.user) return;
+  if (!allGroups().some((g) => g.id === id)) return;
+  presenceSub = subscribeToPresence(
+    `studyflow-presence:${id}`,
+    { user_id: state.user.id, handle: state.profile.handle },
+    (users) => {
+      const others = (users || []).filter(
+        (u) => u.user_id !== state.user.id,
+      );
+      presenceInfo = { chatId: id, users: others };
+      if (state.tab === "community") renderCommunity();
+    },
+  );
+}
+
+function sendChat(id, text) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return;
+  if (isBlockedKey(id)) {
+    renderCommunity();
+    return notify("You have blocked this conversation");
+  }
+  const message = {
+    id: uid(),
+    me: true,
+    text: trimmed.slice(0, 4000),
+    ts: Date.now(),
+    deliveryStatus: backendConfigured && state.user ? "sending" : "sent",
+  };
+  if (chatReply && chatReply.chatId === id) {
+    message.reply = { author: chatReply.author, text: chatReply.text };
+    chatReply = null;
+  }
+  state.messages[id] = [...(state.messages[id] || []), message];
+  state.messageStatus[message.id] = message.deliveryStatus;
+  persist();
+  if (backendConfigured && state.user) {
+    sendCloudMessage({
+      id: crypto.randomUUID(),
+      sender_id: state.user.id,
+      group_id: allGroups().some((group) => group.id === id) ? id : null,
+      recipient_id: allGroups().some((group) => group.id === id) ? null : id,
+      text: message.text,
+      kind: "text",
+      delivery_status: "sent",
+    }).then((result) => {
+      state.messageStatus[message.id] = result.error ? "failed" : "delivered";
+      renderCommunity();
+    });
+  }
+  renderMessages($("#tab-messages") || $("#community-body"));
+}
+
+function subscribeToChat(id) {
+  conversationSubscription?.unsubscribe();
+  const group = allGroups().find((item) => item.id === id);
+  conversationSubscription = subscribeToConversation({
+    groupId: group?.id,
+    recipientId: group ? undefined : id,
+    onMessage: (message) => {
+      if (message.sender_id === state.user?.id) return;
+      state.messages[id] = [
+        ...(state.messages[id] || []),
+        {
+          id: message.id,
+          text: message.text,
+          kind: message.kind,
+          ts: message.created_at
+            ? new Date(message.created_at).getTime()
+            : Date.now(),
+          me: false,
+        },
+      ];
+      persist();
+      if (state.user) markMessageRead(message.id, state.user.id);
+      if (notifOn("community") && !isChatMuted(id)) {
+        const chat =
+          allGroups().find((g) => g.id === id) ||
+          state.friends.find((f) => f.id === id);
+        const who = chat?.name || (chat ? "@" + chat.username : "Community");
+        browserNotify(
+          `New message · ${who}`,
+          cleanText(message.text || "").slice(0, 120),
+        );
+      }
+      renderCommunity();
+    },
+    onTyping: (payload) => {
+      if (payload.userId === state.user?.id) return;
+      state.typing[id] = payload.isTyping;
+      renderCommunity();
+      // Typing flags expire on their own — a lost realtime update must
+      // not leave "Someone is typing…" on screen forever.
+      clearTimeout(typingTimeouts[id]);
+      if (payload.isTyping)
+        typingTimeouts[id] = setTimeout(() => {
+          if (state.typing[id]) {
+            delete state.typing[id];
+            if (state.tab === "community") renderCommunity();
+          }
+        }, 6000);
+    },
+    onRead: (receipt) => {
+      state.messageStatus[receipt.message_id] = receipt.read_at
+        ? "read"
+        : "delivered";
+      renderCommunity();
+    },
+  });
+}
+
+let callClockT = 0;
+let remoteStream = null;
+let callReactions = []; // {emoji, id} — floating reaction bursts
+
+function callDurationText() {
+  if (!state.callStartedAt) return "00:00";
+  const s = Math.max(0, Math.floor((Date.now() - state.callStartedAt) / 1000));
+  const m = Math.floor(s / 60);
+  const h = Math.floor(m / 60);
+  const two = (n) => String(n).padStart(2, "0");
+  return h ? `${two(h)}:${two(m % 60)}:${two(s % 60)}` : `${two(m)}:${two(s % 60)}`;
+}
+
+function startCallClock() {
+  stopCallClock();
+  callClockT = setInterval(() => {
+    const el = $("[data-call-timer]");
+    if (el) el.textContent = callDurationText();
+  }, 1000);
+}
+
+function stopCallClock() {
+  if (callClockT) {
+    clearInterval(callClockT);
+    callClockT = 0;
+  }
+}
+
+function pushCallReaction(emoji) {
+  if (!state.call) return;
+  const id = uid();
+  callReactions = [...callReactions.slice(-6), { emoji, id }];
+  const stage = $("[data-call-stage]");
+  if (stage) {
+    const el = document.createElement("span");
+    el.className = "call-reaction";
+    el.textContent = emoji;
+    el.style.left = 12 + Math.random() * 70 + "%";
+    stage.append(el);
+    setTimeout(() => el.remove(), 2400);
+  }
+}
+
+function callQualityMeta() {
+  if (state.callStatus === "connected") {
+    return { cls: "ok", label: "Connected" };
+  }
+  if (state.callStatus === "connecting") {
+    return { cls: "wait", label: "Connecting" };
+  }
+  return { cls: "idle", label: "Ready" };
+}
+
+function renderCall() {
+  let old = $("#call-window");
+  if (old) old.remove();
+  if (!state.call) {
+    stopCallClock();
+    remoteStream = null;
+    return;
+  }
+  const q = callQualityMeta();
+  const minimized = Boolean(state.callMinimized);
+  const call = document.createElement("div");
+  call.id = "call-window";
+  call.className = `call-window ${minimized ? "minimized" : ""} q-${q.cls}`;
+  call.setAttribute("role", "dialog");
+  call.setAttribute("aria-label", `Call with ${state.call.name}`);
+  const partnerTile = remoteStream
+    ? `<video class="call-video" data-call-remote autoplay playsinline></video><span class="tile-tag">${sicon("user")} Partner</span>`
+    : `<div class="tile-avatar">${state.call.emoji || "◉"}</div><span class="tile-tag">${sicon("user")} Partner</span><div class="tile-hint">${state.callStatus === "connecting" ? '<span class="call-dots"><i></i><i></i><i></i></span> Waiting for your partner to join…' : 'Press Connect to start the call'}</div>`;
+  const selfTile = activeCallStream
+    ? `<video class="call-video mirrored" data-call-self autoplay playsinline muted></video>`
+    : `<div class="tile-avatar small">${state.profile.photo ? `<img src="${esc(state.profile.photo)}" alt="">` : esc(state.profile.avatar || "SL")}</div>`;
+  call.innerHTML = `
+    <div class="call-head">
+      <span class="call-live"><i class="call-dot"></i> ${esc(state.call.name)}</span>
+      <span class="call-meta">
+        <span class="call-timer" data-call-timer>${callDurationText()}</span>
+        <span class="call-quality q-${q.cls}"><i></i>${q.label}</span>
+      </span>
+      <span class="call-head-actions">
+        <button class="call-icon" data-call-pips title="${minimized ? "Expand call" : "Minimize"}" aria-label="${minimized ? "Expand call" : "Minimize call"}">${minimized ? sicon("expand") : sicon("tab")}</button>
+        <button class="call-icon danger" data-end title="End call" aria-label="End call">${sicon("x")}</button>
+      </span>
+    </div>
+    <div class="call-stage" data-call-stage>
+      <div class="call-tile main">${partnerTile}</div>
+      <div class="call-tile self">${selfTile}<span class="tile-tag">${state.callMuted ? sicon("mute") + " Muted" : "You"}</span></div>
+      ${state.callCameraOff && activeCallStream ? '<div class="cam-off-note">Camera is off</div>' : ""}
+      ${state.callStatus === "connecting" ? '<div class="call-connecting"><span class="call-dots"><i></i><i></i><i></i></span><p>Connecting to your study partner…</p><p class="sub">End-to-end peer connection · audio + video</p></div>' : ""}
+    </div>
+    <div class="call-controls">
+      <div class="call-ctrl-group">
+        ${state.callStatus === "connected" ? `<button class="call-btn" data-call-reaction="fire" title="Send a fire reaction" aria-label="Fire reaction">🔥</button><button class="call-btn" data-call-reaction="party" title="Send a celebration reaction" aria-label="Celebration reaction">🎉</button><button class="call-btn" data-call-reaction="strong" title="Send a encouragement reaction" aria-label="Encouragement reaction">💪</button>` : `<button class="call-btn primary tall" data-connect>${state.callStatus === "connecting" ? '<span class="call-dots light"><i></i><i></i><i></i></span> Connecting…' : sicon("phone") + " Start call"}</button>`}
+      </div>
+      <div class="call-ctrl-group">
+        <button class="call-btn round ${state.callMuted ? "off" : ""}" data-mute title="${state.callMuted ? "Unmute microphone" : "Mute microphone"}" aria-pressed="${Boolean(state.callMuted)}" aria-label="Microphone">${state.callMuted ? sicon("mute") : sicon("mic")}</button>
+        <button class="call-btn round ${state.callCameraOff ? "off" : ""}" data-camera title="${state.callCameraOff ? "Turn camera on" : "Turn camera off"}" aria-pressed="${Boolean(state.callCameraOff)}" aria-label="Camera">${sicon("camera")}</button>
+        <button class="call-btn round" data-share title="Share your screen" aria-label="Share screen">${sicon("upload")}</button>
+        <button class="call-btn round" data-call-chat title="Open chat" aria-label="Open chat">${sicon("chat")}</button>
+        <button class="call-btn round hang" data-end title="Leave call" aria-label="Leave call">${sicon("phone")}</button>
+      </div>
+    </div>
+  `;
+  document.body.append(call);
+  startCallClock();
+  // Attach streams as soon as the tiles exist.
+  if (remoteStream) {
+    const rv = $("[data-call-remote]", call);
+    if (rv) rv.srcObject = remoteStream;
+  }
+  if (activeCallStream) {
+    const sv = $("[data-call-self]", call);
+    if (sv) {
+      sv.srcObject = activeCallStream;
+      sv.addEventListener("loadedmetadata", () => sv.play?.().catch(() => {}), { once: true });
+    }
+  }
+  if (!minimized) {
+    callReactions.forEach((r) => pushCallReaction(r.emoji));
+  }
+  $(`[data-connect]`, call) && ($(`[data-connect]`, call).onclick = connectCall);
+  $$('[data-call-reaction]', call).forEach(
+    (b) => (b.onclick = () => pushCallReaction(b.dataset.callReaction === "fire" ? "🔥" : b.dataset.callReaction === "party" ? "🎉" : "💪")),
+  );
+  $(`[data-mute]`, call).onclick = () => {
+    state.callMuted = !state.callMuted;
+    // Toggle the live track too — muting must actually silence the mic.
+    activePeer?.peer.getSenders().forEach((s) => {
+      if (s.track?.kind === "audio") s.track.enabled = !state.callMuted;
+    });
+    activeCallStream?.getAudioTracks().forEach((t) => (t.enabled = !state.callMuted));
+    renderCall();
+  };
+  $(`[data-camera]`, call).onclick = () => {
+    state.callCameraOff = !state.callCameraOff;
+    activePeer?.peer.getSenders().forEach((s) => {
+      if (s.track?.kind === "video") s.track.enabled = !state.callCameraOff;
+    });
+    activeCallStream?.getVideoTracks().forEach((t) => (t.enabled = !state.callCameraOff));
+    renderCall();
+  };
+  $(`[data-share]`, call).onclick = async () => {
+    try {
+      const display = await navigator.mediaDevices?.getDisplayMedia({ video: true });
+      if (!display) return;
+      notify("Screen sharing started");
+      display.getVideoTracks().forEach((track) =>
+        activePeer?.peer.getSenders().forEach((s) => {
+          if (s.track?.kind === "video") s.replaceTrack(track).catch(() => {});
+        }),
+      );
+      display.getVideoTracks().forEach((track) =>
+        track.addEventListener(
+          "ended",
+          () => {
+            notify("Screen sharing stopped");
+            // give the camera back to the call after a screen-share session
+            activeCallStream?.getVideoTracks().forEach((cam) =>
+              activePeer?.peer.getSenders().forEach((s) => {
+                if (s.track?.kind === "video") s.replaceTrack(cam).catch(() => {});
+              }),
+            );
+          },
+          { once: true },
+        ),
+      );
+    } catch {
+      notify("Screen sharing was cancelled");
+    }
+  };
+
+  $("[data-call-pips]", call).onclick = () => {
+    state.callMinimized = !state.callMinimized;
+    renderCall();
+  };
+  $$("[data-end]", call).forEach(
+    (b) =>
+      (b.onclick = () => {
+        if (activeCallHistoryId)
+          updateCall(activeCallHistoryId, {
+            status: "ended",
+            ended_at: new Date().toISOString(),
+          });
+        if (activeCallHistoryId && state.user)
+          upsertCallParticipant({
+            call_id: activeCallHistoryId,
+            user_id: state.user.id,
+            status: "left",
+            left_at: new Date().toISOString(),
+          });
+        activePeer?.close();
+        activePeer = null;
+        // Release the camera/mic so the OS indicator and other apps get
+        // the hardware back the moment the call ends.
+        try {
+          activeCallStream?.getTracks().forEach((t) => t.stop());
+        } catch {
+          /* ignore */
+        }
+        activeCallStream = null;
+        remoteStream = null;
+        state.call = null;
+        state.callStartedAt = 0;
+        stopCallClock();
+        call.remove();
+        activeCallHistoryId = null;
+        notify("Call ended — great studying together " + sicon("check"));
+      }),
+  );
+  $("[data-call-chat]", call).onclick = () => {
+    if (!state.call) return;
+    const chatId = state.call.id;
+    state.callMinimized = true;
+    state.tab = "community";
+    state.subtab = "messages";
+    state.activeChat = chatId;
+    persist();
+    call.remove();
+    shell();
+  };
+}
+
+async function connectCall() {
+  if (!backendConfigured)
+    return notify("Add Supabase keys to enable live WebRTC calls");
+  if (!state.call) return;
+  if (state.callStatus === "connecting") return;
+  // A retry must tear the previous peer down first, or the old signaling
+  // channel and tracks leak and the second connect always fails.
+  if (activePeer) {
+    try {
+      activePeer.close();
+    } catch {
+      /* ignore */
+    }
+    activePeer = null;
+  }
+  try {
+    const permission = await navigator.permissions?.query?.({ name: "camera" });
+    if (permission?.state === "denied")
+      return notify(
+        "Camera permission is blocked. Allow it in browser settings and try again.",
+      );
+    const micPermission = await navigator.permissions?.query?.({
+      name: "microphone",
+    });
+    if (micPermission?.state === "denied")
+      return notify(
+        "Microphone permission is blocked. Allow it in browser settings and try again.",
+      );
+    state.callStatus = "connecting";
+    renderCall();
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: true,
+    });
+    activeCallStream = stream;
+    if (!state.callStartedAt) state.callStartedAt = Date.now();
+    activePeer = await createWebRtcPeer({
+      roomId: state.call.id,
+      userId: state.user?.id || uid(),
+      initiator: true,
+      stream,
+      onTrack: (incoming) => {
+        remoteStream = incoming || null;
+        notify(sicon("user") + " A study partner joined the call");
+        renderCall();
+      },
+      onStateChange: (status) => {
+        state.callStatus = status;
+        if (status === "connected") notify("Live call connected");
+        if (status === "disconnected" || status === "failed") {
+          remoteStream = null;
+          notify("Call connection lost. Press Connect to retry.");
+        }
+        renderCall();
+      },
+    });
+    if (state.user) {
+      const result = await recordCall({
+        room_id: state.call.id,
+        initiator_id: state.user.id,
+        group_id: allGroups().some((group) => group.id === state.call.id)
+          ? state.call.id
+          : null,
+        recipient_id: null,
+        status: "connected",
+        connected_at: new Date().toISOString(),
+      });
+      activeCallHistoryId = result.data?.id;
+      if (activeCallHistoryId)
+        await upsertCallParticipant({
+          call_id: activeCallHistoryId,
+          user_id: state.user.id,
+          status: "connected",
+          joined_at: new Date().toISOString(),
+        });
+    }
+    state.callStatus = "connected";
+    renderCall();
+    notify("Camera and microphone connected");
+  } catch (error) {
+    // A failed start must not leave a half-open camera or a stuck
+    // "connecting" state behind.
+    try {
+      activeCallStream?.getTracks().forEach((t) => t.stop());
+    } catch {
+      /* ignore */
+    }
+    activeCallStream = null;
+    remoteStream = null;
+    if (state.call) {
+      state.callStatus = "idle";
+      renderCall();
+    }
+    notify(error?.message || "Could not start camera and microphone");
+  }
+}
+
+
+
+export { allGroups, sprintTicker, weekKey, logFocusDay, weekMinutes, progressChallenges, fmtCountdown, clearSprintTicker, ensureSprintTicker, renderCommunity, groupMatches, groupCardWithReason, renderSprints, leaderboardMarkup, sprintGroupName, sprintBoardMarkup, challengeRow, challengeMarkup, eventWhen, eventMarkup, postGroupMessage, bindSprints, timeAgo, isSeen, markSeen, statusDuration, buildStatusSequence, pruneExpiredStories, ownStory, deleteStatus, liveStories, storiesMarkup, bindStories, statusSeq, statusIdx, statusTimer, statusItemStart, statusItemDur, statusElapsed, statusPaused, statusHoldTimer, statusHolding, statusTouch, statusNavToken, statusNextIdx, statusPrevIdx, statusRemaining, clearStatusTimer, openStatus, closeStatus, closeStatusMenu, toggleStatusMenu, askDeleteStatus, afterStatusDeleted, statusKeys, goStatus, showStatusItem, renderStatusProgress, setStatusFill, startStatusPlayback, pauseStatus, resumeStatus, statusPointerDown, statusPointerUp, statusPointerCancel, renderDiscover, bindFeed, renderComments, subjectForGroup, groupCard, bindGroupButtons, renderMyGroups, inviteText, myReferralCode, referralMarkup, redeemReferral, conversationSubscription, renderFriends, renderMessages, chatKey, REACT_EMOJI, escSnippet, messageText, pollVotes, messageHtml, chatMarkup, bindChat, openPollBuilder, startRecording, stopRecording, saveVoice, subscribePresenceFor, sendChat, subscribeToChat, activePeer, activeCallHistoryId, chatReply, voiceRec, presenceSub, presenceInfo, renderCall, connectCall };
+export { postOwnerId, isOwnPost, visiblePosts, postMenuMarkup, closePostMenus, togglePostMenu, startPostEdit, askDeletePost, BLOCK_REASONS, isUuid, blockKeyFor, isBlockedKey, askBlockUser, blockReasonDialog, submitBlock, unblockUser, blockedSectionMarkup };
+export { isGroupChat, groupById, isGroupOwner, isChatMuted, setChatMute, clearChatMute, muteLabel, searchGroupMessages, extractLinks, groupShared, groupRoster, senderLabel, groupMenuMarkup, leaveGroupById, openGroupSearch, jumpToGroupMessage, openGroupMedia, openMuteModal, openGroupInfo, openGroupMembers, openGroupSettings, openGroupReport, askClearGroupHistory, askLeaveGroup, askDisbandGroup, closeGroupMedia, closeMediaViewer };
+export { sanitizeSprint, ensureSprintFields, isSprintOwner, sprintCrewWithMe, crewPaceMarkup, inviteInboxMarkup, resolveOneInvite, openSprintEditor, missionDeskMarkup, bindMissionDesk };
+export { cleanText, sanitizeChallenge, ensureChallengeFields, fmtPace, paceSec, challengeLock, challengeLockBanner, otherActiveChallenge, joinChallenge, leaveChallenge, bumpChallengeMember, challengeScore, mateChallengeSession, finishChallenge };
+export { isEventOwner, ensureEventFields, eventInboxMarkup, resolveOneEventInvite };

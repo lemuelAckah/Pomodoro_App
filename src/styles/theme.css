@@ -1,0 +1,359 @@
+/* theme.css — Theme variants: midnight/neon skin overrides and the full night-mode component audit. */
+
+/* Dark skins: re-point hardcoded light surfaces at theme variables */
+[data-theme="midnight"] .modal,
+[data-theme="neon"] .modal,
+[data-theme="midnight"] .input,
+[data-theme="neon"] .input,
+[data-theme="midnight"] .textarea,
+[data-theme="neon"] .textarea,
+[data-theme="midnight"] .select,
+[data-theme="neon"] .select,
+[data-theme="midnight"] .top-icon,
+[data-theme="neon"] .top-icon,
+[data-theme="midnight"] .mode-switch,
+[data-theme="neon"] .mode-switch {
+  background-color: var(--panel);
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+[data-theme="midnight"] .ghost,
+[data-theme="neon"] .ghost,
+[data-theme="midnight"] .icon-btn,
+[data-theme="neon"] .icon-btn,
+[data-theme="midnight"] .filter,
+[data-theme="neon"] .filter {
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+[data-theme="midnight"] .icon-btn,
+[data-theme="neon"] .icon-btn {
+  color: var(--sage);
+}
+
+[data-theme="midnight"] .filter.active,
+[data-theme="neon"] .filter.active {
+  background: var(--sage);
+  border-color: transparent;
+  color: #0c1210;
+}
+
+[data-theme="midnight"] .primary,
+[data-theme="neon"] .primary {
+  color: #0c1210;
+}
+
+[data-theme="midnight"] .mini-timer,
+[data-theme="neon"] .mini-timer,
+[data-theme="midnight"] #np-mini,
+[data-theme="neon"] #np-mini {
+  background: #17221d;
+  color: #fff;
+}
+
+[data-theme="midnight"] .comment,
+[data-theme="neon"] .comment,
+[data-theme="midnight"] .reply-strip,
+[data-theme="neon"] .reply-strip {
+  background: rgba(127, 127, 127, 0.14);
+}
+
+[data-theme="midnight"] .poll-opt,
+[data-theme="neon"] .poll-opt {
+  background: rgba(127, 127, 127, 0.16);
+  color: var(--ink);
+}
+
+[data-theme="midnight"] .react-picker,
+[data-theme="neon"] .react-picker {
+  background: var(--panel);
+  border-color: var(--line);
+}
+
+[data-theme="midnight"] .earn-grid > div,
+[data-theme="neon"] .earn-grid > div {
+  background: rgba(127, 127, 127, 0.14);
+}
+
+/* ================= NIGHT MODE — full component audit ================= */
+html[data-night="1"] .card,
+html[data-night="1"] .modal,
+html[data-night="1"] .auth-box,
+html[data-night="1"] .input,
+html[data-night="1"] .textarea,
+html[data-night="1"] .select,
+html[data-night="1"] .top-icon,
+html[data-night="1"] .filter,
+html[data-night="1"] .st-menu,
+html[data-night="1"] .react-chip,
+html[data-night="1"] .react-picker,
+html[data-night="1"] .subnav button,
+html[data-night="1"] .oauth,
+html[data-night="1"] .auth-tabs button.active,
+html[data-night="1"] .box-token,
+html[data-night="1"] .story-ring span,
+html[data-night="1"] .mind-svg {
+  background: var(--panel);
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+html[data-night="1"] .mini-timer,
+html[data-night="1"] #update-toast,
+html[data-night="1"] #now-playing {
+  background: #0b0f14;
+  color: #fff;
+  border: 1px solid var(--line);
+}
+
+/* The mini player is hidden the same way in night mode: --ink flips to a light
+   color there, which would leave white text on a white pill. */
+html[data-night="1"] #np-mini {
+  background: #0b0f14;
+  color: #fff;
+  border: 1px solid var(--line);
+}
+
+html[data-night="1"] .primary {
+  color: var(--on-accent, #fff);
+}
+
+html[data-night="1"] .primary:hover {
+  background: var(--sage);
+  filter: brightness(1.12);
+  box-shadow: none;
+}
+
+html[data-night="1"] .ghost,
+html[data-night="1"] .icon-btn,
+html[data-night="1"] .mode-switch,
+html[data-night="1"] .template-chip,
+html[data-night="1"] .post-actions button,
+html[data-night="1"] .seg-row .seg,
+html[data-night="1"] .auth-tabs,
+html[data-night="1"] .auth-session {
+  background: rgba(148, 163, 184, 0.13);
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+html[data-night="1"] .icon-btn {
+  color: var(--sage);
+}
+
+html[data-night="1"] .ghost:hover,
+html[data-night="1"] .icon-btn:hover,
+html[data-night="1"] .template-chip:hover,
+html[data-night="1"] .top-icon:hover,
+html[data-night="1"] .oauth:hover {
+  background: rgba(148, 163, 184, 0.22);
+}
+
+html[data-night="1"] .filter.active {
+  background: var(--sage);
+  border-color: transparent;
+  color: var(--on-accent, #fff);
+}
+
+html[data-night="1"] .qty-stepper button {
+  color: var(--on-accent, #fff);
+}
+
+html[data-night="1"] .mode-switch button.active,
+html[data-night="1"] .seg-row .seg.on,
+html[data-night="1"] .template-chip:hover,
+html[data-night="1"] .subnav button.active {
+  color: var(--on-accent, #fff);
+}
+html[data-night="1"] .price {
+  color: #f2c14e;
+}
+
+html[data-night="1"] .soft,
+html[data-night="1"] .tag,
+html[data-night="1"] .gift-person,
+html[data-night="1"] .gift-person:hover,
+html[data-night="1"] .gift-person.selected,
+html[data-night="1"] .gift-summary,
+html[data-night="1"] .recipient-opt.active,
+html[data-night="1"] .skin-row,
+html[data-night="1"] .records-grid > div,
+html[data-night="1"] .ach,
+html[data-night="1"] .search-row,
+html[data-night="1"] .search-row:hover,
+html[data-night="1"] kbd,
+html[data-night="1"] .comment,
+html[data-night="1"] .match-reason,
+html[data-night="1"] .tech-tag,
+html[data-night="1"] .quiz-opt:hover,
+html[data-night="1"] .earn-grid > div,
+html[data-night="1"] .sound-icon,
+html[data-night="1"] .song,
+html[data-night="1"] .song:hover,
+html[data-night="1"] .bubble,
+html[data-night="1"] .mention-pop button:hover,
+html[data-night="1"] .react-chip.mine,
+html[data-night="1"] .react-picker button:hover,
+html[data-night="1"] .reply-strip,
+html[data-night="1"] .session-card,
+html[data-night="1"] .status-pill,
+html[data-night="1"] .qty-stepper {
+  background: rgba(148, 163, 184, 0.13);
+}
+
+html[data-night="1"] .song.active,
+html[data-night="1"] .category-list button.active,
+html[data-night="1"] .conversation button.active,
+html[data-night="1"] .recipient-opt:hover,
+html[data-night="1"] .store-item.selected {
+  background: rgba(148, 163, 184, 0.2);
+  border-color: var(--sage);
+}
+
+html[data-night="1"] .recipient-opt.selected {
+  background: rgba(71, 118, 90, 0.28);
+}
+
+html[data-night="1"] .rarity-common {
+  background: rgba(148, 163, 184, 0.16);
+  color: var(--sage);
+}
+
+html[data-night="1"] .rarity-rare {
+  background: rgba(96, 140, 255, 0.16);
+  color: #9db9ff;
+}
+
+html[data-night="1"] .rarity-epic {
+  background: rgba(150, 110, 255, 0.16);
+  color: #c2a8ff;
+}
+
+html[data-night="1"] .rarity-legendary {
+  background: rgba(233, 174, 63, 0.16);
+  color: #f2c14e;
+}
+
+html[data-night="1"] .box-common {
+  background: linear-gradient(180deg, #1c2534, #161d29);
+}
+
+html[data-night="1"] .box-rare {
+  background: linear-gradient(180deg, #1c2340, #161b30);
+  border-color: #3b4a6b;
+}
+
+html[data-night="1"] .pin-bar {
+  background: rgba(233, 174, 63, 0.12);
+  border-color: rgba(233, 174, 63, 0.35);
+}
+
+html[data-night="1"] .week-bar span {
+  background: var(--line);
+}
+
+html[data-night="1"] .timer-ring {
+  background: conic-gradient(var(--sage) var(--progress), var(--line) 0);
+}
+
+html[data-night="1"] .danger-button {
+  background: rgba(224, 82, 82, 0.14);
+  color: #ff9d8f;
+}
+
+html[data-night="1"] .danger-button:hover {
+  background: rgba(224, 82, 82, 0.22);
+}
+
+html[data-night="1"] .limited-tag,
+html[data-night="1"] .st-confirm-err {
+  background: rgba(224, 82, 82, 0.14);
+  color: #ff9d8f;
+}
+
+html[data-night="1"] .st-menu button {
+  color: #ff9d8f;
+}
+
+html[data-night="1"] .st-menu button:hover {
+  background: rgba(224, 82, 82, 0.14);
+}
+
+html[data-night="1"] .coins {
+  background: rgba(233, 174, 63, 0.14);
+  color: #f2c14e;
+  border-color: rgba(233, 174, 63, 0.35);
+}
+
+html[data-night="1"] .verification-banner {
+  background: rgba(233, 174, 63, 0.1);
+  border-color: rgba(233, 174, 63, 0.35);
+  color: #f2c14e;
+}
+
+html[data-night="1"] .verification-banner span {
+  color: var(--muted);
+}
+
+html[data-night="1"] .verification-banner .ghost {
+  background: rgba(233, 174, 63, 0.16);
+  color: #f2c14e;
+}
+
+html[data-night="1"] .account-orbit {
+  background: rgba(71, 118, 90, 0.18);
+  box-shadow:
+    0 0 0 18px rgba(71, 118, 90, 0.16),
+    0 0 0 36px rgba(71, 118, 90, 0.08);
+}
+
+html[data-night="1"] .notification.unread {
+  background: rgba(148, 163, 184, 0.14);
+}
+
+html[data-night="1"] .notification.read {
+  background: transparent;
+}
+
+html[data-night="1"] .notification-mark {
+  background: rgba(148, 163, 184, 0.2);
+}
+
+html[data-night="1"] .boss-veil {
+  background: var(--paper);
+}
+
+html[data-night="1"] .boss-sheet table {
+  background: var(--panel);
+  color: var(--ink);
+}
+
+html[data-night="1"] .boss-sheet th {
+  background: rgba(148, 163, 184, 0.13);
+}
+
+html[data-night="1"] .boss-sheet td {
+  border-color: var(--line);
+}
+
+html[data-night="1"] .toggle-row,
+html[data-night="1"] .post-actions,
+html[data-night="1"] .task {
+  border-color: var(--line);
+}
+
+html[data-night="1"] .poll-opt {
+  background: rgba(148, 163, 184, 0.16);
+  color: var(--ink);
+}
+
+html[data-night="1"] .reply-quote {
+  background: rgba(0, 0, 0, 0.25);
+}
+
+html[data-night="1"] ::-webkit-scrollbar-thumb {
+  background: var(--line);
+}
