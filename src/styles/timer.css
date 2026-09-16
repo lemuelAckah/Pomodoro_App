@@ -6,6 +6,8 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  /* Prevent modal scroll from causing animation jitter */
+  isolation: isolate;
 }
 
 .mode-switch {
@@ -39,6 +41,9 @@
   place-items: center;
   background: conic-gradient(var(--sage) var(--progress), #dbe6d7 0);
   position: relative;
+  /* Promote to own compositing layer so modal scroll never reflows us */
+  will-change: transform;
+  transform: translateZ(0);
 }
 
 .timer-ring:after {
@@ -207,6 +212,8 @@
   border-radius: 50%;
   background: #e05252;
   animation: live-pulse 1.6s ease-in-out infinite;
+  will-change: opacity, transform;
+  transform: translateZ(0);
 }
 
 .mini-live {
@@ -245,6 +252,9 @@
   gap: 34px;
   padding: 24px;
   animation: focusIn 0.25s ease-out;
+  /* Prevent scroll context from leaking into timer animations */
+  isolation: isolate;
+  -webkit-overflow-scrolling: touch;
 }
 
 #focus-view .timer-ring {
@@ -499,6 +509,9 @@ button.streak-dots {
    and soft wave ripples breathe inside the clock face. */
 .timer-ring.spiral-on {
   animation: focus-glow 3.2s ease-in-out infinite;
+  /* Prevent modal scroll from invalidating the animation transform */
+  transform: translateZ(0);
+  isolation: isolate;
 }
 .timer-ring.spiral-on::before {
   content: "";
@@ -520,9 +533,12 @@ button.streak-dots {
   animation: spiral-rot 14s linear infinite;
   opacity: 0.9;
   pointer-events: none;
+  will-change: transform;
+  transform: translateZ(0);
 }
 .timer-ring.spiral-on > div {
   position: relative;
+  isolation: isolate;
 }
 .timer-ring.spiral-on > div::before {
   content: "";
@@ -534,6 +550,8 @@ button.streak-dots {
   box-shadow: 0 0 22px rgba(90, 140, 105, 0.4), inset 0 0 28px rgba(90, 140, 105, 0.28);
   animation: ripple-out 3s cubic-bezier(0.2, 0.6, 0.4, 1) infinite;
   pointer-events: none;
+  will-change: transform, opacity;
+  transform: translateZ(0);
 }
 @keyframes spiral-rot {
   to { transform: rotate(360deg); }

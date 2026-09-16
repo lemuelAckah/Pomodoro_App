@@ -1352,22 +1352,22 @@ function mindLayout(nodes) {
   });
   const pos = {};
   (kids[""] || []).forEach((root, ri) => {
-    const cx = ri * 620;
+    const cx = ri * 680;
     pos[root.id] = { x: cx, y: 0, depth: 0 };
     (kids[root.id] || []).forEach((c, i, arr) => {
       const a = (i / arr.length) * Math.PI * 2 - Math.PI / 2;
-      const x = cx + Math.cos(a) * 230;
-      const y = Math.sin(a) * 230;
+      const x = cx + Math.cos(a) * 260;
+      const y = Math.sin(a) * 260;
       pos[c.id] = { x, y, depth: 1 };
       (kids[c.id] || []).forEach((g, j, garr) => {
         const spread = 0.55;
         const ga =
           garr.length === 1 ? a : a - spread + ((2 * spread * j) / (garr.length - 1));
-        const gx = x + Math.cos(ga) * 190;
-        const gy = y + Math.sin(ga) * 190;
+        const gx = x + Math.cos(ga) * 210;
+        const gy = y + Math.sin(ga) * 210;
         pos[g.id] = { x: gx, y: gy, depth: 2 };
         (kids[g.id] || []).forEach((h, k) => {
-          const d = 150 + k * 46;
+          const d = 165 + k * 52;
           pos[h.id] = {
             x: gx + Math.cos(ga) * d,
             y: gy + Math.sin(ga) * d,
@@ -1396,30 +1396,55 @@ function mindSvg(map, selectedId) {
     minY = Math.min(minY, p.y);
     maxY = Math.max(maxY, p.y);
   });
-  const pad = 110;
+  const pad = 130;
   const vb = `${minX - pad} ${minY - pad} ${maxX - minX + pad * 2} ${maxY - minY + pad * 2}`;
   const byId = {};
   nodes.forEach((n) => (byId[n.id] = n));
   const edges = nodes
     .filter((n) => n.parent && pos[n.parent])
-    .map(
-      (n) =>
-        `<line x1="${pos[n.parent].x}" y1="${pos[n.parent].y}" x2="${pos[n.id].x}" y2="${pos[n.id].y}" stroke="#b7c8bc" stroke-width="2.5" stroke-linecap="round"/>`,
-    )
+    .map((n) => {
+      const pp = pos[n.parent];
+      const cp = pos[n.id];
+      const pr = nodeRadius(n.parent, byId, pos, kids);
+      const cr = nodeRadius(n.id, byId, pos, kids);
+      const dx = cp.x - pp.x;
+      const dy = cp.y - pp.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      const sx = pp.x + (dx / dist) * pr;
+      const sy = pp.y + (dy / dist) * pr;
+      const ex = cp.x - (dx / dist) * cr;
+      const ey = cp.y - (dy / dist) * cr;
+      return `<line x1="${sx}" y1="${sy}" x2="${ex}" y2="${ey}" stroke="#c3d4c8" stroke-width="2" stroke-linecap="round"/>`;
+    })
     .join("");
-  const radii = [46, 38, 31, 26];
   const dots = nodes
     .map((n) => {
       const p = pos[n.id];
       const c = MIND_COLORS[Math.min(p.depth, 3)];
-      const r = radii[Math.min(p.depth, 3)];
-      const label =
-        n.label.length > 18 ? n.label.slice(0, 17) + "…" : n.label;
+      const label = n.label;
+      const fontSize = p.depth === 0 ? 14 : 12;
+      const charW = p.depth === 0 ? 8 : 7;
+      const textW = label.length * charW;
+      const boxW = Math.max(textW + 28, p.depth === 0 ? 120 : 80);
+      const boxH = p.depth === 0 ? 42 : 34;
+      const rx = p.depth === 0 ? 14 : 10;
       const sel = selectedId === n.id;
-      return `<g data-mind-node="${n.id}" style="cursor:pointer"><circle cx="${p.x}" cy="${p.y}" r="${r + (sel ? 6 : 0)}" fill="none" stroke="${sel ? "#17221d" : "transparent"}" stroke-width="3" stroke-dasharray="${sel ? "7 4" : "none"}"/><circle cx="${p.x}" cy="${p.y}" r="${r}" fill="${c.fill}" stroke="${c.ring}" stroke-width="2"/><text x="${p.x}" y="${p.y}" text-anchor="middle" dominant-baseline="central" font-size="${p.depth === 0 ? 14 : 12}" font-weight="700" fill="${c.text}" font-family="DM Sans, sans-serif">${esc(label)}</text></g>`;
+      const selPad = sel ? 5 : 0;
+      return `<g data-mind-node="${n.id}" style="cursor:pointer">${sel ? `<rect x="${p.x - boxW / 2 - selPad}" y="${p.y - boxH / 2 - selPad}" width="${boxW + selPad * 2}" height="${boxH + selPad * 2}" rx="${rx + 3}" fill="none" stroke="#17221d" stroke-width="2.5" stroke-dasharray="7 4"/>` : ""}<rect x="${p.x - boxW / 2}" y="${p.y - boxH / 2}" width="${boxW}" height="${boxH}" rx="${rx}" fill="${c.fill}" stroke="${c.ring}" stroke-width="2"/><text x="${p.x}" y="${p.y}" text-anchor="middle" dominant-baseline="central" font-size="${fontSize}" font-weight="700" fill="${c.text}" font-family="DM Sans, sans-serif">${esc(label)}</text></g>`;
     })
     .join("");
   return `<svg viewBox="${vb}" class="mind-svg" role="img" aria-label="Mind map">${edges}${dots}</svg>`;
+}
+
+function nodeRadius(id, byId, pos, kids) {
+  const n = byId[id];
+  if (!n) return 30;
+  const p = pos[id];
+  const label = n.label;
+  const charW = p.depth === 0 ? 8 : 7;
+  const textW = label.length * charW;
+  const boxW = Math.max(textW + 28, p.depth === 0 ? 120 : 80);
+  return boxW / 2 + 6;
 }
 
 function renderMind(t) {

@@ -179,9 +179,23 @@
 
 .mind-svg {
   width: 100%;
-  max-height: 480px;
+  min-height: 320px;
+  max-height: 520px;
   background: #f6f7f2;
   border-radius: 14px;
+}
+
+.mind-svg text {
+  pointer-events: none;
+  user-select: none;
+}
+
+@media (max-width: 560px) {
+  .mind-svg {
+    min-height: 240px;
+    max-height: 380px;
+    border-radius: 10px;
+  }
 }
 
 .tech-card,
