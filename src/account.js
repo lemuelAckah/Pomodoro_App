@@ -107,8 +107,10 @@ function openProfile() {
       .slice(0, 12);
     // Photo: untouched stays exactly as-is (no re-upload). A fresh upload or
     // removal goes to Storage first so the old file never lingers behind.
+    const prevPhoto = state.profile.photo || "";
+    const prevPath = state.profile.photoPath || "";
+    let uploadedNewPath = null;
     if (photoDirty) {
-      const prevPath = state.profile.photoPath || "";
       if (pendingPhoto && backendConfigured && state.user) {
         try {
           const blob = await (await fetch(pendingPhoto)).blob();
@@ -118,6 +120,7 @@ function openProfile() {
           if (up.error) throw up.error;
           if (prevPath && prevPath !== up.data.path)
             await removeAvatar(prevPath).catch(() => {});
+          uploadedNewPath = up.data.path;
           state.profile.photoPath = up.data.path;
           state.profile.photo =
             avatarPublicUrl(up.data.path) || pendingPhoto;
@@ -140,14 +143,46 @@ function openProfile() {
       .slice(0, 2)
       .toUpperCase();
     persist();
-    if (state.user)
-      syncProfile(state.profile).catch(() =>
-        notify("Saved locally; cloud sync failed"),
-      );
+    let cloudOk = true;
+    if (state.user) {
+      const res = await syncProfile(state.profile);
+      if (res.error) {
+        cloudOk = false;
+        // Don't leave an orphaned fresh upload behind when the row save fails.
+        if (uploadedNewPath && uploadedNewPath !== prevPath) {
+          await removeAvatar(uploadedNewPath).catch(() => {});
+          state.profile.photoPath = prevPath;
+          state.profile.photo = prevPhoto;
+          persist();
+        }
+        notify(friendlyProfileError(res.error));
+      }
+    }
     modal.remove();
     shell();
-    notify("Profile updated");
+    notify(cloudOk ? "Profile updated" : "Profile kept on this device");
   };
+}
+
+// Translate sync failures into actions — a silent "saved" is worse than noise.
+function friendlyProfileError(error) {
+  const msg = String(error?.message || "");
+  if (error?.code === "23505" || /duplicate key|already exists/i.test(msg))
+    return "That username is already taken — try another one";
+  if (/photo_path|schema cache|PGRST204|column .* does not exist/i.test(msg))
+    return "Cloud table is outdated — apply migration 010, then save again";
+  if (/jwt|expired|permission|policy|unauthorized|sign in/i.test(msg))
+    return "Session expired — sign in again, then save";
+  return `Saved on this device; cloud sync failed (${msg.slice(0, 120) || "unknown error"})`;
+}
+
+function friendlySignupError(error) {
+  const msg = String(error?.message || "");
+  if (/already registered/i.test(msg))
+    return "An account with this email already exists — sign in instead";
+  if (/duplicate|handle|username/i.test(msg))
+    return "That username is taken — change your handle, then retry";
+  return msg || "Could not create the account";
 }
 
 async function authenticate(modal, createAccount) {
@@ -159,7 +194,8 @@ async function authenticate(modal, createAccount) {
   const result = createAccount
     ? await signUpWithEmail(email, password, state.profile)
     : await signInWithEmail(email, password);
-  if (result.error) return notify(result.error.message);
+  if (result.error)
+    return notify(createAccount ? friendlySignupError(result.error) : result.error.message);
   if (createAccount) markPrivacyAccepted();
   state.user = result.data?.user || (await getCurrentUser());
   await hydrateCloudState(state.user);
@@ -530,10 +566,11 @@ function savePrivacy() {
   };
   persist();
   if (state.user)
-    syncProfile({ ...state.profile, ...state.privacy }).catch(() =>
-      notify("Privacy saved locally; cloud sync failed"),
-    );
-  notify("Privacy settings saved");
+    syncProfile({ ...state.profile, ...state.privacy }).then((res) => {
+      if (res?.error) notify(friendlyProfileError(res.error));
+      else notify("Privacy settings saved");
+    });
+  else notify("Privacy settings saved");
 }
 
 /* ---------- Privacy & Community Guidelines ---------- */

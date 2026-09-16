@@ -272,12 +272,28 @@ export async function syncProfile(profile) {
   const user = await getCurrentUser();
   if (!supabase || !user)
     return { data: null, error: new Error("Sign in to sync your profile") };
-  const row = toProfileRow(profile);
+  let row = toProfileRow(profile);
   if (!Object.keys(row).length)
     return { data: null, error: null };
-  return supabase
-    .from("profiles")
-    .upsert({ id: user.id, ...row, updated_at: new Date().toISOString() });
+  // Resilient save: if the project's migrations lag behind the app (e.g. a
+  // newer column like photo_path doesn't exist yet), drop the offending
+  // column and retry instead of failing the whole save.
+  let last = null;
+  for (let attempt = 0; attempt <= PROFILE_COLUMNS.length; attempt++) {
+    const res = await supabase
+      .from("profiles")
+      .upsert({ id: user.id, ...row, updated_at: new Date().toISOString() });
+    if (!res.error) return res;
+    last = res;
+    const m = /could not find the '([a-z_]+)' column|column "([a-z_]+)" does not exist/i.exec(
+      res.error.message || "",
+    );
+    const col = m && (m[1] || m[2]);
+    if (!col || !(col in row)) return res;
+    delete row[col];
+    if (!Object.keys(row).length) return res;
+  }
+  return last;
 }
 
 export async function loadOwnProfile() {
