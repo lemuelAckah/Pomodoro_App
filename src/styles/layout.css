@@ -378,3 +378,62 @@ button.coins:hover {
     font-size: 30px;
   }
 }
+
+/* --- Very small screens: tighten topbar, nav, and padding --- */
+@media (max-width: 560px) {
+  .main {
+    padding: 16px 14px 32px;
+  }
+  .topbar {
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 16px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+  .top-actions {
+    gap: 6px;
+  }
+  .top-icon {
+    width: 34px;
+    height: 34px;
+    font-size: 18px;
+  }
+  .coins {
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+  .avatar {
+    width: 34px;
+    height: 34px;
+  }
+  .nav {
+    gap: 4px;
+  }
+  .nav button {
+    padding: 6px 9px;
+    font-size: 11px;
+    gap: 5px;
+  }
+  .page-head {
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .section-row {
+    flex-wrap: wrap;
+  }
+  .card {
+    padding: 16px;
+    border-radius: 16px;
+  }
+  h1 {
+    font-size: clamp(24px, 5vw, 32px);
+  }
+  h2 {
+    font-size: clamp(18px, 4vw, 24px);
+  }
+  .lede {
+    font-size: 13px;
+  }
+}

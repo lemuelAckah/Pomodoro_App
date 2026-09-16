@@ -880,3 +880,278 @@ html[data-night="1"] .profile-identity {
   color: #93a096;
   font-size: 10px;
 }
+
+/* ============================================
+   MOBILE RESPONSIVENESS — Account Section
+   ============================================ */
+
+/* --- Profile modal: full-width on small screens --- */
+@media (max-width: 560px) {
+  .profile-modal {
+    max-width: none;
+    padding: 16px;
+    border-radius: 14px;
+  }
+  .profile-modal h2 {
+    font-size: 20px;
+  }
+  .profile-grid {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+  .profile-identity {
+    padding: 12px;
+    border-radius: 12px;
+  }
+  .profile-avatar-preview {
+    width: 56px;
+    height: 56px;
+    font-size: 19px;
+    margin: 10px auto 14px;
+    border-radius: 16px;
+  }
+  .profile-details {
+    gap: 0;
+  }
+  .profile-modal .field-label {
+    margin: 6px 0;
+    font-size: 11px;
+  }
+  .profile-modal .field-label .input,
+  .profile-modal .field-label .textarea {
+    padding: 9px 10px;
+    font-size: 14px;
+  }
+  .profile-modal .textarea {
+    min-height: 56px;
+    max-height: 90px;
+  }
+  .photo-row {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .photo-row .ghost {
+    font-size: 11px !important;
+    padding: 7px 10px !important;
+  }
+}
+
+/* --- Auth card & session card on mobile --- */
+@media (max-width: 560px) {
+  .auth-card {
+    padding: 18px;
+  }
+  .auth-header h2 {
+    font-size: 24px;
+  }
+  .auth-tabs {
+    margin: 16px 0;
+  }
+  .auth-tabs button {
+    padding: 8px 6px;
+    font-size: 11px;
+  }
+  .auth-box {
+    padding: 12px;
+    margin-top: 14px;
+    border-radius: 12px;
+  }
+  .auth-session {
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    border-radius: 10px;
+    text-align: center;
+  }
+  .auth-session .ghost {
+    width: 100%;
+  }
+  .auth-actions {
+    flex-direction: column;
+    gap: 6px;
+  }
+  .auth-actions .primary,
+  .auth-actions .ghost {
+    width: 100%;
+    justify-content: center;
+    text-align: center;
+    padding: 11px 14px;
+  }
+}
+
+/* --- Account page: tighten on mobile --- */
+@media (max-width: 560px) {
+  .account-hero {
+    flex-direction: column-reverse;
+    align-items: flex-start;
+    gap: 18px;
+    padding: 18px 0 24px;
+  }
+  .account-hero h1 {
+    font-size: 26px;
+    max-width: none;
+  }
+  .account-orbit {
+    width: 80px;
+    height: 80px;
+    font-size: 26px;
+    box-shadow:
+      0 0 0 12px #edf4e8,
+      0 0 0 24px #f3f7ef;
+    align-self: center;
+  }
+  .account-orbit i,
+  .account-orbit b {
+    display: none;
+  }
+  .account-layout {
+    gap: 14px;
+  }
+  .account-aside {
+    padding: 18px;
+    border-radius: 14px;
+  }
+  .security-list {
+    gap: 12px;
+  }
+  .security-list strong {
+    font-size: 11px;
+  }
+  .session-card {
+    padding: 12px;
+    border-radius: 12px;
+    flex-wrap: wrap;
+  }
+  .status-pill {
+    margin-left: 0;
+    margin-top: 6px;
+    width: 100%;
+    text-align: center;
+  }
+}
+
+/* --- Notification modal on mobile --- */
+@media (max-width: 560px) {
+  .notification-modal {
+    max-width: none;
+  }
+  .notification-modal h2 {
+    font-size: 20px;
+  }
+  .notification-list {
+    max-height: 340px;
+    gap: 7px;
+    margin: 12px 0 16px;
+  }
+  .notification {
+    padding: 10px;
+    gap: 9px;
+    border-radius: 10px;
+  }
+  .notification-ico {
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
+  }
+  .notification-ico .sicon {
+    width: 16px;
+    height: 16px;
+  }
+  .notification strong {
+    font-size: 12px;
+  }
+  .notification p {
+    font-size: 11px;
+  }
+  .section-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+}
+
+/* --- Privacy modal on mobile --- */
+@media (max-width: 560px) {
+  .privacy-modal {
+    max-width: none;
+  }
+  .privacy-hero {
+    flex-direction: column;
+    text-align: center;
+    gap: 10px;
+    padding: 14px;
+  }
+  .privacy-hero h2 {
+    font-size: 17px;
+  }
+  .privacy-crest {
+    width: 44px;
+    height: 44px;
+    font-size: 22px;
+  }
+  .privacy-sec {
+    margin-bottom: 14px;
+  }
+  .rule-card {
+    padding: 8px 10px;
+    font-size: 12px;
+    gap: 8px;
+  }
+  .rule-num {
+    width: 20px;
+    height: 20px;
+    font-size: 10px;
+  }
+  .promise-card {
+    padding: 8px 10px;
+    font-size: 11px;
+  }
+}
+
+/* --- Landing page on mobile --- */
+@media (max-width: 560px) {
+  .landing {
+    padding: 28px 16px 48px;
+  }
+  .landing-hero {
+    padding: 24px 0 22px;
+  }
+  .landing-mark {
+    width: 52px;
+    height: 52px;
+    font-size: 24px;
+  }
+}
+
+/* --- Wipe confirmation modal on mobile --- */
+@media (max-width: 560px) {
+  .st-confirm h2 {
+    font-size: 18px;
+  }
+  .st-confirm .modal-actions {
+    flex-direction: column;
+    gap: 6px;
+  }
+  .st-confirm .modal-actions .ghost,
+  .st-confirm .modal-actions .danger-button {
+    width: 100%;
+    justify-content: center;
+    text-align: center;
+    padding: 11px 14px;
+  }
+}
+
+/* --- General modal actions on mobile --- */
+@media (max-width: 560px) {
+  .modal-actions {
+    flex-direction: column;
+    gap: 6px;
+  }
+  .modal-actions .ghost,
+  .modal-actions .primary {
+    width: 100%;
+    justify-content: center;
+    text-align: center;
+    padding: 11px 14px;
+  }
+}

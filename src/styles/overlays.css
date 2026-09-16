@@ -189,6 +189,17 @@
   margin: auto 0;
 }
 
+@media (max-width: 560px) {
+  .modal-backdrop {
+    padding: 12px;
+    align-items: start;
+  }
+  .modal {
+    border-radius: 14px;
+    padding: 18px;
+  }
+}
+
 .toast {
   position: fixed;
   right: 20px;
