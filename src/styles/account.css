@@ -705,12 +705,6 @@ html[data-night="1"] .profile-identity {
   font-size: 14px;
 }
 
-.auth-box .agree-row {
-  margin: 14px 0 6px;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
 .auth-actions {
   display: flex;
   gap: 8px;
@@ -824,6 +818,36 @@ html[data-night="1"] .profile-identity {
   margin-top: 2px;
   flex: none;
   accent-color: var(--sage);
+}
+
+/* Standalone privacy consent — sits below the auth box, giving the
+   sign-up form full breathing room above. */
+.privacy-consent {
+  margin-top: 16px;
+  padding: 14px 16px;
+  background: #f7faf5;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.privacy-consent .agree-row {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.privacy-consent .agree-row input[type="checkbox"] {
+  width: 17px;
+  height: 17px;
+}
+
+@media (max-width: 560px) {
+  .privacy-consent {
+    padding: 12px 14px;
+    margin-top: 14px;
+    border-radius: 10px;
+  }
+  .privacy-consent .agree-row {
+    font-size: 12px;
+  }
 }
 .linklike {
   background: none;
@@ -1051,9 +1075,6 @@ html[data-night="1"] .profile-identity {
   .auth-box .field-label .input {
     padding: 10px 11px;
     font-size: 15px;
-  }
-  .auth-box .agree-row {
-    font-size: 11px;
   }
   .auth-session {
     flex-direction: column;

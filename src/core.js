@@ -865,11 +865,18 @@ if (!window.__sfGrowBound) {
 }
 
 function notify(text) {
-  const node = document.createElement("div");
-  node.className = "toast";
-  node.innerHTML = text;
-  document.body.append(node);
-  setTimeout(() => node.remove(), 2600);
+  const existing = document.querySelector(".notify-dialog");
+  if (existing) existing.remove();
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop notify-dialog";
+  backdrop.innerHTML = `<div class="modal notify-modal"><div class="notify-icon">${sicon("bell")}</div><p class="notify-text">${text}</p><button class="primary notify-ok">OK</button></div>`;
+  document.body.append(backdrop);
+  const close = () => backdrop.remove();
+  backdrop.querySelector(".notify-ok").onclick = close;
+  backdrop.addEventListener("click", (e) => {
+    if (e.target === backdrop) close();
+  });
+  backdrop.querySelector(".notify-ok").focus();
 }
 
 function notifOn(key) {
