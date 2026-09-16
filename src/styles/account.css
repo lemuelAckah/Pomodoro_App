@@ -69,15 +69,9 @@
   left: 18px;
 }
 
-.account-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(260px, 0.7fr);
-  gap: 18px;
-  align-items: start;
-}
-
 .auth-card {
   padding: 30px;
+  max-width: 680px;
 }
 
 .auth-header {
@@ -171,54 +165,6 @@
   font-size: 12px;
   color: var(--muted);
   margin: 18px 0 0;
-}
-
-.account-aside {
-  background: #18352a;
-  color: #eaf3e9;
-  border-radius: 20px;
-  padding: 25px;
-  box-shadow: var(--shadow);
-}
-
-.security-list {
-  display: grid;
-  gap: 15px;
-  margin-top: 22px;
-}
-
-.security-list > div {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-}
-
-.security-list span {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: #b8d77c;
-  color: #18352a;
-  display: grid;
-  place-items: center;
-  font-weight: 700;
-}
-
-.security-list p {
-  margin: 0;
-}
-
-.security-list strong {
-  display: block;
-  font-size: 12px;
-}
-
-.security-list small {
-  display: block;
-  color: #b7d0bd;
-  font-size: 11px;
-  margin-top: 3px;
-  line-height: 1.35;
 }
 
 .session-card {
@@ -1123,19 +1069,6 @@ html[data-night="1"] .profile-identity {
   .account-orbit i,
   .account-orbit b {
     display: none;
-  }
-  .account-layout {
-    gap: 14px;
-  }
-  .account-aside {
-    padding: 18px;
-    border-radius: 14px;
-  }
-  .security-list {
-    gap: 12px;
-  }
-  .security-list strong {
-    font-size: 11px;
   }
   .session-card {
     padding: 12px;

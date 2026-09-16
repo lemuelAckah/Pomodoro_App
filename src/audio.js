@@ -2,7 +2,7 @@
 import {
   state, $, $$, uid, get, save, esc, sicon, persist, notify, addCoins,
   fmtClock, fmtSize, iconStar, bindFavorites, checkReminder, confirmBox, viewHead,
-  updateBarPadding,
+  updateBarPadding, makeDraggable,
 } from "./core.js";
 import { renderFavorites } from "./techniques.js";
 import {
@@ -617,6 +617,7 @@ function renderNowPlaying() {
   if (p.shuffle) bar.classList.add("np-shuffle-on");
   if (p.repeat !== "off") bar.classList.add("np-repeat-on");
   bindNowPlaying(bar);
+  makeDraggable(bar, bar.querySelector(".np-controls") || bar);
   updateBarPadding();
 }
 
@@ -641,6 +642,7 @@ function renderMiniPlayer(track, st) {
     state.playerHidden = false;
     renderNowPlaying();
   };
+  makeDraggable(mini, mini);
   updateBarPadding();
 }
 

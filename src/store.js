@@ -1918,15 +1918,9 @@ function renderStore() {
         renderStore();
       }),
   );
-  $$("[data-info]", t).forEach(
-    (b) =>
-      (b.onclick = (e) => {
-        // Don't toggle-select the card underneath. Hover already shows the
-        // tooltip via CSS; on touch screens there is no hover, so say it aloud.
-        e.stopPropagation();
-        if (b.dataset.tip) notify(esc(b.dataset.tip));
-      }),
-  );
+  $$("[data-info]", t).forEach((b) => {
+    b.addEventListener("click", (e) => e.stopPropagation());
+  });
   $("#checkout", t).onclick = checkout;
   bindQtySteppers(t, afterStoreQty);
   bindRecipient(t);

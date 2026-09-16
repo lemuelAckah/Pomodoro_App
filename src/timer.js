@@ -2,7 +2,7 @@
 import {
   state, $, $$, uid, get, save, esc, sicon, persist, notify, confirmBox, viewHead,
   addCoins, fmt, fmtDur, dayKey, celebrate, addNotification, browserNotify,
-  ensureNotifyPermission, notifOn, updateBarPadding,
+  ensureNotifyPermission, notifOn, updateBarPadding, makeDraggable,
 } from "./core.js";
 import { playChime, stopAllLayers, startAmbient, applyLinkToTimer, warmAudio } from "./audio.js";
 import { techniques, TECH_DETAILS, matchTech, totalDue, applyTechPreset } from "./techniques.js";
@@ -1042,6 +1042,8 @@ function renderMiniTimer() {
     persist();
     shell();
   };
+  const miniEl = root.querySelector(".mini-timer");
+  if (miniEl) makeDraggable(miniEl, miniEl);
   updateBarPadding();
 }
 

@@ -786,7 +786,7 @@ function eventMarkup() {
     const pend = (e.invites || []).filter((i) => i.status === "pending").length;
     const going = (e.invites || []).filter((i) => i.status === "accepted").length + (e.mine ? 1 : 0);
     return `<div class="event-row pro"><div><strong>${sicon("calendar")} ${esc(e.title)}</strong><br><small class="muted">${eventWhen(e)} · ${e.durationMin} min${g ? ` · ${esc(g.name)}` : ""}${e.visibility === "friends" ? ` · ${sicon("lock")} friends` : ""} · ${going} going</small>${(e.invites || []).length ? `<div class="invite-chips">${e.invites.map((i) => `<span class="invite-chip ${i.status}">@${esc(i.username)} · ${i.status === "accepted" ? "in " + sicon("check") : i.status === "declined" ? "out" : "invited…"}</span>`).join("")}</div>` : ""}</div><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${live ? `<span class="tag">● LIVE</span><button class="primary" data-event-start="${e.id}" style="padding:8px 12px;font-size:12px">Start</button>` : ""}<button class="${e.mine ? "ghost" : "primary"}" data-event-rsvp="${e.id}" style="padding:8px 12px;font-size:12px">${e.mine ? "Going " + sicon("check") : "RSVP"}</button>${owner ? `${pend ? `<button class="ghost" data-event-nudge="${e.id}" style="padding:8px 12px;font-size:12px" title="Simulate a friend replying now">Nudge</button>` : ""}<button class="delete" data-event-del="${e.id}" title="Remove">×</button>` : ""}</div></div>`;
-  }).join("") : '<p class="muted">Nothing scheduled. Put study on the calendar and show up.</p>'}<div class="section-row" style="margin-top:14px"><h3>New session</h3><span class="tag">you host</span></div><div class="grid two"><input class="input" id="ev-title" placeholder="e.g. Calc sprint"><select class="select" id="ev-aud" aria-label="Who is this for"><option value="self">Just me</option><option value="group">A group</option><option value="friends">Specific friends</option></select><select class="select" id="ev-group"><option value="">No group</option>${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("")}</select><input class="input" id="ev-at" type="datetime-local" aria-label="Date and time"><select class="select" id="ev-dur"><option value="15">15 min</option><option value="25" selected>25 min</option><option value="30">30 min</option><option value="50">50 min</option><option value="60">60 min</option><option value="90">90 min</option></select></div><p class="muted" style="margin:8px 0 0">Friends get an invite they can accept or decline — replies land here and on your Focus desk.</p><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center;position:relative"><button class="primary" id="ev-create">Schedule</button><button class="ghost" id="ev-crew-toggle" type="button" hidden></button><div class="friend-pick drop" id="ev-friends" hidden><div class="eyebrow" style="margin-bottom:6px">Pick friends</div>${(state.friends || []).map((f) => `<label class="pick-row"><input type="checkbox" value="${f.id}"> <span class="crew-avatar sm">${esc((f.username || "?")[0].toUpperCase())}</span> @${esc(f.username)}</label>`).join("") || '<p class="muted">No friends yet — add some in the Friends tab first.</p>'}</div></div></div>`;
+  }).join("") : '<p class="muted">Nothing scheduled. Put study on the calendar and show up.</p>'}<div class="section-row" style="margin-top:14px"><h3>New session</h3><span class="tag">you host</span></div><div class="grid two"><input class="input" id="ev-title" placeholder="e.g. Calc sprint"><select class="select" id="ev-aud" aria-label="Who is this for"><option value="self">Just me</option><option value="group">A group</option><option value="friends">Specific friends</option></select><select class="select" id="ev-group"><option value="">No group</option>${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("")}</select><label class="field-label ev-datetime-label">${sicon("calendar")} Date & time<input class="input" id="ev-at" type="datetime-local" aria-label="Date and time"></label><select class="select" id="ev-dur"><option value="15">15 min</option><option value="25" selected>25 min</option><option value="30">30 min</option><option value="50">50 min</option><option value="60">60 min</option><option value="90">90 min</option></select></div><p class="muted" style="margin:8px 0 0">Friends get an invite they can accept or decline — replies land here and on your Focus desk.</p><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center;position:relative"><button class="primary" id="ev-create">Schedule</button><button class="ghost" id="ev-crew-toggle" type="button" hidden></button><div class="friend-pick drop" id="ev-friends" hidden><div class="eyebrow" style="margin-bottom:6px">Pick friends</div>${(state.friends || []).map((f) => `<label class="pick-row"><input type="checkbox" value="${f.id}"> <span class="crew-avatar sm">${esc((f.username || "?")[0].toUpperCase())}</span> @${esc(f.username)}</label>`).join("") || '<p class="muted">No friends yet — add some in the Friends tab first.</p>'}</div></div></div>`;
 }
 
 /* ---------- scheduled sessions pro: friends invites, host controls ---------- */
@@ -3041,7 +3041,7 @@ function chatMarkup(id) {
   const nav = groupNav && groupNav.id === id && groupNav.matches.length
     ? `<div class="msg-nav"><button data-gnav="prev" aria-label="Previous match">‹</button><span>${groupNav.pos + 1} / ${groupNav.matches.length}</span><button data-gnav="next" aria-label="Next match">›</button><button data-gnav="close" aria-label="Close search navigation">×</button></div>`
     : "";
-  return `<div class="chat-head"><div><strong>${esc(target?.name || "@" + target?.username)}</strong>${mutedTag}${typing}${presence}</div><span class="friend-actions"><button class="primary" data-start-call="${id}" style="padding:8px 12px;font-size:11px">Video call</button>${isFriendChat ? `<span class="post-menu-wrap"><button class="icon-btn" data-chat-menu="${id}" title="Conversation options" aria-label="Conversation options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden><button data-chat-block="${id}">Block user</button></span></span>` : ""}${isGroup && !isFriendChat ? `<span class="post-menu-wrap"><button class="icon-btn" data-chat-menu="${id}" title="Group options" aria-label="Group options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden>${groupMenuMarkup(id)}</span></span>` : ""}</span></div>${pinbar}${nav}<div class="chat-body">${msgs.map((m, i) => `<div class="bubble ${m.me ? "me" : ""}" data-midx="${i}">${messageHtml(m)}</div>`).join("") || '<span class="muted">No messages yet. Start the conversation.</span>'}</div>${reply}${rec}<div class="chat-input"><label class="icon-btn" style="display:grid;place-items:center"><input type="file" id="chat-file" hidden>${sicon("clip")}</label><button class="icon-btn" id="poll-button" title="Create a poll">${sicon("chart")}</button><button class="icon-btn" id="voice-button" title="Voice message">${sicon("mic")}</button><textarea class="input autogrow chat-textarea" id="chat-text" rows="1" data-grow-max="150" placeholder="Type a message (Shift + Enter for a new line)" aria-label="Type a message"></textarea><button class="primary" id="send-message">Send</button></div>`;
+  return `<div class="chat-head"><div><strong>${esc(target?.name || "@" + target?.username)}</strong>${mutedTag}${typing}${presence}</div><span class="friend-actions"><button class="primary" data-start-call="${id}" style="padding:8px 12px;font-size:11px">Video call</button>${isFriendChat ? `<span class="post-menu-wrap"><button class="icon-btn" data-chat-menu="${id}" title="Conversation options" aria-label="Conversation options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden><button data-chat-block="${id}">Block user</button></span></span>` : ""}${isGroup && !isFriendChat ? `<span class="post-menu-wrap"><button class="icon-btn" data-chat-menu="${id}" title="Group options" aria-label="Group options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden>${groupMenuMarkup(id)}</span></span>` : ""}</span></div>${pinbar}${nav}<div class="chat-body">${msgs.map((m, i) => `<div class="bubble ${m.me ? "me" : ""}" data-midx="${i}">${messageHtml(m)}</div>`).join("") || '<span class="muted">No messages yet. Start the conversation.</span>'}</div>${reply}${rec}<div class="chat-input"><textarea class="input autogrow chat-textarea" id="chat-text" rows="1" data-grow-max="150" placeholder="Type a message (Shift + Enter for a new line)" aria-label="Type a message"></textarea><div class="chat-extras-wrap"><button class="icon-btn chat-extras-toggle" data-chat-extras title="Attach, poll or voice" aria-label="Attach, poll or voice"><span class="chat-extras-dots">⋯</span></button><div class="chat-extras-menu" data-chat-extras-pop hidden><label class="chat-extras-item" style="display:grid;place-items:center;cursor:pointer"><input type="file" id="chat-file" hidden>${sicon("clip")} <span>File</span></label><button class="chat-extras-item" id="poll-button">${sicon("chart")} <span>Poll</span></button><button class="chat-extras-item" id="voice-button">${sicon("mic")} <span>Voice</span></button></div></div><button class="primary" id="send-message">Send</button></div>`;
 }
 
 function bindChat(root, id) {
@@ -3181,6 +3181,23 @@ function bindChat(root, id) {
     };
     reader.readAsDataURL(file);
   };
+  const extrasToggle = $("[data-chat-extras]", root);
+  const extrasPop = $("[data-chat-extras-pop]", root);
+  if (extrasToggle && extrasPop) {
+    extrasToggle.onclick = (e) => {
+      e.stopPropagation();
+      const open = !extrasPop.hidden;
+      extrasPop.hidden = open;
+      extrasToggle.setAttribute("aria-expanded", !open);
+    };
+    extrasPop.onclick = (e) => e.stopPropagation();
+    root.addEventListener("click", (e) => {
+      if (!extrasPop.contains(e.target) && e.target !== extrasToggle) {
+        extrasPop.hidden = true;
+        extrasToggle.setAttribute("aria-expanded", "false");
+      }
+    });
+  }
   $("#poll-button", root).onclick = () => openPollBuilder(id, root);
   $("#voice-button", root).onclick = () => {
     if (voiceRec) stopRecording("send");
@@ -4283,6 +4300,7 @@ function renderCall() {
       <div class="call-ctrl-group">
         <button class="call-btn round ${state.callMuted ? "off" : ""}" data-mute title="${state.callMuted ? "Unmute microphone" : "Mute microphone"}" aria-pressed="${Boolean(state.callMuted)}" aria-label="Microphone">${state.callMuted ? sicon("mute") : sicon("mic")}</button>
         <button class="call-btn round ${state.callCameraOff ? "off" : ""}" data-camera title="${state.callCameraOff ? "Turn camera on" : "Turn camera off"}" aria-pressed="${Boolean(state.callCameraOff)}" aria-label="Camera">${sicon("camera")}</button>
+        <button class="call-btn round" data-flip-camera title="Flip camera" aria-label="Flip camera">${sicon("refresh")}</button>
         <button class="call-btn round" data-share title="Share your screen" aria-label="Share screen">${sicon("upload")}</button>
         <button class="call-btn round" data-call-chat title="Open chat" aria-label="Open chat">${sicon("chat")}</button>
         <button class="call-btn round hang" data-end title="Leave call" aria-label="Leave call">${sicon("phone")}</button>
@@ -4327,6 +4345,28 @@ function renderCall() {
     activeCallStream?.getVideoTracks().forEach((t) => (t.enabled = !state.callCameraOff));
     renderCall();
   };
+  $(`[data-flip-camera]`, call)?.addEventListener("click", async () => {
+    try {
+      const videoTrack = activeCallStream?.getVideoTracks()[0];
+      if (!videoTrack) return notify("No camera active to flip");
+      const devices = await navigator.mediaDevices?.enumerateDevices();
+      const cams = (devices || []).filter((d) => d.kind === "videoinput");
+      if (cams.length < 2) return notify("Only one camera found");
+      const curId = videoTrack.getSettings().deviceId;
+      const next = cams.find((d) => d.deviceId !== curId) || cams[0];
+      const newStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: next.deviceId } } });
+      const newTrack = newStream.getVideoTracks()[0];
+      activePeer?.peer.getSenders().forEach((s) => {
+        if (s.track?.kind === "video") s.replaceTrack(newTrack).catch(() => {});
+      });
+      videoTrack.stop();
+      activeCallStream.removeTrack(videoTrack);
+      activeCallStream.addTrack(newTrack);
+      renderCall();
+    } catch (err) {
+      notify("Could not flip camera: " + (err.message || "unknown error"));
+    }
+  });
   $(`[data-share]`, call).onclick = async () => {
     try {
       const display = await navigator.mediaDevices?.getDisplayMedia({ video: true });
@@ -4361,6 +4401,24 @@ function renderCall() {
     state.callMinimized = !state.callMinimized;
     renderCall();
   };
+  if (minimized) {
+    const stage = $("[data-call-stage]", call);
+    if (stage) {
+      let dragging = false, startX, startY, origX, origY;
+      const onMove = (e) => {
+        if (!dragging) return;
+        const cx = e.touches ? e.touches[0].clientX : e.clientX;
+        const cy = e.touches ? e.touches[0].clientY : e.clientY;
+        call.style.right = "auto";
+        call.style.bottom = "auto";
+        call.style.left = (origX + cx - startX) + "px";
+        call.style.top = (origY + cy - startY) + "px";
+      };
+      const onUp = () => { dragging = false; document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseup", onUp); document.removeEventListener("touchmove", onMove); document.removeEventListener("touchend", onUp); };
+      stage.addEventListener("mousedown", (e) => { dragging = true; startX = e.clientX; startY = e.clientY; origX = call.offsetLeft; origY = call.offsetTop; document.addEventListener("mousemove", onMove); document.addEventListener("mouseup", onUp); });
+      stage.addEventListener("touchstart", (e) => { dragging = true; startX = e.touches[0].clientX; startY = e.touches[0].clientY; origX = call.offsetLeft; origY = call.offsetTop; document.addEventListener("touchmove", onMove, { passive: true }); document.addEventListener("touchend", onUp); }, { passive: true });
+    }
+  }
   $$("[data-end]", call).forEach(
     (b) =>
       (b.onclick = () => {

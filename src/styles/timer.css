@@ -44,6 +44,7 @@
   /* Promote to own compositing layer so modal scroll never reflows us */
   will-change: transform;
   transform: translateZ(0);
+  isolation: isolate;
 }
 
 .timer-ring:after {
@@ -52,11 +53,12 @@
   inset: 12px;
   border-radius: 50%;
   background: var(--panel);
+  z-index: 0;
 }
 
 .time {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   font:
     700 clamp(44px, 7vw, 74px) "Space Mono",
     monospace;
@@ -71,7 +73,7 @@
   font-weight: 700;
   margin-top: 8px;
   position: relative;
-  z-index: 1;
+  z-index: 2;
 }
 
 .timer-actions {

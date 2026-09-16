@@ -1044,6 +1044,13 @@ html[data-night="1"] .pin-entry-main {
   height: 226px;
   border-radius: 18px;
   animation: call-pop 0.22s ease;
+  cursor: default;
+}
+.call-window.minimized [data-call-stage] {
+  cursor: grab;
+}
+.call-window.minimized [data-call-stage]:active {
+  cursor: grabbing;
 }
 .call-window.minimized .call-stage { padding: 10px; }
 .call-window.minimized .call-tile.self {
@@ -1080,18 +1087,23 @@ html[data-night="1"] .pin-entry-main {
     height: 190px;
   }
   .call-tile.self {
-    width: 120px;
-    right: 16px;
-    bottom: 16px;
+    width: 100px;
+    right: 12px;
+    bottom: 12px;
+    border-radius: 12px;
   }
   .call-head {
     padding: 10px 12px;
     gap: 8px;
   }
+  .call-head-actions {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
   .call-quality { display: none; }
-  .call-controls { padding: 10px 12px; gap: 8px; }
-  .call-btn { width: 40px; height: 40px; }
-  .call-btn.primary.tall { height: 42px; padding: 0 16px; font-size: 13px; }
+  .call-controls { padding: 10px 8px; gap: 6px; flex-wrap: wrap; justify-content: center; }
+  .call-btn { width: 36px; height: 36px; font-size: 13px; }
+  .call-btn.primary.tall { height: 38px; padding: 0 14px; font-size: 12px; }
   .tile-avatar { width: 84px; height: 84px; font-size: 44px; }
 }
 

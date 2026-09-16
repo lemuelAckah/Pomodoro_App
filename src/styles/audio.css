@@ -130,6 +130,16 @@
   padding: 10px 16px;
   box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.22);
   animation: mini-slide-up 0.25s ease-out;
+  cursor: grab;
+}
+#now-playing:active {
+  cursor: grabbing;
+}
+#now-playing .np-controls {
+  cursor: grab;
+}
+#now-playing .np-controls:active {
+  cursor: grabbing;
 }
 .np-controls {
   display: flex;
@@ -256,6 +266,10 @@
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
   animation: mini-slide-up 0.2s ease-out;
   max-width: 260px;
+  cursor: grab;
+}
+#np-mini:active {
+  cursor: grabbing;
 }
 .np-mini-btn {
   background: transparent;
