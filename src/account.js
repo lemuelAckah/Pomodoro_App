@@ -6,9 +6,10 @@ import {
 } from "./core.js";
 import {
   signUpWithEmail, signInWithEmail, resendVerification, requestPasswordReset,
+  friendlyAuthError,
   updatePassword, signInWithProvider, signOut, getCurrentUser, syncProfile,
   uploadAvatar, removeAvatar, avatarPublicUrl,
-  uploadUserFile, deleteMyBackendData, backendConfigured,
+  uploadUserFile, deleteMyBackendData, backendConfigured, hasActiveSession,
 } from "./services/backend.js";
 import { CHIMES, playChime, clearSongDatabase, stopAllLayers } from "./audio.js";
 import { applyDurations, haltTimer, durations, renderTimer, sessionInProgress, timerHandle } from "./timer.js";
@@ -191,13 +192,35 @@ async function authenticate(modal, createAccount) {
   if (!email || !password) return notify("Enter your email and password");
   if (createAccount && !$("#auth-privacy", modal)?.checked)
     return notify("Tick the Privacy & Guidelines box to create your account");
-  const result = createAccount
-    ? await signUpWithEmail(email, password, state.profile)
-    : await signInWithEmail(email, password);
+  const submitBtn = $("[data-auth-submit]", modal) || $(".primary", modal);
+  const originalLabel = submitBtn?.textContent || "";
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = createAccount ? "Creating account…" : "Signing in…";
+  }
+  let result;
+  try {
+    result = createAccount
+      ? await signUpWithEmail(email, password, state.profile)
+      : await signInWithEmail(email, password);
+  } catch (err) {
+    result = { error: err };
+  } finally {
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = originalLabel;
+    }
+  }
   if (result.error)
-    return notify(createAccount ? friendlySignupError(result.error) : result.error.message);
+    return notify(createAccount ? friendlySignupError(result.error) : friendlyAuthError(result.error));
   if (createAccount) markPrivacyAccepted();
   state.user = result.data?.user || (await getCurrentUser());
+  // No session yet (email confirmation required): don't hydrate or pretend
+  // we're signed in — tell the user what to do next.
+  if (!state.user || !(await hasActiveSession())) {
+    state.user = null;
+    return notify("Almost there — confirm your email first, then sign in.");
+  }
   await hydrateCloudState(state.user);
   persist();
   modal.remove();
@@ -489,7 +512,7 @@ function bindAccount(root) {
       : await signInWithEmail(email, password);
     if (result.error) {
       done();
-      return notify(result.error.message);
+      return notify(friendlyAuthError(result.error));
     }
     if (create) {
       if (profileExtras.name && state.profile.name === "Study Learner")
@@ -502,20 +525,23 @@ function bindAccount(root) {
       markPrivacyAccepted();
     }
     state.user = result.data?.user || (await getCurrentUser());
-    await hydrateCloudState(state.user);
-    notify(
-      create
-        ? "Account created. Check your email to verify it."
-        : "Signed in successfully",
-    );
+    // When email confirmation is required, signUp returns the user but there
+    // is NO session — hydrateCloudState would only misfire a sync error.
+    if (await hasActiveSession()) {
+      await hydrateCloudState(state.user);
+      notify(create ? "Account created" : "Signed in successfully");
+    } else {
+      notify("Account created — check your email for the confirmation link, then sign in.");
+      state.user = null;
+    }
     renderAccount();
   });
   $("[data-reset-password]", root)?.addEventListener("click", async () => {
     const email = $("#account-email", root).value.trim();
     if (!email) return notify("Enter your email first");
     const result = await requestPasswordReset(email);
-    if (result.error) return notify(result.error.message);
-    notify("Password reset link sent");
+    if (result.error) return notify(friendlyAuthError(result.error));
+    notify("Password reset link sent — check your inbox");
   });
   $$("[data-provider]", root).forEach(
     (button) =>
@@ -523,7 +549,7 @@ function bindAccount(root) {
         if (state.accountView === "create" && !$("#account-privacy", root)?.checked)
           return notify("Tick the Privacy & Guidelines box to create your account");
         const result = await signInWithProvider(button.dataset.provider);
-        if (result.error) notify(result.error.message);
+        if (result.error) notify(friendlyAuthError(result.error));
         else if (state.accountView === "create") markPrivacyAccepted();
       }),
   );
@@ -531,11 +557,11 @@ function bindAccount(root) {
     const email = $("#account-email", root).value.trim();
     if (!email) return notify("Enter your email first");
     const result = await resendVerification(email);
-    notify(result.error ? result.error.message : "Verification email sent");
+    notify(result.error ? friendlyAuthError(result.error) : "Verification email sent — check your inbox");
   });
   $("[data-resend-account]", root)?.addEventListener("click", async () => {
     const result = await resendVerification(state.user?.email);
-    notify(result.error ? result.error.message : "Verification email sent");
+    notify(result.error ? friendlyAuthError(result.error) : "Verification email sent — check your inbox");
   });
   $("[data-profile-modal]", root)?.addEventListener("click", openProfile);
   $$("[data-complete-profile]", root).forEach(
@@ -905,7 +931,7 @@ function bindSettings(root) {
     if (next.length < 6) return notify("Password must be at least 6 characters");
     if (next !== confirm) return notify("Passwords do not match");
     const result = await updatePassword(next);
-    if (result.error) return notify(result.error.message);
+    if (result.error) return notify(friendlyAuthError(result.error));
     $("#set-new-password", root).value = "";
     $("#set-confirm-password", root).value = "";
     notify("Password updated");
@@ -914,7 +940,7 @@ function bindSettings(root) {
     const email = $("#set-reset-email", root)?.value.trim();
     if (!email) return notify("Enter your email first");
     const result = await requestPasswordReset(email);
-    notify(result.error ? result.error.message : "Password reset link sent");
+    notify(result.error ? friendlyAuthError(result.error) : "Password reset link sent — check your inbox");
   });
   $("#set-chime", root)?.addEventListener("change", (e) => {
     state.chimeStyle = e.target.value;

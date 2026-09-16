@@ -160,12 +160,11 @@ function openFocusView() {
   closeFocusView();
   const overlay = document.createElement("div");
   overlay.id = "focus-view";
-  overlay.innerHTML = `<div class="eyebrow">${modeLabels[state.mode]} · nothing else</div><div class="timer-ring" data-spiral="1" style="--progress:${(state.time / durations[state.mode]) * 360}deg"><div><div class="time">${fmt(state.time)}</div><div class="timer-label">${modeLabels[state.mode]}</div></div></div><div class="timer-actions"><button class="primary" data-toggle>${state.running ? "Pause" : "Start session"}</button></div><button class="ghost focus-exit" data-focus-exit>${sicon("x")} Exit focus (Esc)</button>`;
+  overlay.innerHTML = `<div class="eyebrow">${modeLabels[state.mode]} · nothing else</div><div class="timer-ring" style="--progress:${(state.time / durations[state.mode]) * 360}deg"><div><div class="time">${fmt(state.time)}</div><div class="timer-label">${modeLabels[state.mode]}</div></div></div><div class="timer-actions"><button class="primary" data-toggle>${state.running ? "Pause" : "Start session"}</button></div><button class="ghost focus-exit" data-focus-exit>${sicon("x")} Exit focus (Esc)</button>`;
   document.body.append(overlay);
   document.body.style.overflow = "hidden";
   $("[data-toggle]", overlay).onclick = () => toggleTimer();
   $("[data-focus-exit]", overlay).onclick = () => closeFocusView();
-  updateSpiralState();
 }
 
 function closeFocusView() {
@@ -215,7 +214,7 @@ function renderTimer() {
     )
     .join(
       "",
-    )}</div><div class="template-row">${TIMER_TEMPLATES.map((p) => `<button class="template-chip" data-template="${p.id}" title="Focus ${p.focus}:${String(p.focusSec ?? 0).padStart(2, "0")} · break ${p.short}:${String(p.shortSec ?? 0).padStart(2, "0")}">${p.name}</button>`).join("")}</div><div class="dur-row"><label class="field-label">Minutes<input class="input dur-input" id="dur-min" type="number" min="0" max="180" step="1" value="${Math.floor(durations[state.mode] / 60)}" aria-label="Custom minutes"></label><label class="field-label">Seconds<input class="input dur-input" id="dur-sec" type="number" min="0" max="59" step="1" value="${durations[state.mode] % 60}" aria-label="Custom seconds"></label><button class="ghost" data-set-dur title="Apply to ${modeLabels[state.mode]}">Set duration</button></div>${challengeLockBanner()}<div class="focus-live off" data-focus-live><span class="live-dot"></span>Focus live — leaving this page resets the session</div>${techTagMarkup()}<div class="timer-ring" data-spiral="1" style="--progress:${(state.time / durations[state.mode]) * 360}deg"><div><div class="time">${fmt(state.time)}</div><div class="timer-label">${modeLabels[state.mode]}</div></div></div><div class="timer-actions"><button class="icon-btn" data-reset title="Reset">↻</button><button class="primary" data-toggle>${state.running ? "Pause" : "Start session"}</button><button class="icon-btn" data-focusview title="Focus mode — just the timer">${sicon("expand")}</button></div><div class="muted" style="margin-top:36px">${state.sessions % 4}/4 sessions until a long break</div></div><div class="card tasks-card"><div class="section-row"><h2>Today’s tasks</h2><span class="tag" data-task-count>${state.tasks.filter((t) => t.done).length}/${state.tasks.length} complete</span></div><div class="input-row"><input class="input" id="task-input" placeholder="What are you working on?"><button class="primary" data-add-task>+</button></div><div id="task-list">${state.tasks.length ? state.tasks.map(taskRow).join("") : '<p class="muted" style="padding:25px 0">Your task list is clear. Add one small next step.</p>'}</div></div></div><div class="grid four stats"><div class="card stat"><span>Sessions</span><strong>${state.sessions}</strong><span>all time</span></div><div class="card stat"><span>Coins</span><strong data-coin="stat">${state.coins}</strong><span>available to spend</span></div><div class="card stat"><span>Tasks</span><strong>${state.tasks.filter((t) => t.done).length}</strong><span>completed</span></div><div class="card stat"><span>Focus streak</span><strong>${state.streak.count}</strong>${streakDots()}<span>day streak</span></div></div>${missionDeskMarkup()}${techOfDayMarkup()}${gardenMarkup()}${recordsMarkup()}${achievementsCabinetMarkup()}`;
+    )}</div><div class="template-row">${TIMER_TEMPLATES.map((p) => `<button class="template-chip" data-template="${p.id}" title="Focus ${p.focus}:${String(p.focusSec ?? 0).padStart(2, "0")} · break ${p.short}:${String(p.shortSec ?? 0).padStart(2, "0")}">${p.name}</button>`).join("")}</div><div class="dur-row"><label class="field-label">Minutes<input class="input dur-input" id="dur-min" type="number" min="0" max="180" step="1" value="${Math.floor(durations[state.mode] / 60)}" aria-label="Custom minutes"></label><label class="field-label">Seconds<input class="input dur-input" id="dur-sec" type="number" min="0" max="59" step="1" value="${durations[state.mode] % 60}" aria-label="Custom seconds"></label><button class="ghost" data-set-dur title="Apply to ${modeLabels[state.mode]}">Set duration</button></div>${challengeLockBanner()}<div class="focus-live off" data-focus-live><span class="live-dot"></span>Focus live — leaving this page resets the session</div>${techTagMarkup()}<div class="timer-ring" style="--progress:${(state.time / durations[state.mode]) * 360}deg"><div><div class="time">${fmt(state.time)}</div><div class="timer-label">${modeLabels[state.mode]}</div></div></div><div class="timer-actions"><button class="icon-btn" data-reset title="Reset">↻</button><button class="primary" data-toggle>${state.running ? "Pause" : "Start session"}</button><button class="icon-btn" data-focusview title="Focus mode — just the timer">${sicon("expand")}</button></div><div class="muted" style="margin-top:36px">${state.sessions % 4}/4 sessions until a long break</div></div><div class="card tasks-card"><div class="section-row"><h2>Today’s tasks</h2><span class="tag" data-task-count>${state.tasks.filter((t) => t.done).length}/${state.tasks.length} complete</span></div><div class="input-row"><input class="input" id="task-input" placeholder="What are you working on?"><button class="primary" data-add-task>+</button></div><div id="task-list">${state.tasks.length ? state.tasks.map(taskRow).join("") : '<p class="muted" style="padding:25px 0">Your task list is clear. Add one small next step.</p>'}</div></div></div><div class="grid four stats"><div class="card stat"><span>Sessions</span><strong>${state.sessions}</strong><span>all time</span></div><div class="card stat"><span>Coins</span><strong data-coin="stat">${state.coins}</strong><span>available to spend</span></div><div class="card stat"><span>Tasks</span><strong>${state.tasks.filter((t) => t.done).length}</strong><span>completed</span></div><div class="card stat"><span>Focus streak</span><strong>${state.streak.count}</strong>${streakDots()}<span>day streak</span></div></div>${missionDeskMarkup()}${techOfDayMarkup()}${gardenMarkup()}${recordsMarkup()}${achievementsCabinetMarkup()}`;
   $$("[data-mode]", target).forEach(
     (b) =>
       (b.onclick = () => {
@@ -407,12 +406,10 @@ function achievementsCabinetMarkup() {
 function checkAchievements() {
   ACHIEVEMENTS.forEach((a) => {
     if ((state.achievements || []).includes(a.id)) return;
-    let earned = false;
-    try {
-      earned = Boolean(a.test());
-    } catch {
-      earned = false;
-    }
+    // Achievements define progress() (have/need), not test() — unlock when
+    // progress reaches the goal.
+    const p = achievementProgress(a);
+    const earned = Boolean(p && p.have >= p.need);
     if (earned) {
       state.achievements.push(a.id);
       addNotification("Achievement unlocked", a.name, a.icon || "medal");
@@ -685,7 +682,6 @@ function toggleTimer() {
   }
   persist();
   updateTimerDom();
-  updateSpiralState();
   renderMiniTimer();
 }
 
@@ -964,11 +960,6 @@ window.addEventListener("beforeunload", () => {
   persist();
 });
 
-function updateSpiralState() {
-  const on = state.mode === "focus" && state.running && !state.reduceMotion;
-  $$(".timer-ring").forEach((ring) => ring.classList.toggle("spiral-on", on));
-}
-
 function updateTimerDom() {
   $$(".timer-ring").forEach((ring) => {
     const timeEl = $(".time", ring);
@@ -983,7 +974,6 @@ function updateTimerDom() {
   $$("[data-toggle]").forEach((btn) => {
     btn.textContent = state.running ? "Pause" : "Start session";
   });
-  updateSpiralState();
   $$("[data-mini-time]").forEach((el) => {
     el.textContent = fmt(state.time);
   });

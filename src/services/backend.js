@@ -15,6 +15,36 @@ const turnServers = (import.meta.env.VITE_TURN_SERVERS || "")
     credential: import.meta.env.VITE_TURN_CREDENTIAL,
   }));
 
+// Translate raw Supabase/network errors into clear, user-friendly copy.
+// Used by every auth surface so users never see "Invalid login credentials"
+// or "Failed to fetch" verbatim.
+export function friendlyAuthError(error) {
+  const msg = String(error?.message || error || "");
+  if (/failed to fetch|networkerror|network request failed|load failed/i.test(msg))
+    return "Can't reach the server — check your internet connection and try again.";
+  if (/invalid login credentials/i.test(msg))
+    return "Email or password is incorrect. Try again or reset your password.";
+  if (/email not confirmed/i.test(msg))
+    return "Please confirm your email first — check your inbox for the verification link.";
+  if (/user already registered|already exists/i.test(msg))
+    return "An account with this email already exists — sign in instead.";
+  if (/password should be at least|weak password/i.test(msg))
+    return "Your password is too short — use at least 6 characters.";
+  if (/rate limit|too many requests/i.test(msg))
+    return "Too many attempts — wait a minute and try again.";
+  if (/signup requires a valid password/i.test(msg))
+    return "Please enter a stronger password (at least 6 characters).";
+  if (/unable to validate email|invalid email/i.test(msg))
+    return "That email address doesn't look valid — double-check it.";
+  if (/anonymous sign-ins|provider is not enabled|unsupported provider/i.test(msg))
+    return "This sign-in method isn't available yet — use email and password.";
+  if (/supabase is not configured|backend is not configured/i.test(msg))
+    return "Cloud services aren't set up on this deployment — contact support.";
+  if (/session missing|refresh_token_not_found|invalid claim/i.test(msg))
+    return "Your session expired — please sign in again.";
+  return msg.length > 160 ? "Something went wrong — please try again." : msg;
+}
+
 export async function signUpWithEmail(email, password, profile = {}) {
   if (!supabase)
     return { data: null, error: new Error("Supabase is not configured") };
@@ -216,6 +246,14 @@ export async function getCurrentUser() {
   if (!supabase) return null;
   const { data } = await supabase.auth.getUser();
   return data.user ?? null;
+}
+
+// True only when a usable session exists (signUp with "confirm email" on
+// returns a user but no session — callers must not treat that as signed in).
+export async function hasActiveSession() {
+  if (!supabase) return false;
+  const { data } = await supabase.auth.getSession();
+  return Boolean(data?.session?.access_token);
 }
 
 export function onAuthStateChange(callback) {

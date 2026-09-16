@@ -8,7 +8,7 @@ Vanilla-JS Vite app (no React runtime code despite the scaffolding deps). Entry:
    ```bash
    npm install
    ```
-2. Environment: there is **no `.env` / `.env.local` in this project** — nothing to copy. Supabase keys are optional (`src/services/backend.js` reads `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`; the app falls back to local mode when absent).
+2. Environment: a **`.env` exists in the main checkout** (it holds `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`; `.env` is gitignored — never commit it). For a fresh worktree, COPY `.env` from the main checkout rather than symlink (values may need adapting per worktree). Supabase config is optional — without it the app falls back to local-only mode.
 3. Build check (optional): `npm run build` → outputs to `dist/`.
 
 ## Run the dev server
@@ -19,7 +19,7 @@ Vanilla-JS Vite app (no React runtime code despite the scaffolding deps). Entry:
   ```powershell
   (Start-Process -FilePath 'npm.cmd' -ArgumentList 'run','dev' -RedirectStandardOutput '.freebuff\preview.log' -RedirectStandardError '.freebuff\preview.log.err' -WindowStyle Hidden -PassThru).Id
   ```
-- Verify: `curl http://localhost:8443/` returns the index.html shell.
+- Verify: `curl -s -o /dev/null -w "%{http_code}" http://localhost:8443/` returns `200` (index.html shell). A healthy server answers instantly; the title in the served HTML is `StudyFlow | Focus with intention`.
 - Production preview alternative: `npm run build` then `npm run preview` (also port 8443).
 
 ## Notes
