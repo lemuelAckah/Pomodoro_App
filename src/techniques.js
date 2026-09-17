@@ -1,7 +1,7 @@
 /* techniques.js — technique guides, pads, quizzes, favorites tab, technique check */
 import {
   state, $, $$, uid, get, save, esc, sicon, persist, notify, confirmBox, viewHead,
-  iconStar, bindFavorites, fmtDur, celebrate, checkReminder, maybeWhatsNew,
+  iconStar, bindFavorites, fmtDur, celebrate, checkReminder, maybeWhatsNew, requireAuth,
 } from "./core.js";
 import { sounds, playChime } from "./audio.js";
 import { applyDurations, durations, sessionInProgress } from "./timer.js";
@@ -818,6 +818,33 @@ function totalDue() {
   return (state.decks || []).reduce((n, d) => n + deckDue(d).length, 0);
 }
 
+// Auto-fit long titles (the alternative to wrapping): shrink the type until it
+// fits its box, then ellipsis + a tooltip with the full text. Complements the
+// global word-wrap rules — card titles stay on one line, at any length.
+function fitTitles(root = document) {
+  root.querySelectorAll("[data-fittitle]").forEach((el) => {
+    el.style.fontSize = "";
+    el.style.textOverflow = "";
+    el.removeAttribute("title");
+    if (!el.clientWidth) return; // hidden — natural wrapping applies
+    el.classList.add("fitted");
+    if (el.scrollWidth <= el.clientWidth + 1) return; // fits as-is
+    let size = parseFloat(getComputedStyle(el).fontSize) || 15;
+    const floor = Math.max(11, size * 0.7);
+    while (size > floor && el.scrollWidth > el.clientWidth + 1) {
+      size -= 1;
+      el.style.fontSize = size + "px";
+    }
+    if (el.scrollWidth > el.clientWidth + 1) {
+      el.style.textOverflow = "ellipsis";
+      el.setAttribute("title", el.textContent);
+    }
+  });
+}
+
+let deckEditId = null;
+let cardEditId = null;
+
 function findDeck(deckId) {
   return (state.decks || []).find((d) => d.id === deckId);
 }
@@ -834,12 +861,14 @@ function renderFlash(t) {
 
 function renderDeckList(t) {
   const decks = state.decks || [];
-  t.innerHTML = `<button class="ghost tech-back" data-flash-back>← Spaced guide</button>${viewHead("Flashcards", "Small decks, reviewed at the perfect moment. Miss one and it comes back soon; nail one and it waits longer.")}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>New deck</h2></div><div class="grid two"><input class="input" id="deck-name" placeholder="Deck name, e.g. Biology terms"><input class="input" id="deck-subject" placeholder="Subject (optional)"></div><button class="primary" id="deck-create" style="margin-top:12px">Create deck</button></div><div class="grid three">${decks.map((d) => { const due = deckDue(d).length; const total = (d.cards || []).length; return `<article class="card" data-deck="${d.id}" style="cursor:pointer"><div class="section-row"><h3>${esc(d.name)}</h3>${due ? `<span class="tag">${due} due</span>` : `<span class="tag">clear</span>`}</div><p class="muted" style="margin-top:8px">${esc(d.subject || "General")} · ${total} card${total === 1 ? "" : "s"}</p><div class="tech-open">Open deck →</div></article>`; }).join("") || '<p class="muted">No decks yet — create your first one above.</p>'}</div>`;
+  t.innerHTML = `<button class="ghost tech-back" data-flash-back>← Spaced guide</button>${viewHead("Flashcards", "Small decks, reviewed at the perfect moment. Miss one and it comes back soon; nail one and it waits longer — and practice mode lets you review any deck as often as you like.")}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>New deck</h2></div><div class="grid two"><input class="input" id="deck-name" placeholder="Deck name, e.g. Biology terms"><input class="input" id="deck-subject" placeholder="Subject (optional)"></div><button class="primary" id="deck-create" style="margin-top:12px">Create deck</button></div><div class="grid three">${decks.map((d) => { const due = deckDue(d).length; const total = (d.cards || []).length; return `<article class="card" data-deck="${d.id}" style="cursor:pointer"><div class="section-row"><h3 data-fittitle>${esc(d.name)}</h3>${due ? `<span class="tag">${due} due</span>` : `<span class="tag">clear</span>`}</div><p class="muted" style="margin-top:8px">${esc(d.subject || "General")} · ${total} card${total === 1 ? "" : "s"}</p><div class="tech-open">Open deck →</div><button class="delete deck-list-del" data-deck-delete="${d.id}" title="Delete deck" aria-label="Delete ${esc(d.name)}">×</button></article>`; }).join("") || '<p class="muted">No decks yet — create your first one above.</p>'}</div>`;
+  fitTitles(t);
   $("[data-flash-back]", t).onclick = () => {
     flashView = null;
     renderTechniques();
   };
   $("#deck-create", t).onclick = () => {
+    if (!requireAuth("save flashcard decks")) return;
     const name = $("#deck-name", t).value.trim();
     if (!name) return notify("Name your deck first");
     state.decks.push({
@@ -854,9 +883,23 @@ function renderDeckList(t) {
   };
   $$("[data-deck]", t).forEach(
     (card) =>
-      (card.onclick = () => {
+      (card.onclick = (e) => {
+        if (e.target.closest("[data-deck-delete]")) return;
         flashView = "deck:" + card.dataset.deck;
         renderFlash(t);
+      }),
+  );
+  $$("[data-deck-delete]", t).forEach(
+    (b) =>
+      (b.onclick = (e) => {
+        e.stopPropagation();
+        const deck = findDeck(b.dataset.deckDelete);
+        confirmBox(`Delete “${deck?.name || "deck"}”?`, "The deck and all its cards will be gone.", () => {
+          state.decks = state.decks.filter((d) => d.id !== b.dataset.deckDelete);
+          persist();
+          notify("Deck deleted");
+          renderDeckList(t);
+        });
       }),
   );
 }
@@ -869,17 +912,47 @@ function renderDeckDetail(t, deckId) {
   }
   const cards = deck.cards || [];
   const due = deckDue(deck).length;
-  t.innerHTML = `<button class="ghost tech-back" data-deck-back>← All decks</button>${viewHead(deck.name, `${esc(deck.subject || "General")} · ${cards.length} cards · ${due} due for review.`)}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Review</h2>${due ? `<span class="tag">${due} due</span>` : ""}</div><p class="muted">Due cards first. Miss one and it returns before the session ends.</p><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button class="primary" data-review-start${due ? "" : " disabled"}>Review now${due ? ` (${due})` : ""}</button><button class="ghost" data-deck-delete>Delete deck</button></div></div><div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Add a card</h2></div><div class="grid two"><input class="input" id="card-front" placeholder="Front — question or term"><input class="input" id="card-back" placeholder="Back — answer or definition"></div><button class="primary" id="card-add" style="margin-top:12px">Add card</button></div><div class="grid">${cards.map((c) => `<div class="task"><span class="task-text"><strong>${esc(c.front)}</strong><br><span class="muted">tap Review to test yourself — answer hidden</span></span><span class="task-meta">Box ${c.box || 1}${c.nextDue && c.nextDue > Date.now() ? " · rests" : " · due"}</span><button class="delete" data-card-delete="${c.id}" title="Remove card">×</button></div>`).join("") || '<p class="muted">No cards yet — add your first one above.</p>'}</div>`;
+  t.innerHTML = `<button class="ghost tech-back" data-deck-back>← All decks</button>${viewHead(deck.name, `${esc(deck.subject || "General")} · ${cards.length} cards · ${due} due for review. Review any card as often as you like — the schedule is a guide, not a lock.`)}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Review</h2>${due ? `<span class="tag">${due} due</span>` : ""}</div><p class="muted">Smart session covers what the schedule says is due. Practice mode runs the whole deck — as many times as you want.</p><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button class="primary" data-review-start${due ? "" : " disabled"}>Smart session${due ? ` (${due})` : ""}</button><button class="ghost" data-review-all${cards.length ? "" : " disabled"}>Practice all (${cards.length})</button><button class="ghost" data-deck-rename>Rename deck</button><button class="delete" data-deck-delete>Delete deck</button></div></div>${deckEditId === deckId ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Rename deck</h2></div><div class="input-row"><input class="input" id="deck-rename-name" value="${esc(deck.name)}" maxlength="120" aria-label="Deck name"><input class="input" id="deck-rename-subject" value="${esc(deck.subject || "")}" maxlength="120" placeholder="Subject (optional)"></div><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button class="primary" id="deck-rename-save">Save</button><button class="ghost" data-deck-rename-cancel>Cancel</button></div></div>` : ""}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Add a card</h2></div><div class="grid two"><input class="input" id="card-front" placeholder="Front — question or term"><input class="input" id="card-back" placeholder="Back — answer or definition"></div><button class="primary" id="card-add" style="margin-top:12px">Add card</button></div><div class="grid">${cards.map((c) => cardEditId === c.id ? `<div class="task"><span class="task-text" style="flex:1;min-width:0"><input class="input" id="card-edit-front" value="${esc(c.front)}" maxlength="500" aria-label="Card front" placeholder="Front"><input class="input" id="card-edit-back" value="${esc(c.back)}" maxlength="500" aria-label="Card back" placeholder="Back" style="margin-top:8px"></span><span style="display:flex;flex-direction:column;gap:6px"><button class="primary" data-card-save="${c.id}" title="Save card">Save</button><button class="ghost" data-card-cancel title="Cancel editing">Cancel</button></span></div>` : `<div class="task"><span class="task-text"><strong data-fittitle>${esc(c.front)}</strong><br><span class="muted card-back-preview">${esc(c.back)}</span></span><span class="task-meta">Box ${c.box || 1}${c.nextDue && c.nextDue > Date.now() ? " · rests" : " · due"}</span><span style="display:flex;gap:6px;flex:none"><button class="icon-btn" data-card-edit="${c.id}" title="Edit card" aria-label="Edit card">${sicon("memo")}</button><button class="delete" data-card-delete="${c.id}" title="Remove card">×</button></span></div>`).join("") || '<p class="muted">No cards yet — add your first one above.</p>'}</div>`;
+  fitTitles(t);
   $("[data-deck-back]", t).onclick = () => {
+    deckEditId = null;
+    cardEditId = null;
     flashView = "list";
     renderFlash(t);
   };
   $("[data-review-start]", t).onclick = () => {
     if (!deckDue(deck).length) return;
     clearReview();
+    reviewState = freshReview(deck, "due");
     flashView = "review:" + deckId;
     renderFlash(t);
   };
+  $("[data-review-all]", t).onclick = () => {
+    if (!cards.length) return;
+    clearReview();
+    reviewState = freshReview(deck, "all");
+    flashView = "review:" + deckId;
+    renderFlash(t);
+  };
+  $("[data-deck-rename]", t).onclick = () => {
+    deckEditId = deckEditId === deckId ? null : deckId;
+    cardEditId = null;
+    renderDeckDetail(t, deckId);
+  };
+  const renameSave = $("#deck-rename-save", t);
+  if (renameSave)
+    renameSave.onclick = () => {
+      const name = $("#deck-rename-name", t).value.trim();
+      if (!name) return notify("Deck needs a name");
+      deck.name = name;
+      deck.subject = $("#deck-rename-subject", t).value.trim();
+      deckEditId = null;
+      persist();
+      notify("Deck renamed");
+      renderDeckDetail(t, deckId);
+    };
+  const renameCancel = $("[data-deck-rename-cancel]", t);
+  if (renameCancel) renameCancel.onclick = () => { deckEditId = null; renderDeckDetail(t, deckId); };
   $("[data-deck-delete]", t).onclick = () =>
     confirmBox(`Delete “${deck.name}”?`, "The deck and all its cards will be gone.", () => {
       state.decks = state.decks.filter((d) => d.id !== deckId);
@@ -902,21 +975,51 @@ function renderDeckDetail(t, deckId) {
     persist();
     renderDeckDetail(t, deckId);
   };
+  $$("[data-card-edit]", t).forEach(
+    (b) =>
+      (b.onclick = () => {
+        cardEditId = cardEditId === b.dataset.cardEdit ? null : b.dataset.cardEdit;
+        deckEditId = null;
+        renderDeckDetail(t, deckId);
+      }),
+  );
+  $$("[data-card-save]", t).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const card = deck.cards.find((c) => c.id === b.dataset.cardSave);
+        if (!card) return;
+        const front = $("#card-edit-front", t).value.trim();
+        const back = $("#card-edit-back", t).value.trim();
+        if (!front || !back) return notify("The card needs a front and a back");
+        card.front = front;
+        card.back = back;
+        cardEditId = null;
+        persist();
+        notify("Card updated");
+        renderDeckDetail(t, deckId);
+      }),
+  );
+  $$("[data-card-cancel]", t).forEach((b) => (b.onclick = () => { cardEditId = null; renderDeckDetail(t, deckId); }));
   $$("[data-card-delete]", t).forEach(
     (b) =>
       (b.onclick = () =>
         confirmBox("Remove this card?", "It will be gone for good.", () => {
           deck.cards = deck.cards.filter((c) => c.id !== b.dataset.cardDelete);
+          cardEditId = null;
           persist();
           renderDeckDetail(t, deckId);
         })),
   );
 }
 
-function freshReview(deck) {
-  const queue = deckDue(deck).map((c) => c.id);
+function freshReview(deck, mode = "due") {
+  // "due" = the spaced schedule; "all" = practice every card any time,
+  // review as often as you like until you delete the deck or card.
+  const source = mode === "all" ? deck.cards || [] : deckDue(deck);
+  const queue = source.map((c) => c.id);
   return {
     deckId: deck.id,
+    mode,
     queue,
     total: queue.length,
     done: 0,
@@ -939,6 +1042,7 @@ function loadReview(deckId) {
         done: 0,
         mastered: 0,
         attempts: {},
+        mode: "due",
         ...saved,
         reveal: false,
       };
@@ -982,7 +1086,7 @@ function renderReview(t, deckId) {
     const mastered = rs.mastered;
     const total = rs.total;
     clearReview();
-    t.innerHTML = `<button class="ghost tech-back" data-review-back>← ${esc(deck.name)}</button>${viewHead("Review complete", `${mastered} of ${total} mastered${done > mastered ? ` · ${done - mastered} to revisit soon` : ""}. Nice work — consistency is the whole game.`)}<div class="card" style="text-align:center"><div class="complete-emoji">${sicon("medal")}</div><div class="modal-actions" style="justify-content:center;margin-top:14px"><button class="ghost" data-review-back>Back to deck</button></div></div>`;
+    t.innerHTML = `<button class="ghost tech-back" data-review-back>← ${esc(deck.name)}</button>${viewHead("Review complete", `${mastered} of ${total} mastered${done > mastered ? ` · ${done - mastered} to revisit soon` : ""}. Nice work — consistency is the whole game.`)}<div class="card" style="text-align:center"><div class="complete-emoji">${sicon("medal")}</div><div class="modal-actions" style="justify-content:center;margin-top:14px;flex-wrap:wrap"><button class="primary" data-review-again>Review again</button><button class="ghost" data-review-due>Smart session (${deckDue(deck).length} due)</button><button class="ghost" data-review-back>Back to deck</button></div></div>`;
     $$("[data-review-back]", t).forEach(
       (b) =>
         (b.onclick = () => {
@@ -990,6 +1094,20 @@ function renderReview(t, deckId) {
           renderFlash(t);
         }),
     );
+    const again = $("[data-review-again]", t);
+    if (again)
+      again.onclick = () => {
+        reviewState = freshReview(deck, "all");
+        saveReview();
+        renderReview(t, deckId);
+      };
+    const dueBtn = $("[data-review-due]", t);
+    if (dueBtn)
+      dueBtn.onclick = () => {
+        reviewState = freshReview(deck, "due");
+        saveReview();
+        renderReview(t, deckId);
+      };
     return;
   }
   const card = (deck.cards || []).find((c) => c.id === rs.queue[0]);
@@ -997,7 +1115,7 @@ function renderReview(t, deckId) {
     rs.queue.shift();
     return renderReview(t, deckId);
   }
-  t.innerHTML = `<button class="ghost tech-back" data-review-back>← ${esc(deck.name)}</button>${viewHead("Review", `${esc(deck.subject || "General")} · ${rs.done + 1} of ${rs.total}`)}<div class="card flash-card"><div class="eyebrow">Front</div><div class="flash-text">${esc(card.front)}</div>${rs.reveal ? `<hr class="flash-hr"><div class="eyebrow">Back</div><div class="flash-text">${esc(card.back)}</div>` : ""}</div>${rs.reveal ? `<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap"><button class="ghost" data-grade="0" style="flex:1">Still learning</button><button class="primary" data-grade="1" style="flex:1">I knew it</button></div>` : `<button class="primary" data-reveal style="margin-top:14px;width:100%">Show answer</button>`}`;
+  t.innerHTML = `<button class="ghost tech-back" data-review-back>← ${esc(deck.name)}</button>${viewHead("Review", `${esc(deck.subject || "General")} · ${rs.done + 1} of ${rs.total}${rs.mode === "all" ? " · practice mode" : ""}`)}<div class="card flash-card"><div class="eyebrow">Front</div><div class="flash-text">${esc(card.front)}</div>${rs.reveal ? `<hr class="flash-hr"><div class="eyebrow">Back</div><div class="flash-text">${esc(card.back)}</div>` : ""}</div>${rs.reveal ? `<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap"><button class="ghost" data-grade="0" style="flex:1">Still learning</button><button class="primary" data-grade="1" style="flex:1">I knew it</button></div>` : `<button class="primary" data-reveal style="margin-top:14px;width:100%">Show answer</button>`}`;
   $$("[data-review-back]", t).forEach(
     (b) =>
       (b.onclick = () => {
@@ -1055,12 +1173,14 @@ function renderCornell(t) {
 
 function renderCornellList(t) {
   const notes = state.cornellNotes || [];
-  t.innerHTML = `<button class="ghost tech-back" data-cornell-back>← Cornell guide</button>${viewHead("Cornell pad", "Cues on the left, notes on the right, summary at the bottom. Everything saves as you type.")}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>New note</h2></div><div class="input-row"><input class="input" id="cornell-title" placeholder="Note title, e.g. Chapter 4 — Photosynthesis"><button class="primary" id="cornell-create">Create</button></div></div><div class="grid three">${notes.map((n) => `<article class="card" data-note="${n.id}" style="cursor:pointer"><div class="section-row"><h3>${esc(n.title || "Untitled")}</h3></div><p class="muted" style="margin-top:8px">Updated ${new Date(n.updated || n.created || Date.now()).toLocaleDateString()}</p><div class="tech-open">Open note →</div></article>`).join("") || '<p class="muted">No notes yet — create your first one above.</p>'}</div>`;
+  t.innerHTML = `<button class="ghost tech-back" data-cornell-back>← Cornell guide</button>${viewHead("Cornell pad", "Cues on the left, notes on the right, summary at the bottom. Everything saves as you type — and every note can be renamed or deleted any time.")}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>New note</h2></div><div class="input-row"><input class="input" id="cornell-title" placeholder="Note title, e.g. Chapter 4 — Photosynthesis"><button class="primary" id="cornell-create">Create</button></div></div><div class="grid three">${notes.map((n) => `<article class="card" data-note="${n.id}" style="cursor:pointer"><div class="section-row"><h3 data-fittitle>${esc(n.title || "Untitled")}</h3></div><p class="muted" style="margin-top:8px">Updated ${new Date(n.updated || n.created || Date.now()).toLocaleDateString()}</p><div class="tech-open">Open note →</div><button class="delete deck-list-del" data-note-delete="${n.id}" title="Delete note" aria-label="Delete ${esc(n.title || "note")}">×</button></article>`).join("") || '<p class="muted">No notes yet — create your first one above.</p>'}</div>`;
+  fitTitles(t);
   $("[data-cornell-back]", t).onclick = () => {
     cornellView = null;
     renderTechniques();
   };
   $("#cornell-create", t).onclick = () => {
+    if (!requireAuth("save Cornell notes")) return;
     const title = $("#cornell-title", t).value.trim();
     const note = {
       id: uid(),
@@ -1078,9 +1198,23 @@ function renderCornellList(t) {
   };
   $$("[data-note]", t).forEach(
     (card) =>
-      (card.onclick = () => {
+      (card.onclick = (e) => {
+        if (e.target.closest("[data-note-delete]")) return;
         cornellView = card.dataset.note;
         renderCornell(t);
+      }),
+  );
+  $$("[data-note-delete]", t).forEach(
+    (b) =>
+      (b.onclick = (e) => {
+        e.stopPropagation();
+        const note = (state.cornellNotes || []).find((n) => n.id === b.dataset.noteDelete);
+        confirmBox(`Delete “${note?.title || "Untitled"}”?`, "The note will be gone for good.", () => {
+          state.cornellNotes = state.cornellNotes.filter((n) => n.id !== b.dataset.noteDelete);
+          persist();
+          notify("Note deleted");
+          renderCornellList(t);
+        });
       }),
   );
 }
@@ -1167,12 +1301,14 @@ function renderFeynman(t) {
 
 function renderFeynmanList(t) {
   const notes = state.feynmanNotes || [];
-  t.innerHTML = `<button class="ghost tech-back" data-feynman-back>← Feynman guide</button>${viewHead("Feynman pad", "Explain it simply, spot your gaps, re-learn, repeat. Aim for a high plainness score.")}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>New explanation</h2></div><div class="input-row"><input class="input" id="feynman-topic" placeholder="What are you explaining? e.g. Mitosis"><button class="primary" id="feynman-create">Start</button></div></div><div class="grid three">${notes.map((n) => { const r = readability(n.text); return `<article class="card" data-feynman="${n.id}" style="cursor:pointer"><div class="section-row"><h3>${esc(n.topic || "Untitled")}</h3>${r ? `<span class="tag">${r.score}</span>` : ""}</div><p class="muted" style="margin-top:8px">${r ? `${r.words} words · ${esc(readLevel(r.score))}` : "Not written yet"}</p><div class="tech-open">Open →</div></article>`; }).join("") || '<p class="muted">No explanations yet — pick a topic above.</p>'}</div>`;
+  t.innerHTML = `<button class="ghost tech-back" data-feynman-back>← Feynman guide</button>${viewHead("Feynman pad", "Explain it simply, spot your gaps, re-learn, repeat. Aim for a high plainness score — every explanation can be renamed or deleted any time.")}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>New explanation</h2></div><div class="input-row"><input class="input" id="feynman-topic" placeholder="What are you explaining? e.g. Mitosis"><button class="primary" id="feynman-create">Start</button></div></div><div class="grid three">${notes.map((n) => { const r = readability(n.text); return `<article class="card" data-feynman="${n.id}" style="cursor:pointer"><div class="section-row"><h3 data-fittitle>${esc(n.topic || "Untitled")}</h3>${r ? `<span class="tag">${r.score}</span>` : ""}</div><p class="muted" style="margin-top:8px">${r ? `${r.words} words · ${esc(readLevel(r.score))}` : "Not written yet"}</p><div class="tech-open">Open →</div><button class="delete deck-list-del" data-feynman-delete="${n.id}" title="Delete explanation" aria-label="Delete ${esc(n.topic || "explanation")}">×</button></article>`; }).join("") || '<p class="muted">No explanations yet — pick a topic above.</p>'}</div>`;
+  fitTitles(t);
   $("[data-feynman-back]", t).onclick = () => {
     feynmanView = null;
     renderTechniques();
   };
   $("#feynman-create", t).onclick = () => {
+    if (!requireAuth("save Feynman explanations")) return;
     const topic = $("#feynman-topic", t).value.trim() || "Untitled";
     const note = {
       id: uid(),
@@ -1189,9 +1325,23 @@ function renderFeynmanList(t) {
   };
   $$("[data-feynman]", t).forEach(
     (card) =>
-      (card.onclick = () => {
+      (card.onclick = (e) => {
+        if (e.target.closest("[data-feynman-delete]")) return;
         feynmanView = card.dataset.feynman;
         renderFeynman(t);
+      }),
+  );
+  $$("[data-feynman-delete]", t).forEach(
+    (b) =>
+      (b.onclick = (e) => {
+        e.stopPropagation();
+        const note = (state.feynmanNotes || []).find((n) => n.id === b.dataset.feynmanDelete);
+        confirmBox(`Delete “${note?.topic || "Untitled"}”?`, "It will be gone for good.", () => {
+          state.feynmanNotes = state.feynmanNotes.filter((n) => n.id !== b.dataset.feynmanDelete);
+          persist();
+          notify("Explanation deleted");
+          renderFeynmanList(t);
+        });
       }),
   );
 }
@@ -1292,7 +1442,7 @@ function duckReply(text) {
 
 function renderDuck(t) {
   const thread = state.duckChat || [];
-  t.innerHTML = `<button class="ghost tech-back" data-duck-back>← Duck guide</button>${viewHead("Rubber Duck", "Explain your problem out loud. The duck asks; you discover you knew it all along.")}<div class="card"><div id="duck-thread" class="duck-thread">${thread.length ? thread.map((m) => `<div class="bubble ${m.from === "you" ? "me" : ""}">${m.from === "duck" ? sicon("bird") + " " : ""}${esc(m.text)}<small class="message-meta">${new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small></div>`).join("") : '<p class="muted">' + sicon("bird") + ' …listening. Tell me what is stuck.</p>'}</div><div class="input-row" style="margin-top:12px;margin-bottom:0"><textarea class="input autogrow" id="duck-input" rows="1" placeholder="Explain it to the duck… (Shift + Enter for a new line)" aria-label="Explain it to the duck"></textarea><button class="primary" id="duck-send">Quack</button></div><div style="margin-top:10px"><button class="ghost" data-duck-clear>Clear chat</button></div></div>`;
+  t.innerHTML = `<button class="ghost tech-back" data-duck-back>← Duck guide</button>${viewHead("Rubber Duck", "Explain your problem out loud. The duck asks; you discover you knew it all along.")}<div class="card"><div id="duck-thread" class="duck-thread">${thread.length ? thread.map((m, i) => `<div class="bubble ${m.from === "you" ? "me" : ""}">${m.from === "duck" ? sicon("bird") + " " : ""}${esc(m.text)}<small class="message-meta">${new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small><button class="duck-msg-del" data-duck-del="${i}" title="Delete message" aria-label="Delete message">×</button></div>`).join("") : '<p class="muted">' + sicon("bird") + ' …listening. Tell me what is stuck.</p>'}</div><div class="input-row" style="margin-top:12px;margin-bottom:0"><textarea class="input autogrow" id="duck-input" rows="1" placeholder="Explain it to the duck… (Shift + Enter for a new line)" aria-label="Explain it to the duck"></textarea><button class="primary" id="duck-send">Quack</button></div><div style="margin-top:10px"><button class="ghost" data-duck-clear>Clear chat</button></div></div>`;
   const scrollDuck = () => {
     const box = $("#duck-thread", t);
     if (box) box.scrollTop = box.scrollHeight;
@@ -1308,6 +1458,14 @@ function renderDuck(t) {
       persist();
       renderDuck(t);
     });
+  $$("[data-duck-del]", t).forEach(
+    (b) =>
+      (b.onclick = () => {
+        state.duckChat = state.duckChat.filter((_, i) => i !== Number(b.dataset.duckDel));
+        persist();
+        renderDuck(t);
+      }),
+  );
   const send = () => {
     const input = $("#duck-input", t);
     const text = input.value.trim();
@@ -1454,12 +1612,14 @@ function renderMind(t) {
 
 function renderMindList(t) {
   const maps = state.mindmaps || [];
-  t.innerHTML = `<button class="ghost tech-back" data-mind-back>← Mind-map guide</button>${viewHead("Mind maps", "One central idea, branching outward. Click any node to select it, then grow or rename.")}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>New map</h2></div><div class="input-row"><input class="input" id="mind-title" placeholder="Central topic, e.g. Photosynthesis"><button class="primary" id="mind-create">Create</button></div></div><div class="grid three">${maps.map((m) => `<article class="card" data-mind="${m.id}" style="cursor:pointer"><div class="section-row"><h3>${esc(m.title || "Untitled")}</h3><span class="tag">${(m.nodes || []).length} nodes</span></div><div class="tech-open">Open map →</div></article>`).join("") || '<p class="muted">No maps yet — plant your first central idea above.</p>'}</div>`;
+  t.innerHTML = `<button class="ghost tech-back" data-mind-back>← Mind-map guide</button>${viewHead("Mind maps", "One central idea, branching outward. Click any node to select it, then grow or rename.")}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>New map</h2></div><div class="input-row"><input class="input" id="mind-title" placeholder="Central topic, e.g. Photosynthesis"><button class="primary" id="mind-create">Create</button></div></div><div class="grid three">${maps.map((m) => `<article class="card" data-mind="${m.id}" style="cursor:pointer"><div class="section-row"><h3 data-fittitle>${esc(m.title || "Untitled")}</h3><span class="tag">${(m.nodes || []).length} nodes</span></div><div class="tech-open">Open map →</div><button class="delete deck-list-del" data-mind-delete="${m.id}" title="Delete map" aria-label="Delete ${esc(m.title || "map")}">×</button></article>`).join("") || '<p class="muted">No maps yet — plant your first central idea above.</p>'}</div>`;
+  fitTitles(t);
   $("[data-mind-back]", t).onclick = () => {
     mindView = null;
     renderTechniques();
   };
   $("#mind-create", t).onclick = () => {
+    if (!requireAuth("save mind maps")) return;
     const title = $("#mind-title", t).value.trim() || "Untitled";
     const map = {
       id: uid(),
@@ -1476,9 +1636,23 @@ function renderMindList(t) {
   };
   $$("[data-mind]", t).forEach(
     (card) =>
-      (card.onclick = () => {
+      (card.onclick = (e) => {
+        if (e.target.closest("[data-mind-delete]")) return;
         mindView = card.dataset.mind;
         renderMind(t);
+      }),
+  );
+  $$("[data-mind-delete]", t).forEach(
+    (b) =>
+      (b.onclick = (e) => {
+        e.stopPropagation();
+        const map = (state.mindmaps || []).find((m) => m.id === b.dataset.mindDelete);
+        confirmBox(`Delete “${map?.title || "Untitled"}”?`, "The map and all its branches will be gone.", () => {
+          state.mindmaps = state.mindmaps.filter((m) => m.id !== b.dataset.mindDelete);
+          persist();
+          notify("Map deleted");
+          renderMindList(t);
+        });
       }),
   );
 }
@@ -1490,7 +1664,7 @@ function renderMindEditor(t, mapId) {
     return renderMind(t);
   }
   const sel = (map.nodes || []).find((n) => n.id === map.selected) || null;
-  t.innerHTML = `<button class="ghost tech-back" data-mind-back-list>← All maps</button>${viewHead(map.title || "Untitled", 'Click a node to select it <span class="tag" id="mind-saved">saved</span>')}<div class="card" style="margin-bottom:18px">${mindSvg(map, sel?.id)}</div><div class="grid two"><div class="card"><div class="section-row"><h2>Grow</h2></div><div class="input-row"><input class="input" id="mind-new" placeholder="New branch label…"><button class="primary" id="mind-add">Add</button></div><p class="muted">Adds under: <strong>${esc(sel?.label || map.title || "central topic")}</strong></p></div><div class="card"><div class="section-row"><h2>Edit</h2><button class="ghost" data-mind-delete ${!sel || !sel.parent ? "disabled" : ""}>Delete node</button></div><div class="input-row"><input class="input" id="mind-rename" placeholder="Rename selected…" value="${esc(sel?.label || "")}" ${sel ? "" : "disabled"}><button class="primary" id="mind-apply" ${sel ? "" : "disabled"}>Apply</button></div>${!sel ? '<p class="muted">Select a node on the canvas first.</p>' : ""}</div></div>`;
+  t.innerHTML = `<button class="ghost tech-back" data-mind-back-list>← All maps</button>${viewHead(map.title || "Untitled", 'Click a node to select it <span class="tag" id="mind-saved">saved</span>')}<div class="card" style="margin-bottom:18px">${mindSvg(map, sel?.id)}</div><div class="grid two"><div class="card"><div class="section-row"><h2>Grow</h2></div><div class="input-row"><input class="input" id="mind-new" placeholder="New branch label…"><button class="primary" id="mind-add">Add</button></div><p class="muted">Adds under: <strong>${esc(sel?.label || map.title || "central topic")}</strong></p></div><div class="card"><div class="section-row"><h2>Edit</h2><span style="display:flex;gap:8px;flex-wrap:wrap"><button class="ghost" data-mind-delete ${!sel || !sel.parent ? "disabled" : ""}>Delete node</button><button class="delete" data-map-delete>Delete map</button></span></div><div class="input-row"><input class="input" id="mind-rename" placeholder="Rename selected…" value="${esc(sel?.label || "")}" ${sel ? "" : "disabled"}><button class="primary" id="mind-apply" ${sel ? "" : "disabled"}>Apply</button></div>${!sel ? '<p class="muted">Select a node on the canvas first.</p>' : ""}</div></div>`;
   const touch = () => {
     map.updated = Date.now();
     const tag = $("#mind-saved", t);
@@ -1529,6 +1703,15 @@ function renderMindEditor(t, mapId) {
     touch();
     renderMindEditor(t, mapId);
   });
+  $("[data-map-delete]", t)?.addEventListener("click", () =>
+    confirmBox(`Delete “${map.title || "Untitled"}”?`, "The map and all its branches will be gone.", () => {
+      state.mindmaps = state.mindmaps.filter((m) => m.id !== mapId);
+      persist();
+      mindView = "list";
+      notify("Map deleted");
+      renderMind(t);
+    }),
+  );
   $$("[data-mind-node]", t).forEach(
     (g) =>
       (g.onclick = () => {

@@ -1,6 +1,6 @@
 /* store.js — reward store, mystery boxes, gifts, inventory, purchases */
 import {
-  state, $, $$, uid, get, save, esc, sicon, persist, pushUserSettings, notify, confirmBox, viewHead,
+  state, $, $$, uid, get, save, esc, sicon, persist, pushUserSettings, notify, confirmBox, viewHead, requireAuth,
   spendCoins, addCoins, addNotification, dayKey, applyEquippedTheme, celebrate, confettiBurst,
   refreshServerTime, serverDayKey, serverNow,
 } from "./core.js";
@@ -1717,13 +1717,17 @@ function renderGiftCenter() {
   }
   const items = shopItems().filter((i) => state.selectedStore.includes(i.id));
   const total = items.reduce((a, i) => a + i.price, 0);
-  const footerNote = ($("#gift-note")?.value || "").trim();
-  modal.innerHTML = `<div class="modal"><div class="eyebrow">Send a gift · step 2 of 2</div><h2>${sicon("gift")} You're sending a gift!</h2><div class="gift-summary"><div class="gift-summary-row"><span class="muted">To</span><strong>${sicon("user")} ${esc(giftSelected.name)}</strong></div><div class="gift-summary-row"><span class="muted">Items</span><span>${items.length ? items.map((i) => `${i.emoji} ${esc(i.name)}`).join(", ") : "<em>Cart is empty</em>"}</span></div><div class="gift-summary-row"><span class="muted">Total</span><strong>${sicon("coin")}${total}</strong></div></div><label class="field-label">Personal message (optional)<textarea class="input autogrow" id="gift-msg" rows="2" placeholder="Keep crushing your studies!">${esc(footerNote)}</textarea></label><div class="modal-actions" style="margin-top:16px"><button class="ghost" data-gift-back>Back</button><button class="primary" data-gift-continue${items.length ? "" : " disabled"}>Continue to Checkout</button></div></div>`;
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Send a gift · step 2 of 2</div><h2>${sicon("gift")} You're sending a gift!</h2><div class="gift-summary"><div class="gift-summary-row"><span class="muted">To</span><strong>${sicon("user")} ${esc(giftSelected.name)}</strong></div><div class="gift-summary-row"><span class="muted">Items</span><span>${items.length ? items.map((i) => `${i.emoji} ${esc(i.name)}`).join(", ") : "<em>Cart is empty</em>"}</span></div><div class="gift-summary-row"><span class="muted">Total</span><strong>${sicon("coin")}${total}</strong></div></div><label class="field-label">Personal message (optional)<textarea class="input autogrow" id="gift-msg" rows="2" placeholder="Keep crushing your studies!"></textarea></label><div class="modal-actions" style="margin-top:16px"><button class="ghost" data-gift-back>Back</button><button class="primary" data-gift-continue${items.length ? "" : " disabled"}>Continue to Checkout</button></div></div>`;
   $("#modal-root").append(modal);
   modal.addEventListener("click", (e) => {
     if (e.target === modal) closeGiftCenter();
   });
-  $("[data-gift-back]", modal).onclick = () => renderGiftCenter();
+  // Back returns to the recipient picker (step 1) — the chosen person stays
+  // highlighted so you can confirm or switch before checking out.
+  $("[data-gift-back]", modal).onclick = () => {
+    giftSelected = null;
+    renderGiftCenter();
+  };
   $("[data-gift-continue]", modal).onclick = () => {
     if (!items.length) return;
     if (state.coins < total) {
@@ -1731,8 +1735,6 @@ function renderGiftCenter() {
       return;
     }
     const message = ($("#gift-msg", modal)?.value || "").trim();
-    const noteInput = $("#gift-note");
-    if (noteInput) noteInput.value = message;
     closeGiftCenter();
     checkoutGiftFlow(message);
   };
@@ -1900,7 +1902,7 @@ function renderStore() {
     state.storeCategory === "All"
       ? shopItems()
       : shopItems().filter((x) => x.category === state.storeCategory);
-  t.innerHTML = `${viewHead("Rewards store", "Spend the coins you earn from focused sessions on themes, sounds, boosts, badges, and profile identities.")}${earnMarkup()}${topupMarkup()}${dealsMarkup()}${mysteryMarkup()}<div class="filter-bar">${["All", "Themes", "Sounds", "Boosts", "Badges", "Avatars"].map((x) => `<button class="filter ${state.storeCategory === x ? "active" : ""}" data-store-filter="${x}">${x}</button>`).join("")}</div><div class="grid three">${visible.map((i) => `<article class="card store-item ${state.selectedStore.includes(i.id) ? "selected" : ""}" data-store-item="${i.id}"><button class="info-btn" data-info="${i.id}" data-tip="${esc(rewardInfo(i))}" title="About this reward" aria-label="About ${esc(i.name)}">i</button><div class="emoji">${i.emoji}</div><div class="price">${sicon("coin")} ${i.price}</div>${isStackable(i.id) ? qtyStepperMarkup(i.id, i.price) : ""}<h3>${esc(i.name)}</h3><p class="muted">${esc(i.description)}</p><span class="tag">${i.category}</span>${i.season ? `<span class="tag limited-tag">limited · ${seasonDaysLeft(i)}d left</span>` : ""}</article>`).join("")}</div><div class="store-footer"><span><strong id="cart-count">${cartUnits()}</strong> units · <b id="cart-total">${cartTotal()}</b> coins</span><span class="recipient-wrap" data-recipient-wrap><button type="button" class="recipient-btn" data-recipient-btn aria-haspopup="listbox" aria-expanded="false">${giftBtnInner()}<svg class="recipient-chev" width="12" height="8" viewBox="0 0 12 8" fill="none"><path d="M1 1l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="recipient-pop" data-recipient-pop role="listbox" aria-label="Buy for" hidden>${recipientOptions().map((o) => `<button type="button" role="option" aria-selected="${o.id === giftRecipient}" class="recipient-opt${o.id === giftRecipient ? " selected" : ""}" data-recipient-pick="${o.id}">${o.initial ? `<span class="recipient-avatar sm">${esc(o.initial)}</span>` : `<span class="recipient-emoji">${o.icon}</span>`}<span class="recipient-txt"><strong>${esc(o.name)}</strong><small>${esc(o.sub)}</small></span><span class="recipient-check">${sicon("check")}</span></button>`).join("")}</div></span><button class="primary" id="checkout">Buy selected</button></div><div class="input-row" style="margin-top:10px"><textarea class="input autogrow" id="gift-note" rows="1" placeholder="Gift note for your friend (optional) — e.g. You've got this!"></textarea></div>${collectionMarkup()}`;
+  t.innerHTML = `${viewHead("Rewards store", "Spend the coins you earn from focused sessions on themes, sounds, boosts, badges, and profile identities.")}${earnMarkup()}${topupMarkup()}${dealsMarkup()}${mysteryMarkup()}<div class="filter-bar">${["All", "Themes", "Sounds", "Boosts", "Badges", "Avatars"].map((x) => `<button class="filter ${state.storeCategory === x ? "active" : ""}" data-store-filter="${x}">${x}</button>`).join("")}</div><div class="grid three">${visible.map((i) => `<article class="card store-item ${state.selectedStore.includes(i.id) ? "selected" : ""}" data-store-item="${i.id}"><button class="info-btn" data-info="${i.id}" data-tip="${esc(rewardInfo(i))}" title="About this reward" aria-label="About ${esc(i.name)}">i</button><div class="emoji">${i.emoji}</div><div class="price">${sicon("coin")} ${i.price}</div>${isStackable(i.id) ? qtyStepperMarkup(i.id, i.price) : ""}<h3>${esc(i.name)}</h3><p class="muted">${esc(i.description)}</p><span class="tag">${i.category}</span>${i.season ? `<span class="tag limited-tag">limited · ${seasonDaysLeft(i)}d left</span>` : ""}</article>`).join("")}</div><div class="store-footer"><span><strong id="cart-count">${cartUnits()}</strong> units · <b id="cart-total">${cartTotal()}</b> coins</span><span class="recipient-wrap" data-recipient-wrap><button type="button" class="recipient-btn" data-recipient-btn aria-haspopup="listbox" aria-expanded="false">${giftBtnInner()}<svg class="recipient-chev" width="12" height="8" viewBox="0 0 12 8" fill="none"><path d="M1 1l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="recipient-pop" data-recipient-pop role="listbox" aria-label="Buy for" hidden>${recipientOptions().map((o) => `<button type="button" role="option" aria-selected="${o.id === giftRecipient}" class="recipient-opt${o.id === giftRecipient ? " selected" : ""}" data-recipient-pick="${o.id}">${o.initial ? `<span class="recipient-avatar sm">${esc(o.initial)}</span>` : `<span class="recipient-emoji">${o.icon}</span>`}<span class="recipient-txt"><strong>${esc(o.name)}</strong><small>${esc(o.sub)}</small></span><span class="recipient-check">${sicon("check")}</span></button>`).join("")}</div></span><button class="primary" id="checkout">Buy selected</button></div>${collectionMarkup()}`;
   $$("[data-store-filter]", t).forEach(
     (b) =>
       (b.onclick = () => {
@@ -2057,14 +2059,23 @@ let checkoutBusy = false;
 
 function checkout(onConfirmed, onCancelled) {
   if (checkoutBusy) return;
+  // Buying — for yourself or as a gift — is a member perk.
+  if (!requireAuth("buy rewards")) {
+    if (onCancelled) onCancelled();
+    return;
+  }
   const lines = cartLines();
   if (!lines.length) {
     notify("Select at least one reward");
     if (onCancelled) onCancelled();
     return;
   }
+  // Gifting may legitimately include rewards you already own (you can own a
+  // theme and still give the same one to a friend), so the owned filter only
+  // applies when buying for yourself.
   const skipped = lines.filter(
-    ({ item }) => !isStackable(item.id) && ownsMine(item.id),
+    ({ item }) =>
+      giftRecipient === "me" && !isStackable(item.id) && ownsMine(item.id),
   );
   const fresh = lines.filter((l) => !skipped.includes(l));
   if (skipped.length)
@@ -2105,7 +2116,7 @@ function checkout(onConfirmed, onCancelled) {
           notify("Purchase failed — not enough coins.");
         } else {
         const recipient = giftRecipient;
-        const giftNote = ($("#gift-note")?.value || "").trim();
+        const giftNote = ""; // gift notes live in the gift flow modal only
         const ts = Date.now();
         fresh.forEach(({ item, qty, line }) => {
           for (let k = 0; k < qty; k++)

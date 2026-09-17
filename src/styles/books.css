@@ -231,26 +231,94 @@ html[data-night="1"] .reader:not(.reader-light):not(.reader-sepia) {
   overflow-y: auto;
   font-size: var(--read-fs);
   line-height: var(--read-lh);
+  font-family: Georgia, "Times New Roman", serif;
+  scroll-behavior: smooth;
 }
 .reader-body > div {
   max-width: var(--read-w);
   margin: 0 auto;
 }
+/* ---- Chapterplate section heads: rule + small-caps, like a printed book ---- */
 .reader-sec {
-  margin-bottom: 1.2em;
+  margin-bottom: 1.6em;
 }
-.reader-sec h3 {
-  font-size: 1.15em;
-  margin: 1.2em 0 0.5em;
+.reader-sec-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 1.4em 0 1em;
+}
+.reader-sec-rule {
+  flex: 1;
+  height: 1px;
+  background: color-mix(in srgb, var(--read-ink) 25%, transparent);
+  min-width: 24px;
+}
+.reader-sec-head h3 {
+  margin: 0;
+  font-size: 0.78em;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--read-ink) 72%, transparent);
+  max-width: 70%;
+  text-align: center;
+  line-height: 1.35;
 }
 .reader-sec-auto {
-  opacity: 0.45;
-  font-size: 0.8em;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  opacity: 0.55;
 }
-.reader-sec p {
+.reader-p {
   margin: 0 0 0.9em;
+  position: relative;
+}
+/* Drop cap opens each section, like a chapterplate. */
+.reader-p-first::first-letter {
+  float: left;
+  font-size: 3.1em;
+  line-height: 0.82;
+  padding: 0.06em 0.09em 0 0;
+  font-family: "Fraunces", Georgia, serif;
+  font-weight: 700;
+  color: var(--sage);
+}
+.reader-p-first::first-letter:has(+ * mark) {
+  float: none;
+  font-size: inherit;
+  line-height: inherit;
+  padding: 0;
+  color: inherit;
+  font-family: inherit;
+  font-weight: inherit;
+}
+/* Margin ticks every 5th paragraph — find-your-place rails. */
+.reader-tick::before {
+  content: "";
+  position: absolute;
+  left: calc(-1 * clamp(10px, 2.5vw, 26px) - 6px);
+  top: 0.55em;
+  width: 14px;
+  height: 2px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--sage) 65%, transparent);
+}
+@media (max-width: 700px) {
+  .reader-tick::before {
+    left: -10px;
+    width: 6px;
+  }
+}
+/* Ruler reading: dim every line but the hovered one while a session runs.
+   Opt-in via the reading-focus toggle in settings; pure CSS, zero JS cost. */
+.reader-body[data-ruler="1"]:has(.reader-p:hover) .reader-p {
+  opacity: 0.32;
+  transition: opacity 0.18s ease;
+}
+.reader-body[data-ruler="1"] .reader-p:hover {
+  opacity: 1;
+}
+.reader-body[data-ruler="1"] .reader-p {
+  transition: opacity 0.18s ease;
 }
 .reader-foot {
   display: flex;
@@ -301,19 +369,6 @@ html[data-night="1"] .reader:not(.reader-light):not(.reader-sepia) {
   padding: 10px 12px;
   margin-bottom: 8px;
 }
-.reader-note-excerpt {
-  display: block;
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: 0;
-  padding: 6px 8px;
-  border-radius: 7px;
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--ink);
-  margin-bottom: 6px;
-}
 .reader-note p {
   font-size: 13px;
   margin: 4px 0 8px;
@@ -333,61 +388,228 @@ html[data-night="1"] .reader:not(.reader-light):not(.reader-sepia) {
   border-radius: 8px;
   background: #fff;
 }
-/* selection toolbar */
+/* ---------- Ink tray (selection popover) ---------- */
 .reader-selectbar {
   position: absolute;
   z-index: 60;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 12px;
-  box-shadow: var(--shadow);
-  padding: 10px 12px;
-  max-width: min(420px, calc(100vw - 32px));
+  border-radius: 14px;
+  box-shadow: 0 14px 44px rgba(16, 32, 24, 0.22);
+  padding: 12px 14px;
+  max-width: min(320px, calc(100vw - 24px));
+  animation: tray-in 0.16s ease-out;
+}
+@keyframes tray-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reader-selectbar { animation: none; }
 }
 .reader-selectbar[hidden] {
   display: none;
 }
-.selbar-row {
+.ink-tray-head {
   display: flex;
-  gap: 6px;
   align-items: center;
-  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 9px;
 }
-.selbar-row .ghost {
-  font-size: 12px;
-  padding: 6px 10px;
+.ink-tray-title {
+  font: 700 10px "Space Mono", monospace;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
-.selbar-note {
-  margin-top: 8px;
-  border-top: 1px dashed var(--line);
-  padding-top: 8px;
+.ink-tray-head .ghost {
+  font-size: 11px;
+  padding: 4px 9px;
+  color: #c85d4d;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
-.selbar-note[hidden] {
-  display: none;
+.ink-tray-head .ghost .sicon { width: 12px; height: 12px; }
+.ink-tray-colors {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 9px;
 }
-.hl-dot {
-  width: 24px;
-  height: 24px;
+.ink-dot {
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
-  border: 2px solid var(--line);
+  border: 2px solid rgba(0, 0, 0, 0.12);
   cursor: pointer;
   padding: 0;
+  position: relative;
+  flex: none;
 }
-.hl-yellow { background: rgba(233, 174, 63, 0.45); }
-.hl-green { background: rgba(71, 118, 90, 0.4); }
-.hl-blue { background: rgba(79, 135, 179, 0.4); }
-.hl-pink { background: rgba(232, 121, 91, 0.4); }
-.hl-purple { background: rgba(138, 111, 209, 0.4); }
-button.hl-dot { border-color: rgba(0, 0, 0, 0.15); }
-mark.hl-yellow { background: rgba(233, 174, 63, 0.45); color: inherit; }
-mark.hl-green { background: rgba(71, 118, 90, 0.35); color: inherit; }
-mark.hl-blue { background: rgba(79, 135, 179, 0.35); color: inherit; }
-mark.hl-pink { background: rgba(232, 121, 91, 0.35); color: inherit; }
-mark.hl-purple { background: rgba(138, 111, 209, 0.35); color: inherit; }
-mark.hl-flash {
-  outline: 2px solid var(--gold);
+.ink-dot.picked::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border-radius: 50%;
+  border: 2px solid var(--sage);
+}
+.ink-yellow { background: rgba(233, 174, 63, 0.55); }
+.ink-green { background: rgba(71, 118, 90, 0.5); }
+.ink-blue { background: rgba(79, 135, 179, 0.5); }
+.ink-pink { background: rgba(232, 121, 91, 0.5); }
+.ink-purple { background: rgba(138, 111, 209, 0.5); }
+.ink-tray-styles {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.ink-style-chip {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  padding: 7px 4px 5px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: capitalize;
+  cursor: pointer;
+}
+.ink-style-chip.picked {
+  border-color: var(--sage);
+  color: var(--ink);
+  background: rgba(71, 118, 90, 0.08);
+}
+.ink-chip-sample {
+  font-family: Georgia, serif;
+  font-size: 15px;
+  line-height: 1;
+  padding: 1px 3px;
   border-radius: 3px;
+  color: inherit;
 }
+.ink-tray-note {
+  margin-top: 8px;
+}
+.ink-tray-note[hidden] { display: none; }
+.ink-tray-note .textarea { min-height: 54px; font-size: 13px; }
+.ink-tray-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+}
+.ink-tray-actions .ghost {
+  font-size: 12px;
+  padding: 7px 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ink-tray-actions .ghost .sicon { width: 13px; height: 13px; }
+.ink-tray-actions .primary {
+  font-size: 12px;
+  padding: 7px 16px;
+}
+/* ---------- The three ink styles ---------- */
+mark.ink-marker {
+  padding: 0.05em 0.12em;
+  border-radius: 0.2em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  color: inherit;
+  cursor: pointer;
+}
+mark.ink-underline {
+  background: none !important;
+  padding: 0;
+  border-radius: 0;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  color: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-thickness: 0.14em;
+  text-underline-offset: 0.18em;
+}
+mark.ink-ring {
+  background: none !important;
+  padding: 0 0.1em;
+  border-radius: 0.3em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  color: inherit;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1.5px currentColor;
+}
+mark.ink-marker.ink-yellow { background: rgba(233, 174, 63, 0.45); }
+mark.ink-marker.ink-green { background: rgba(71, 118, 90, 0.38); }
+mark.ink-marker.ink-blue { background: rgba(79, 135, 179, 0.38); }
+mark.ink-marker.ink-pink { background: rgba(232, 121, 91, 0.38); }
+mark.ink-marker.ink-purple { background: rgba(138, 111, 209, 0.38); }
+mark.ink-underline.ink-yellow { text-decoration-color: rgba(198, 128, 13, 0.85); }
+mark.ink-underline.ink-green { text-decoration-color: rgba(71, 118, 90, 0.85); }
+mark.ink-underline.ink-blue { text-decoration-color: rgba(79, 135, 179, 0.85); }
+mark.ink-underline.ink-pink { text-decoration-color: rgba(214, 84, 55, 0.85); }
+mark.ink-underline.ink-purple { text-decoration-color: rgba(120, 92, 196, 0.85); }
+mark.ink-ring.ink-yellow { color: rgba(198, 128, 13, 0.95); }
+mark.ink-ring.ink-green { color: rgba(56, 100, 74, 0.95); }
+mark.ink-ring.ink-blue { color: rgba(56, 108, 152, 0.95); }
+mark.ink-ring.ink-pink { color: rgba(198, 62, 34, 0.95); }
+mark.ink-ring.ink-purple { color: rgba(104, 76, 184, 0.95); }
+/* Note carrier: a subtle dot in the margin via ::after on the mark. */
+mark[data-hl].has-note::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.75;
+  margin-left: 3px;
+  vertical-align: super;
+  font-size: 0.7em;
+}
+mark.ink-flash {
+  outline: 2px solid var(--gold);
+  border-radius: 4px;
+}
+/* Excerpt swatches in the notes panel reuse the same ink classes. */
+.reader-note-excerpt {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 6px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: Georgia, serif;
+  color: var(--ink);
+  margin-bottom: 6px;
+}
+span.ink-marker.ink-yellow { background: rgba(233, 174, 63, 0.45); }
+span.ink-marker.ink-green { background: rgba(71, 118, 90, 0.38); }
+span.ink-marker.ink-blue { background: rgba(79, 135, 179, 0.38); }
+span.ink-marker.ink-pink { background: rgba(232, 121, 91, 0.38); }
+span.ink-marker.ink-purple { background: rgba(138, 111, 209, 0.38); }
+span.ink-underline { text-decoration: underline; text-decoration-thickness: 0.13em; text-underline-offset: 0.16em; }
+span.ink-underline.ink-yellow { text-decoration-color: rgba(198, 128, 13, 0.85); }
+span.ink-underline.ink-green { text-decoration-color: rgba(71, 118, 90, 0.85); }
+span.ink-underline.ink-blue { text-decoration-color: rgba(79, 135, 179, 0.85); }
+span.ink-underline.ink-pink { text-decoration-color: rgba(214, 84, 55, 0.85); }
+span.ink-underline.ink-purple { text-decoration-color: rgba(120, 92, 196, 0.85); }
+span.ink-ring { box-shadow: inset 0 0 0 1.5px currentColor; border-radius: 0.25em; }
+span.ink-ring.ink-yellow { color: rgba(198, 128, 13, 0.95); }
+span.ink-ring.ink-green { color: rgba(56, 100, 74, 0.95); }
+span.ink-ring.ink-blue { color: rgba(56, 108, 152, 0.95); }
+span.ink-ring.ink-pink { color: rgba(198, 62, 34, 0.95); }
+span.ink-ring.ink-purple { color: rgba(104, 76, 184, 0.95); }
 .search-hit {
   background: rgba(232, 121, 91, 0.4);
   border-radius: 3px;

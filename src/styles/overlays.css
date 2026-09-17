@@ -28,6 +28,12 @@
 .mini-timer:active {
   cursor: grabbing;
 }
+/* While actively dragging: no text selection, no touch scrolling from the bar. */
+.mini-timer.drag-active {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
 .mini-timer .mini-time {
   flex-shrink: 0;
   font:

@@ -454,16 +454,31 @@ function updateBarPadding() {
   }
 }
 
-// Generic drag handler for floating UI elements (mini-timer, now-playing, etc.)
+// Generic drag handler for floating UI elements (mini-timer, now-playing, etc.).
+// While a drag is active the whole page is FROZEN — no scrolling, no rubber-band,
+// no text selection — until the bar is released. Pointer Events drive the move so
+// mouse and touch behave identically, and `touch-action: none` (set on the handle)
+// stops the browser from claiming the gesture as a scroll in the first place.
+let activeDragCount = 0;
+function dragLock(on) {
+  activeDragCount = Math.max(0, activeDragCount + (on ? 1 : -1));
+  const root = document.documentElement;
+  if (activeDragCount > 0) {
+    root.style.setProperty("--sf-freeze-scroll", window.scrollY + "px");
+    root.classList.add("sf-dragging");
+  } else {
+    root.classList.remove("sf-dragging");
+    root.style.removeProperty("--sf-freeze-scroll");
+  }
+}
 function makeDraggable(el, handle) {
   if (!el || !handle) return;
-  let dragging = false, startX, startY, origX, origY;
+  let dragging = false, startX, startY, origX, origY, pid = null;
   const onMove = (e) => {
-    if (!dragging) return;
-    const cx = e.touches ? e.touches[0].clientX : e.clientX;
-    const cy = e.touches ? e.touches[0].clientY : e.clientY;
-    const nx = origX + cx - startX;
-    const ny = origY + cy - startY;
+    if (!dragging || e.pointerId !== pid) return;
+    // Pointer capture routes every move to us; this is belt-and-braces.
+    const nx = origX + e.clientX - startX;
+    const ny = origY + e.clientY - startY;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
     el.style.left = Math.max(0, Math.min(vw - el.offsetWidth, nx)) + "px";
@@ -471,31 +486,42 @@ function makeDraggable(el, handle) {
     el.style.right = "auto";
     el.style.bottom = "auto";
   };
-  const onUp = () => {
+  const onUp = (e) => {
+    if (dragging && e && e.pointerId !== undefined && e.pointerId !== pid) return;
     dragging = false;
     el.style.cursor = "";
-    document.removeEventListener("mousemove", onMove);
-    document.removeEventListener("mouseup", onUp);
-    document.removeEventListener("touchmove", onMove);
-    document.removeEventListener("touchend", onUp);
+    handle.classList.remove("drag-active");
+    dragLock(false);
+    try { if (pid !== null && handle.hasPointerCapture?.(pid)) handle.releasePointerCapture(pid); } catch { /* ignore */ }
+    pid = null;
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerup", onUp);
+    document.removeEventListener("pointercancel", onUp);
   };
   const onDown = (e) => {
+    if (e.button !== undefined && e.button !== 0) return;
     if (e.target.closest("button, a, input, textarea, select")) return;
     dragging = true;
+    pid = e.pointerId;
     el.style.cursor = "grabbing";
-    const cx = e.touches ? e.touches[0].clientX : e.clientX;
-    const cy = e.touches ? e.touches[0].clientY : e.clientY;
-    startX = cx;
-    startY = cy;
+    handle.classList.add("drag-active");
+    dragLock(true);
+    startX = e.clientX;
+    startY = e.clientY;
     origX = el.offsetLeft;
     origY = el.offsetTop;
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-    document.addEventListener("touchmove", onMove, { passive: true });
-    document.addEventListener("touchend", onUp);
+    // Capture the pointer on the handle: every subsequent move/up event (even
+    // outside the window) goes to the drag, and the page cannot scroll away.
+    try { handle.setPointerCapture?.(pid); } catch { /* ignore */ }
+    document.addEventListener("pointermove", onMove, { passive: false });
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onUp);
+    e.preventDefault();
   };
-  handle.addEventListener("mousedown", onDown);
-  handle.addEventListener("touchstart", onDown, { passive: true });
+  handle.addEventListener("pointerdown", onDown);
+  // Belt-and-braces: if something else releases the capture (alt-tab, devtools),
+  // end the drag cleanly so the page never stays frozen.
+  handle.addEventListener("lostpointercapture", () => { if (dragging) onUp(); });
 }
 
 function addCoins(n) {
@@ -1123,9 +1149,12 @@ function bindFavorites(root) {
       (b.onclick = (e) => {
         e.stopPropagation();
         const id = b.dataset.fav;
-        state.favorites = state.favorites.includes(id)
-          ? state.favorites.filter((x) => x !== id)
-          : [...state.favorites, id];
+        // Un-favoriting is always allowed; building a favorites list is a member perk.
+        const adding = !state.favorites.includes(id);
+        if (adding && !requireAuth("save favorites")) return;
+        state.favorites = adding
+          ? [...state.favorites, id]
+          : state.favorites.filter((x) => x !== id);
         persist();
         b.classList.toggle("on");
         b.innerHTML = state.favorites.includes(id) ? sicon("star") : sicon("starOutline");
@@ -1432,6 +1461,53 @@ function confettiLoop() {
   requestAnimationFrame(step);
 }
 
+/* ---- Sign-up gate ----
+   Guest visitors can browse everything, but actions that create cloud data
+   (purchasing, gifting, posting, uploading books, saving a profile…) are
+   reserved for signed-up members. requireAuth(feature) returns true when
+   the user may proceed, otherwise it shows a polished gate modal with a
+   direct route to the sign-up screen and returns false. */
+function requireAuth(feature) {
+  if (state.user) return true;
+  const what = feature || "use this feature";
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("aria-modal", "true");
+  modal.setAttribute("aria-label", "Sign up required");
+  modal.innerHTML = `<div class="modal auth-gate-card"><div class="auth-gate-crest" aria-hidden="true">${sicon("lock")}</div><div class="eyebrow">Members only</div><h2>Sign up to ${esc(what)}</h2><p class="muted">This one belongs to your account. Creating one takes under a minute — and everything you make afterwards is saved to the cloud and never lost.</p><ul class="auth-gate-perks"><li>${sicon("check")} Progress, coins &amp; purchases kept safe</li><li>${sicon("check")} Syncs across your phone and laptop</li><li>${sicon("check")} Gift friends, join sprints &amp; the community</li></ul><div class="modal-actions" style="justify-content:center;margin-top:18px"><button class="ghost" data-gate-later>Maybe later</button><button class="primary" data-gate-signup>${sicon("sparkle")} Create free account</button></div><p class="auth-gate-signin">Already a member? <button class="text-button" data-gate-signin>Sign in instead</button></p></div>`;
+  $("#modal-root").append(modal);
+  const close = () => {
+    modal.remove();
+    document.removeEventListener("keydown", onKey, true);
+  };
+  const onKey = (e) => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      close();
+    }
+  };
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) close();
+  });
+  document.addEventListener("keydown", onKey, true);
+  const goAuth = (view) => {
+    state.accountView = view;
+    state.tab = "account";
+    persist();
+    close();
+    import("./app.js")
+      .then((m) => m.shell())
+      .catch(() => {
+        /* graph already evaluated — shell runs on next tick */
+      });
+  };
+  $("[data-gate-later]", modal).onclick = close;
+  $("[data-gate-signup]", modal).onclick = () => goAuth("create");
+  $("[data-gate-signin]", modal).onclick = () => goAuth("welcome");
+  return false;
+}
+
 function celebrate(big) {
   if (state.reduceMotion) return;
   try {
@@ -1450,4 +1526,4 @@ function celebrate(big) {
 
 
 
-export { $, $$, uid, get, save, esc, SICON_PATHS, sicon, stripIcon, haltPersist, isPersistHalted, collectUserSettings, applyUserSettings, pushUserSettings, pullCloudProfile, state, sanitizeState, persistFailed, persist, persistNow, refreshCoinDisplays, updateBarPadding, makeDraggable, addCoins, spendCoins, cloudSnapshot, cloudSyncTimer, scheduleCloudSync, hydrateCloudState, cloudStateSubscription, fitTextarea, notify, notifOn, ensureNotifyPermission, browserNotify, dayKey, formatHeaderDate, serverOffsetMs, refreshServerTime, serverNow, serverDayKey, addNotification, avatarMarkup, iconStar, bindFavorites, THEME_SKINS, isDarkPaper, NIGHT_BASE, NIGHT_SHADOW, accentLuminance, onAccentText, applyEquippedTheme, toggleNight, syncThemeToggle, applyMotion, applyDisplay, viewHead, fmt, fmtDur, fmtClock, fmtSize, confirmBox, checkReminder, whatsNewShown, WHATS_NEW, openWhatsNew, closeWhatsNew, maybeWhatsNew, confettiPieces, confettiRunning, confettiCanvas, confettiBurst, confettiLoop, celebrate };
+export { $, $$, uid, get, save, esc, SICON_PATHS, sicon, stripIcon, haltPersist, isPersistHalted, collectUserSettings, applyUserSettings, pushUserSettings, pullCloudProfile, state, sanitizeState, persistFailed, persist, persistNow, refreshCoinDisplays, updateBarPadding, makeDraggable, addCoins, spendCoins, cloudSnapshot, cloudSyncTimer, scheduleCloudSync, hydrateCloudState, cloudStateSubscription, fitTextarea, notify, notifOn, ensureNotifyPermission, browserNotify, dayKey, formatHeaderDate, serverOffsetMs, refreshServerTime, serverNow, serverDayKey, addNotification, avatarMarkup, iconStar, bindFavorites, THEME_SKINS, isDarkPaper, NIGHT_BASE, NIGHT_SHADOW, accentLuminance, onAccentText, applyEquippedTheme, toggleNight, syncThemeToggle, applyMotion, applyDisplay, viewHead, fmt, fmtDur, fmtClock, fmtSize, confirmBox, checkReminder, whatsNewShown, WHATS_NEW, openWhatsNew, closeWhatsNew, maybeWhatsNew, confettiPieces, confettiRunning, confettiCanvas, confettiBurst, confettiLoop, celebrate, requireAuth };

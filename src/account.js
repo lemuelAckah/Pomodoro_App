@@ -2,7 +2,7 @@
 import {
   state, $, $$, uid, get, save, esc, sicon, stripIcon, haltPersist, pushUserSettings, persist, notify, confirmBox, viewHead,
   applyDisplay, applyEquippedTheme, applyMotion, avatarMarkup, cloudStateSubscription,
-  dayKey, hydrateCloudState, openWhatsNew, setCloudSubscription, toggleNight,
+  dayKey, hydrateCloudState, openWhatsNew, setCloudSubscription, toggleNight, requireAuth,
 } from "./core.js";
 import {
   signUpWithEmail, signInWithEmail, resendVerification, requestPasswordReset,
@@ -88,6 +88,7 @@ function openProfile() {
     notify("Signed out");
   });
   $("[data-profile-save]", modal).onclick = async () => {
+    if (!requireAuth("save your profile")) return;
     const email = $("#profile-email", modal).value.trim();
     if (email && !/.+@.+\..+/.test(email))
       return notify("That email does not look valid");
@@ -456,7 +457,10 @@ function renderLanding() {
 function renderAccount() {
   const target = $("#tab-account");
   const user = state.user;
-  target.innerHTML = `<div class="account-page"><div class="account-hero"><div><div class="eyebrow">StudyFlow identity</div><h1>${user ? "Your account, your space." : "A calmer way to sign in."}</h1><p class="lede">${user ? "Manage your profile, privacy, and connected sessions from one secure place." : "Join your focused workspace and keep your progress with you across devices."}</p></div><div class="account-orbit"><span>◷</span><i></i><b></b></div></div>${completenessMarkup()}<div class="card auth-card">${user ? accountSignedInMarkup(user) : accountAuthMarkup()}</div>${!user ? `<div class="privacy-consent" style="margin-top:16px">${privacyAgreementMarkup("account-privacy")}</div>` : ""}${dataMarkup()}${privacyCard()}</div>`;
+  const sidePanel = !user
+    ? `<aside class="auth-side" aria-label="Why join StudyFlow"><div class="auth-side-glow" aria-hidden="true"></div><div class="eyebrow">Why join</div><h3>Everything you do here, kept.</h3><p class="muted">A free account follows you across devices and keeps every streak, coin and highlight safe.</p><div class="auth-side-stats"><div class="auth-side-stat"><b>${(state.sessions || []).length}</b><small>session${(state.sessions || []).length === 1 ? "" : "s"} focused so far</small></div><div class="auth-side-stat"><b>${state.coins || 0}</b><small>coins ready to sync</small></div><div class="auth-side-stat"><b>${(state.books || []).length}</b><small>book${(state.books || []).length === 1 ? "" : "s"} on your shelf</small></div></div><ul class="auth-side-perks"><li><span>${sicon("fire")}</span><div><strong>Streaks that travel</strong><small>Your garden and streak survive a lost laptop.</small></div></li><li><span>${sicon("users")}</span><div><strong>Study together</strong><small>Sprint rooms, gifts and group challenges.</small></div></li><li><span>${sicon("refresh")}</span><div><strong>Cloud save</strong><small>Pick up on your phone mid-revision.</small></div></li><li><span>${sicon("shield")}</span><div><strong>Private by default</strong><small>You choose who sees your activity.</small></div></li></ul></aside>`
+    : "";
+  target.innerHTML = `<div class="account-page"><div class="account-hero"><div><div class="eyebrow">StudyFlow identity</div><h1>${user ? "Your account, your space." : "A calmer way to sign in."}</h1><p class="lede">${user ? "Manage your profile, privacy, and connected sessions from one secure place." : "Join your focused workspace and keep your progress with you across devices."}</p></div><div class="account-orbit"><span>◷</span><i></i><b></b></div></div>${completenessMarkup()}<div class="auth-split"><div class="card auth-card">${user ? accountSignedInMarkup(user) : accountAuthMarkup()}</div>${sidePanel}</div>${!user ? `<div class="privacy-consent" style="margin-top:16px">${privacyAgreementMarkup("account-privacy")}</div>` : ""}${dataMarkup()}${privacyCard()}</div>`;
   bindAccount(target);
 }
 

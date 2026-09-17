@@ -1,6 +1,6 @@
 /* books.js — book library: catalog, upload, details, favorites, download, reports */
 import {
-  state, $, $$, uid, esc, sicon, persist, notify, confirmBox, viewHead, fitTextarea,
+  state, $, $$, uid, esc, sicon, persist, notify, confirmBox, viewHead, fitTextarea, requireAuth,
 } from "./core.js";
 import {
   backendConfigured, uploadBookFile, getBookFileUrl, downloadBookFile, removeBookFile,
@@ -689,6 +689,7 @@ function openUploadBook() {
     if (f) setPicked(f);
   });
   saveBtn.onclick = async () => {
+    if (!requireAuth("upload books")) return;
     const file = pickedFile || modal.querySelector("[data-up-file]").files[0];
     const title = modal.querySelector("[data-up-title]").value.trim();
     const extOk = file && BOOK_EXTS.some((x) => file.name.toLowerCase().endsWith(x));

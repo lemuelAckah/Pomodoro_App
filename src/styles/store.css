@@ -360,6 +360,7 @@ html[data-night="1"] .box-legendary {
 .store-footer {
   position: sticky;
   bottom: 15px;
+  z-index: 15; /* always paints above card icons/tooltips while scrolling */
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
@@ -371,6 +372,13 @@ html[data-night="1"] .box-legendary {
   border-radius: 16px;
   padding: 15px 18px;
   box-shadow: 0 15px 35px #18352a25;
+}
+
+/* Hovering a card lifts the whole card (and its info tooltip) above the
+   sticky bar on purpose; unhovered cards stay beneath it. */
+.store-item:hover,
+.store-item:focus-within {
+  z-index: 30;
 }
 
 .owned {
@@ -512,6 +520,12 @@ html[data-night="1"] .box-legendary {
    sticky song bar or header (see the scroll closer in app.js). */
 body.is-scrolling .info-btn::after {
   opacity: 0 !important;
+}
+/* And the icons themselves sink back under the sticky bar mid-scroll —
+   only a deliberate hover (no scrolling) raises a card above it. */
+body.is-scrolling .store-item:hover,
+body.is-scrolling .store-item:focus-within {
+  z-index: auto;
 }
 
 /* Mobile: tooltip centered, full-width, can't overflow the screen */

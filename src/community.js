@@ -2,7 +2,7 @@
 import {
   state, $, $$, uid, get, save, esc, sicon, stripIcon, persist, notify, confirmBox, viewHead,
   addCoins, addNotification, browserNotify, celebrate, fmt, fmtSize, avatarMarkup, dayKey, notifOn,
-  setGroupLookup, fitTextarea,
+  setGroupLookup, fitTextarea, requireAuth,
 } from "./core.js";
 import {
   sendCloudMessage, markMessageRead, subscribeToConversation, subscribeToPresence,
@@ -641,21 +641,11 @@ function ensureSprintFields() {
   if (!Array.isArray(state.sprints)) state.sprints = [];
   state.sprints.forEach(sanitizeSprint);
   if (!Array.isArray(state.sprintInvites)) state.sprintInvites = [];
-  if (!state.sprints.length && !state.sprintInvites.length && !get("sf-inv-seed", false)) {
-    // One demo invite so the accept / decline flow is discoverable instantly.
-    state.sprintInvites.push({
-      id: "inv-demo-" + uid(),
-      title: "Evening deep-work relay",
-      purpose: "4 × 25-min rounds to finish the week's problem set together. Cameras optional, leaderboard mandatory.",
-      from: "Maya",
-      durationMin: 25,
-      startsAt: Date.now() + 8 * 60000,
-      status: "pending",
-      demo: true,
-    });
-    save("sf-inv-seed", true);
-    persist();
-  }
+  // Invites only ever appear here when a real friend sends one — no demo data.
+  // Purge demo invites left over from earlier versions.
+  const hadDemo = state.sprintInvites.some((i) => i && i.demo);
+  state.sprintInvites = state.sprintInvites.filter((i) => i && !i.demo);
+  if (hadDemo) persist();
 }
 
 function isSprintOwner(sp) {
@@ -786,7 +776,7 @@ function eventMarkup() {
     const pend = (e.invites || []).filter((i) => i.status === "pending").length;
     const going = (e.invites || []).filter((i) => i.status === "accepted").length + (e.mine ? 1 : 0);
     return `<div class="event-row pro"><div><strong>${sicon("calendar")} ${esc(e.title)}</strong><br><small class="muted">${eventWhen(e)} · ${e.durationMin} min${g ? ` · ${esc(g.name)}` : ""}${e.visibility === "friends" ? ` · ${sicon("lock")} friends` : ""} · ${going} going</small>${(e.invites || []).length ? `<div class="invite-chips">${e.invites.map((i) => `<span class="invite-chip ${i.status}">@${esc(i.username)} · ${i.status === "accepted" ? "in " + sicon("check") : i.status === "declined" ? "out" : "invited…"}</span>`).join("")}</div>` : ""}</div><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${live ? `<span class="tag">● LIVE</span><button class="primary" data-event-start="${e.id}" style="padding:8px 12px;font-size:12px">Start</button>` : ""}<button class="${e.mine ? "ghost" : "primary"}" data-event-rsvp="${e.id}" style="padding:8px 12px;font-size:12px">${e.mine ? "Going " + sicon("check") : "RSVP"}</button>${owner ? `${pend ? `<button class="ghost" data-event-nudge="${e.id}" style="padding:8px 12px;font-size:12px" title="Simulate a friend replying now">Nudge</button>` : ""}<button class="delete" data-event-del="${e.id}" title="Remove">×</button>` : ""}</div></div>`;
-  }).join("") : '<p class="muted">Nothing scheduled. Put study on the calendar and show up.</p>'}<div class="section-row" style="margin-top:14px"><h3>New session</h3><span class="tag">you host</span></div><div class="grid two"><input class="input" id="ev-title" placeholder="e.g. Calc sprint"><select class="select" id="ev-aud" aria-label="Who is this for"><option value="self">Just me</option><option value="group">A group</option><option value="friends">Specific friends</option></select><select class="select" id="ev-group"><option value="">No group</option>${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("")}</select><label class="field-label ev-datetime-label">${sicon("calendar")} Date & time<input class="input" id="ev-at" type="datetime-local" aria-label="Date and time"></label><select class="select" id="ev-dur"><option value="15">15 min</option><option value="25" selected>25 min</option><option value="30">30 min</option><option value="50">50 min</option><option value="60">60 min</option><option value="90">90 min</option></select></div><p class="muted" style="margin:8px 0 0">Friends get an invite they can accept or decline — replies land here and on your Focus desk.</p><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center;position:relative"><button class="primary" id="ev-create">Schedule</button><button class="ghost" id="ev-crew-toggle" type="button" hidden></button><div class="friend-pick drop" id="ev-friends" hidden><div class="eyebrow" style="margin-bottom:6px">Pick friends</div>${(state.friends || []).map((f) => `<label class="pick-row"><input type="checkbox" value="${f.id}"> <span class="crew-avatar sm">${esc((f.username || "?")[0].toUpperCase())}</span> @${esc(f.username)}</label>`).join("") || '<p class="muted">No friends yet — add some in the Friends tab first.</p>'}</div></div></div>`;
+  }).join("") : '<p class="muted">Nothing scheduled. Put study on the calendar and show up.</p>'}<div class="section-row" style="margin-top:14px"><h3>New session</h3><span class="tag">you host</span></div><div class="grid two"><input class="input" id="ev-title" placeholder="e.g. Calc sprint"><select class="select" id="ev-aud" aria-label="Who is this for"><option value="self">Just me</option><option value="group">A group</option><option value="friends">Specific friends</option></select><select class="select" id="ev-group" aria-label="Which group"><option value="">No group</option>${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("")}</select><label class="field-label ev-datetime-label">${sicon("calendar")} Date & time<input class="input" id="ev-at" type="datetime-local" aria-label="Date and time"></label><select class="select" id="ev-dur"><option value="15">15 min</option><option value="25" selected>25 min</option><option value="30">30 min</option><option value="50">50 min</option><option value="60">60 min</option><option value="90">90 min</option></select></div><p class="muted" style="margin:8px 0 0">Friends get an invite they can accept or decline — replies land here and on your Focus desk.</p><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center;position:relative"><button class="primary" id="ev-create">Schedule</button><button class="ghost" id="ev-crew-toggle" type="button" hidden></button><div class="friend-pick drop" id="ev-friends" hidden><div class="eyebrow" style="margin-bottom:6px">Pick friends</div>${(state.friends || []).map((f) => `<label class="pick-row"><input type="checkbox" value="${f.id}"> <span class="crew-avatar sm">${esc((f.username || "?")[0].toUpperCase())}</span> @${esc(f.username)}</label>`).join("") || '<p class="muted">No friends yet — add some in the Friends tab first.</p>'}</div></div></div>`;
 }
 
 /* ---------- scheduled sessions pro: friends invites, host controls ---------- */
@@ -811,20 +801,12 @@ function ensureEventFields() {
     if (!e.visibility) e.visibility = e.groupId ? "open" : "self";
     if (!Array.isArray(e.invites)) e.invites = [];
   });
-  if (!state.events.length && !state.eventInvites.length && !get("sf-ev-seed", false)) {
-    state.eventInvites.push({
-      id: "evinv-demo-" + uid(),
-      title: "Saturday study marathon",
-      purpose: "Past-paper relay before the mocks — bring questions, leave with answers.",
-      from: "Leo",
-      at: Date.now() + 26 * 3600000,
-      durationMin: 50,
-      status: "pending",
-      demo: true,
-    });
-    save("sf-ev-seed", true);
-    persist();
-  }
+  // Session invites appear only when someone actually invites you —
+  // demo invites made the inbox look busy with fake friends.
+  // Purge any demo invites left over from earlier versions.
+  const hadDemo = state.eventInvites.some((i) => i && i.demo);
+  state.eventInvites = state.eventInvites.filter((i) => i && !i.demo);
+  if (hadDemo) persist();
 }
 
 function eventInboxMarkup() {
@@ -1015,6 +997,7 @@ function bindSprints(body) {
     }
   });
   $("#sprint-create", body).onclick = () => {
+    if (!requireAuth("host sprint rooms")) return;
     const dur = Math.min(120, Math.max(5, parseInt($("#sprint-dur", body).value, 10) || 25));
     const mins = parseInt($("#sprint-in", body).value, 10) || 5;
     const groupId = $("#sprint-group", body).value || "";
@@ -1223,6 +1206,7 @@ function bindSprints(body) {
       }),
   );
   $("#ch-create", body).onclick = () => {
+    if (!requireAuth("host group challenges")) return;
     const target = Math.min(500, Math.max(1, parseInt($("#ch-target", body).value, 10) || 10));
     const groupId = $("#ch-group", body).value || "";
     if (!groupId) return notify("Join a group first to challenge it");
@@ -1309,12 +1293,21 @@ function bindSprints(body) {
     const crewBox = $("#ev-friends", body);
     if (crewBox) crewBox.hidden = true;
     paintEvCrewBtn(body);
+    // The group picker only makes sense when "A group" is the audience —
+    // hiding it keeps the new-session form compact instead of a tall empty box.
+    const groupSel = $("#ev-group", body);
+    if (groupSel) groupSel.hidden = e.target.value !== "group";
     if (e.target.value === "friends" && !(state.friends || []).length) {
       state.subtab = "friends";
       renderCommunity();
       notify("Add friends first — then pick your session crew");
     }
   };
+  // Initial paint: default audience is "Just me", so start hidden.
+  {
+    const groupSel = $("#ev-group", body);
+    if (groupSel) groupSel.hidden = ($("#ev-aud", body)?.value || "self") !== "group";
+  }
   $("#ev-crew-toggle", body).onclick = () => {
     const crewBox = $("#ev-friends", body);
     if (crewBox) crewBox.hidden = !crewBox.hidden;
@@ -1324,6 +1317,7 @@ function bindSprints(body) {
   );
   paintEvCrewBtn(body);
   $("#ev-create", body).onclick = () => {
+    if (!requireAuth("schedule sessions")) return;
     const title = $("#ev-title", body).value.trim() || "Study session";
     const at = new Date($("#ev-at", body).value).getTime();
     if (!at || at < Date.now()) return notify("Pick a future date and time");
@@ -2210,6 +2204,7 @@ function bindFeed(root) {
   const publish = $("#publish-post", root);
   if (publish)
     publish.onclick = () => {
+      if (!requireAuth("share notes with the community")) return;
       const input = $("#post-composer", root);
       if (!input.value.trim())
         return notify("Write something before publishing");
@@ -2374,6 +2369,7 @@ function bindGroupButtons(root) {
   $$("[data-join-group]", root).forEach(
     (b) =>
       (b.onclick = () => {
+        if (!requireAuth("join study groups")) return;
         const joined = get("sf-joined", []);
         save("sf-joined", [...new Set([...joined, b.dataset.joinGroup])]);
         notify("Group joined");
@@ -2415,6 +2411,7 @@ function renderMyGroups(body) {
     '<p class="muted">No groups yet. Create one above — it appears in Discover for everyone.</p>'
   }</div>`;
   $("#create-group", body).onclick = async () => {
+    if (!requireAuth("create study groups")) return;
     const name = $("#new-group-name").value.trim(),
       desc = $("#new-group-description").value.trim();
     if (!name || !desc) return notify("Add a name and description first");
@@ -2503,6 +2500,7 @@ function redeemReferral(root) {
 function renderFriends(body) {
   body.innerHTML = `<div class="card" style="margin-bottom:18px"><h2>Invite study buddies</h2><p class="muted">Friends join with your username. Share this invite anywhere — anyone who installs StudyFlow can add you in seconds.</p><div class="input-row"><input class="input" id="invite-link" readonly value="${esc(inviteText())}"><button class="primary" id="copy-invite">Copy</button><button class="ghost" id="share-invite">Share</button></div></div>${referralMarkup()}<div class="card"><h2>Friends & gifting</h2><p class="muted">Add study partners here. They will also appear as gift recipients in the Rewards store.</p><div class="input-row"><input class="input" id="friend-name" placeholder="Username" aria-label="Friend username"><button class="primary" id="add-friend">Add friend</button></div><div class="grid">${state.friends.map((f) => `<div class="task"><div class="avatar">${f.username[0].toUpperCase()}</div><span class="task-text">@${esc(f.username)}</span><span class="friend-actions"><button class="ghost" data-chat-friend="${f.id}">Message</button><button class="ghost" data-block-friend="${f.id}">Block</button><button class="delete" data-remove-friend="${f.id}" title="Remove friend">×</button></span></div>`).join("") || '<p class="muted">Add a friend to send gifts and messages.</p>'}</div>${blockedSectionMarkup()}</div></div>`;
   $("#add-friend", body).onclick = () => {
+    if (!requireAuth("add study buddies")) return;
     const name = $("#friend-name").value.trim();
     if (!name) return;
     if (state.friends.some((f) => f.username === name))

@@ -57,6 +57,85 @@
   color: var(--sage);
 }
 
+/* Delete affordance on list cards (decks, Cornell/Feynman notes, maps).
+   Appears on hover on pointer devices; always visible on touch. */
+.deck-list-del {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0;
+  border-radius: 9px;
+  font-size: 16px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  background: #f3ede7;
+}
+
+html[data-night="1"] .deck-list-del {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+article.card {
+  position: relative;
+}
+
+article.card:hover .deck-list-del,
+.deck-list-del:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none), (max-width: 700px) {
+  .deck-list-del {
+    opacity: 0.75;
+  }
+}
+
+/* Preview of the card's back under its front in deck lists */
+.card-back-preview {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Per-message delete in the duck chat */
+.duck-msg-del {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  padding: 0;
+  border-radius: 7px;
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  background: rgba(23, 34, 29, 0.08);
+  color: #c08478;
+}
+
+.bubble {
+  position: relative;
+}
+
+.bubble:hover .duck-msg-del,
+.duck-msg-del:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .duck-msg-del {
+    opacity: 0.6;
+  }
+}
+
 .tech-back {
   margin-bottom: 16px;
 }

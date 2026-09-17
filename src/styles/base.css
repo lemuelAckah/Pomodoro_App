@@ -13,6 +13,22 @@ body {
   overflow-x: hidden;
 }
 
+/* Page freeze while a floating bar (mini timer / player) is being dragged.
+   The page must hold perfectly still until the bar is dropped. */
+html.sf-dragging,
+html.sf-dragging body {
+  overflow: hidden !important;
+  overscroll-behavior: none !important;
+  touch-action: none !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+/* Keep the viewport pinned to where it was when the drag started. */
+html.sf-dragging body {
+  position: relative;
+  top: calc(var(--sf-freeze-scroll, 0px) * -1);
+}
+
 button,
 input,
 textarea,
@@ -112,6 +128,34 @@ h2 {
 h3 {
   font-size: 15px;
   margin-bottom: 7px;
+}
+
+/* Long titles must never escape their box. Flex children (like h3 inside
+   .section-row) default to min-width:auto, which forces the row wider than
+   the card — that is the overflow users see. min-width:0 + word wrapping
+   fixes the root cause; [data-fittitle] adds the shrink-to-fit alternative. */
+h1,
+h2,
+h3 {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.section-row > h3,
+.section-row > h2,
+.section-row > strong {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Shrink-to-fit variant: one line, auto-shrinks, then ellipsis + tooltip. */
+[data-fittitle] {
+  min-width: 0;
+  max-width: 100%;
+  flex: 1 1 auto;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: clip;
 }
 
 .mono {

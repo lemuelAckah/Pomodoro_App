@@ -20,6 +20,7 @@ function readerSettings() {
     fontSize: 18, lineHeight: 1.7, width: "medium", theme: "auto", align: "left",
     ...(JSON.parse(localStorage.getItem("sf-book-settings") || "{}")),
   };
+  if (s.ruler === undefined) s.ruler = false;
 }
 function saveReaderSettings(s) {
   try {
@@ -181,7 +182,7 @@ export function renderReader() {
       </div></div>
     <div class="reader-main">
       <div class="reader-bodywrap"><div class="reader-progress"><i data-r-bar style="width:${pct}%"></i></div>
-        <div class="reader-body" data-r-body style="--read-fs:${s.fontSize}px;--read-lh:${s.lineHeight};--read-w:${widthPx}px;text-align:${s.align === "justify" ? "justify" : "left"}"></div>
+        <div class="reader-body" data-r-body data-ruler="${s.ruler ? 1 : 0}" style="--read-fs:${s.fontSize}px;--read-lh:${s.lineHeight};--read-w:${widthPx}px;text-align:${s.align === "justify" ? "justify" : "left"}"></div>
         <div class="reader-foot"><button class="ghost" data-r-prev>‹ Prev</button><span class="muted" data-r-page></span><button class="ghost" data-r-next>Next ›</button></div>
       </div>
       <aside class="reader-side" data-r-side hidden></aside>
@@ -208,8 +209,15 @@ function renderReaderBody() {
     updateReaderFoot();
     return;
   }
+  // "Chapterplate" reading design — an original StudyFlow layout:
+  //   · sections open with a rule + small-caps label and a drop cap on the
+  //     first paragraph, like a well-set book
+  //   · every 5th paragraph carries a thin margin tick so your eye can find
+  //     its place when you return
+  //   · while a session is live the reader dims every line except the one
+  //     you're on (ruler reading), driven by pure CSS hover/focus
   body.innerHTML = R.sections.map((sec, i) =>
-    `<section class="reader-sec" data-sec="${i}">${sec.title ? `<h3>${esc(sec.title)}</h3>` : `<h3 class="reader-sec-auto">Section ${i + 1}</h3>`}${sec.paras.map((p) => `<p>${esc(p)}</p>`).join("")}</section>`,
+    `<section class="reader-sec" data-sec="${i}"><div class="reader-sec-head">${sec.title ? `<span class="reader-sec-rule"></span><h3>${esc(sec.title)}</h3>` : `<span class="reader-sec-rule"></span><h3 class="reader-sec-auto">§ ${i + 1}</h3>`}</div>${sec.paras.map((p, j) => `<p class="reader-p${j === 0 ? " reader-p-first" : ""}${(j + 1) % 5 === 0 ? " reader-tick" : ""}" data-p>${esc(p)}</p>`).join("")}</section>`,
   ).join("");
   applyHighlights();
   applySearchMarks();
@@ -354,18 +362,44 @@ function bindReader(t) {
         }
       }
     }, { passive: true });
-    body.addEventListener("mouseup", onReaderSelect);
+    // Selection capture is centralized in the document-level selectionchange
+    // listener (works for mouse AND touch); nothing per-body needed here.
   }
   if (!window.__sfReaderSelBound) {
     window.__sfReaderSelBound = true;
+    document.addEventListener("selectionchange", (() => {
+      let t = 0;
+      return () => {
+        clearTimeout(t);
+        t = setTimeout(() => {
+          // Only react to selections made inside an open text reader.
+          const body = document.querySelector("[data-r-body]");
+          if (!body || !R || R.kind !== "text") return;
+          const sel = window.getSelection();
+          if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+          if (!body.contains(sel.anchorNode)) return;
+          onReaderSelect();
+        }, 350);
+      };
+    })());
+    // Tap (or click) an existing highlight to restyle it — the Ink Tray in edit mode.
+    document.addEventListener("click", (e) => {
+      const mark = e.target.closest?.("mark[data-hl]");
+      if (!mark) return;
+      if (!R || R.kind !== "text") return;
+      const store = localStore(R.id);
+      const h = store.highlights.find((x) => x.id === mark.dataset.hl);
+      if (!h) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openInkTray("edit", { ...h, rect: mark.getBoundingClientRect() });
+    });
     document.addEventListener("pointerdown", (e) => {
-      const bar = document.querySelector("[data-r-selbar]");
-      if (bar && !bar.hidden && !(e.target.closest && e.target.closest("[data-r-selbar]"))) {
-        bar.hidden = true;
-        const sel = window.getSelection();
-        try {
-          if (sel && sel.rangeCount && !document.querySelector("[data-r-body]")?.contains(sel.anchorNode)) sel.removeAllRanges();
-        } catch { /* ignore */ }
+      const tray = document.querySelector("[data-r-selbar]");
+      if (tray && !tray.hidden && !(e.target.closest && e.target.closest("[data-r-selbar]")) && !(e.target.closest && e.target.closest("mark[data-hl]"))) {
+        // Dismiss on outside tap only when the tray is in edit mode; in new
+        // mode the selection itself is the anchor and will re-open on change.
+        if (R?.trayMode === "edit") tray.hidden = true;
       }
     });
     // A reader closed by tab close / refresh must not lose the last positions.
@@ -508,41 +542,114 @@ function paintSearchHits(side) {
   box.querySelector("[data-r-hitprev]").onclick = () => stepSearchHit(-1);
   box.querySelector("[data-r-hitnext]").onclick = () => stepSearchHit(1);
 }
-function applySearchMarks() {
-  document.querySelectorAll(".search-hit").forEach((m) => {
-    m.replaceWith(document.createTextNode(m.textContent));
-  });
+// ---- Paragraph paint engine -------------------------------------------------
+// Every paragraph is rebuilt from its ORIGINAL text (kept in a WeakMap — the
+// DOM itself is never used as the source, so highlights and search marks can
+// never corrupt each other or drift on re-runs). Highlights and search hits
+// are merged into one non-overlapping range list per paragraph, then painted
+// in a single pass. Multi-highlight paragraphs, overlapping selections and
+// repeated phrases all work.
+const paraOrig = new WeakMap();
+function paraText(p) {
+  if (!paraOrig.has(p)) paraOrig.set(p, p.textContent);
+  return paraOrig.get(p);
+}
+function hlStart(a, b) { return a.start - b.start || b.end - a.end; }
+
+function paintParagraph(p, hls, marks, secIdx = 0, pIdx = 0) {
+  const text = paraText(p);
+  const ranges = [];
+  for (const h of hls) {
+    // exact-range highlights (current format): anchored to this paragraph
+    if (h.sec === secIdx && h.pIdx === pIdx && Number.isInteger(h.start) && Number.isInteger(h.end) && h.start >= 0 && h.end > h.start && h.end <= text.length) {
+      ranges.push({ start: h.start, end: h.end, kind: "hl", h });
+      continue;
+    }
+    // legacy highlights: find the excerpt anywhere in this paragraph
+    if (h.sec != null && (h.sec !== secIdx || (h.pIdx != null && h.pIdx !== pIdx))) continue;
+    const needle = h.excerpt;
+    if (!needle) continue;
+    let at = 0;
+    // paint EVERY occurrence of an excerpt (repeated phrases), not just the first
+    while (true) {
+      const i = text.indexOf(needle, at);
+      if (i < 0) break;
+      ranges.push({ start: i, end: i + needle.length, kind: "hl", h });
+      at = i + needle.length;
+    }
+  }
+  for (const m of marks) ranges.push({ start: m.start, end: m.end, kind: "mark" });
+  if (!ranges.length) {
+    if (p.firstChild?.nodeType !== 3 || p.textContent !== text) p.replaceChildren(document.createTextNode(text));
+    return;
+  }
+  ranges.sort(hlStart);
+  // merge: highlights outrank search marks; overlaps collapse to the longest
+  const merged = [];
+  for (const r of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && r.start < last.end) {
+      if (r.kind === "hl" && last.kind === "mark") last.kind = "hl", last.h = r.h;
+      if (r.end > last.end) last.end = r.end;
+      continue;
+    }
+    merged.push({ ...r });
+  }
+  const frag = document.createDocumentFragment();
+  let cursor = 0;
+  for (const r of merged) {
+    if (r.start > cursor) frag.append(document.createTextNode(text.slice(cursor, r.start)));
+    const el = document.createElement("mark");
+    if (r.kind === "hl") {
+      el.className = `ink-${r.h.style || "marker"} ink-${r.h.color || "yellow"}`;
+      el.dataset.hl = r.h.id;
+      if (r.h.note) el.classList.add("has-note");
+      el.title = r.h.note ? "Has a note — tap to view" : "Tap to restyle or edit";
+    } else {
+      el.className = "search-hit";
+      R.search.hits.push(el);
+    }
+    el.textContent = text.slice(r.start, r.end);
+    frag.append(el);
+    cursor = r.end;
+  }
+  if (cursor < text.length) frag.append(document.createTextNode(text.slice(cursor)));
+  p.replaceChildren(frag);
+}
+
+function paintAllParagraphs() {
   const body = readerBodyEl();
+  if (!body || !R || R.kind !== "text") return;
+  const store = localStore(R.id);
+  const q = (R.search.q || "").trim().toLowerCase();
+  body.querySelectorAll("[data-sec]").forEach((secEl) => {
+    const secIdx = Number(secEl.dataset.sec) || 0;
+    secEl.querySelectorAll("p[data-p]").forEach((p, pIdx) => {
+      const text = paraText(p);
+      const marks = [];
+      if (q.length >= 2) {
+        const lower = text.toLowerCase();
+        let at = 0;
+        while (true) {
+          const i = lower.indexOf(q, at);
+          if (i < 0) break;
+          marks.push({ start: i, end: i + q.length });
+          at = i + q.length;
+        }
+      }
+      paintParagraph(p, store.highlights, marks, secIdx, pIdx);
+    });
+  });
+}
+
+function applySearchMarks() {
   R.search.hits = [];
   R.search.idx = -1;
-  if (!body || !R || R.kind !== "text") return;
-  const q = R.search.q.trim().toLowerCase();
-  if (q.length < 2) return;
-  body.querySelectorAll("[data-sec] p").forEach((p) => {
-    if (p.querySelector("mark[data-hl]")) return;
-    const text = p.textContent;
-    const lower = text.toLowerCase();
-    let at = 0;
-    let found = false;
-    const frag = document.createDocumentFragment();
-    while (true) {
-      const i = lower.indexOf(q, at);
-      if (i < 0) break;
-      found = true;
-      frag.append(document.createTextNode(text.slice(at, i)));
-      const mark = document.createElement("mark");
-      mark.className = "search-hit";
-      mark.textContent = text.slice(i, i + q.length);
-      R.search.hits.push(mark);
-      frag.append(mark);
-      at = i + q.length;
-    }
-    if (found) {
-      frag.append(document.createTextNode(text.slice(at)));
-      p.replaceChildren(frag);
-    }
-  });
-  applyHighlights();
+  paintAllParagraphs();
+}
+
+function applyHighlights() {
+  paintAllParagraphs();
 }
 function stepSearchHit(dir) {
   if (!R || !R.search.hits.length) return;
@@ -558,6 +665,54 @@ function stepSearchHit(dir) {
   const side = document.querySelector("[data-r-side]");
   if (side && !side.hidden) paintSearchHits(side);
 }
+// ---- Selection capture (mouse + touch) --------------------------------------
+// Mobile keyboards/OS UI report text selection before mouseup ever fires, so we
+// listen to selectionchange (debounced) instead of relying on mouseup alone.
+const INK_STYLES = ["marker", "underline", "ring"];
+// NOTE: books.js ↔ books-reader.js are circular imports — BOOK_COLORS must be
+// read lazily inside functions, never captured at module top level (TDZ).
+function paraOffsetMap(p) {
+  // offset of every descendant text node within the paragraph's full text
+  const map = [];
+  let off = 0;
+  const walk = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+    map.push({ node: n, start: off });
+    off += n.textContent.length;
+  }
+  return map;
+}
+function selSpans(body, range) {
+  // Exact per-paragraph character ranges covered by the selection — works
+  // within one paragraph, across paragraphs, and over existing highlights.
+  const byPara = new Map();
+  const walk = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+    if (!range.intersectsNode(n)) continue;
+    const s = n === range.startContainer ? range.startOffset : 0;
+    const e = n === range.endContainer ? range.endOffset : n.textContent.length;
+    if (s >= e) continue;
+    const pEl = n.parentElement?.closest("[data-p]");
+    if (!pEl || !body.contains(pEl)) continue;
+    let entry = byPara.get(pEl);
+    if (!entry) byPara.set(pEl, (entry = []));
+    entry.push({ node: n, s, e });
+  }
+  const spans = [];
+  for (const [pEl, hits] of byPara) {
+    const map = paraOffsetMap(pEl);
+    let min = Infinity, max = -Infinity;
+    for (const { node, s, e } of hits) {
+      const rec = map.find((x) => x.node === node);
+      if (!rec) continue;
+      min = Math.min(min, rec.start + s);
+      max = Math.max(max, rec.start + e);
+    }
+    if (min < max) spans.push({ p: pEl, start: min, end: max });
+  }
+  spans.sort((a, b) => (a.p.compareDocumentPosition(b.p) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+  return spans;
+}
 function selContext() {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
@@ -566,82 +721,120 @@ function selContext() {
   if (!body || !body.contains(range.commonAncestorContainer)) return null;
   const text = sel.toString().replace(/\s+/g, " ").trim();
   if (text.length < 2 || text.length > 2000) return null;
-  const full = body.textContent.replace(/\s+/g, " ");
-  const at = full.indexOf(text);
+  const spans = selSpans(body, range);
+  if (!spans.length) return null;
+  // prefix/suffix are derived from the anchor paragraph for cloud-row fallback
+  const first = spans[0], last = spans[spans.length - 1];
+  const firstText = paraText(first.p), lastText = paraText(last.p);
   return {
     text,
-    prefix: at > 0 ? full.slice(Math.max(0, at - 120), at) : "",
-    suffix: at >= 0 ? full.slice(at + text.length, at + text.length + 120) : "",
+    spans,
+    prefix: first.start > 0 ? firstText.slice(Math.max(0, first.start - 120), first.start) : "",
+    suffix: last.end < lastText.length ? lastText.slice(last.end, last.end + 120) : "",
     rect: range.getBoundingClientRect(),
   };
 }
+function positionInkTray(tray, rect) {
+  const anchor = document.querySelector("[data-reader]") || document.body;
+  const anchorRect = anchor.getBoundingClientRect();
+  const trayW = Math.min(300, anchorRect.width - 16);
+  tray.style.width = trayW + "px";
+  const top = Math.max(8, rect.top - anchorRect.top - tray.offsetHeight - 10);
+  const left = Math.max(8, Math.min(anchorRect.width - trayW - 8, rect.left + rect.width / 2 - anchorRect.left - trayW / 2));
+  tray.style.top = top + "px";
+  tray.style.left = left + "px";
+}
+function inkTrayMarkup(mode, h) {
+  const editing = mode === "edit";
+  const cur = h || {};
+  const colors = BOOK_COLORS.map((c) => `<button class="ink-dot ink-${c}${(cur.color || "yellow") === c ? " picked" : ""}" data-ink-color="${c}" title="${c}" aria-label="${c} ink" aria-pressed="${(cur.color || "yellow") === c}"></button>`).join("");
+  const styles = INK_STYLES.map((st) => `<button class="ink-style-chip${(cur.style || "marker") === st ? " picked" : ""}" data-ink-style="${st}" title="${st}"><span class="ink-chip-sample ink-${st} ink-${cur.color || "yellow"}">Ab</span>${st}</button>`).join("");
+  return `<div class="ink-tray-head"><span class="ink-tray-title">${editing ? "Ink" : "Highlight"}</span>${editing ? `<button class="ghost" data-ink-delete>${sicon("trash")} Remove</button>` : ""}</div><div class="ink-tray-colors" role="group" aria-label="Ink color">${colors}</div><div class="ink-tray-styles" role="group" aria-label="Ink style">${styles}</div><div class="ink-tray-note" data-ink-notebox ${cur.note ? "" : "hidden"}><textarea class="textarea autogrow" data-ink-notetext rows="2" placeholder="Private note on this passage…">${esc(cur.note || "")}</textarea></div><div class="ink-tray-actions"><button class="ghost" data-ink-note>${sicon("memo")} ${cur.note ? "Edit note" : "Note"}</button><button class="primary" data-ink-apply>${editing ? "Save" : "Apply"}</button></div>`;
+}
+function openInkTray(mode, payload) {
+  const tray = document.querySelector("[data-r-selbar]");
+  if (!tray || !R) return;
+  R.trayMode = mode;
+  R.trayDraft = mode === "edit" ? { id: payload.id, color: payload.color || "yellow", style: payload.style || "marker", note: payload.note || "" } : { color: "yellow", style: "marker", note: "" };
+  tray.innerHTML = inkTrayMarkup(mode, mode === "edit" ? payload : null);
+  positionInkTray(tray, payload.rect || R.selCtx?.rect || { top: 60, left: 40, width: 100 });
+  tray.hidden = false;
+  const paintPicked = () => {
+    tray.querySelectorAll("[data-ink-color]").forEach((b) => {
+      b.classList.toggle("picked", b.dataset.inkColor === R.trayDraft.color);
+      b.setAttribute("aria-pressed", String(b.dataset.inkColor === R.trayDraft.color));
+    });
+    tray.querySelectorAll("[data-ink-style]").forEach((b) => b.classList.toggle("picked", b.dataset.inkStyle === R.trayDraft.style));
+  };
+  tray.querySelectorAll("[data-ink-color]").forEach((b) => (b.onclick = () => { R.trayDraft.color = b.dataset.inkColor; paintPicked(); }));
+  tray.querySelectorAll("[data-ink-style]").forEach((b) => (b.onclick = () => { R.trayDraft.style = b.dataset.inkStyle; paintPicked(); }));
+  const noteBox = tray.querySelector("[data-ink-notebox]");
+  tray.querySelector("[data-ink-note]").onclick = () => {
+    noteBox.hidden = !noteBox.hidden;
+    if (!noteBox.hidden) {
+      const ta = noteBox.querySelector("[data-ink-notetext]");
+      fitTextarea(ta);
+      ta.focus();
+      positionInkTray(tray, payload.rect || R.selCtx?.rect || { top: 60, left: 40, width: 100 });
+    }
+  };
+  if (mode === "edit") {
+    tray.querySelector("[data-ink-delete]").onclick = () => {
+      removeHighlightById(R.trayDraft.id);
+      tray.hidden = true;
+    };
+  }
+  tray.querySelector("[data-ink-apply]").onclick = () => {
+    R.trayDraft.note = tray.querySelector("[data-ink-notetext]").value.trim().slice(0, 4000);
+    if (mode === "edit") updateHighlight(R.trayDraft);
+    else addHighlight(R.trayDraft.color, R.trayDraft.style, R.trayDraft.note);
+    tray.hidden = true;
+  };
+}
 function onReaderSelect() {
-  const bar = document.querySelector("[data-r-selbar]");
-  if (!bar || !R || R.kind !== "text") return;
+  if (!R || R.kind !== "text") return;
   setTimeout(() => {
     const ctx = selContext();
-    if (!ctx || !R) {
-      bar.hidden = true;
-      return;
-    }
+    if (!ctx || !R) return;
     R.selCtx = ctx;
-    bar.innerHTML = `<div class="selbar-row"><span class="muted">Highlight:</span>${BOOK_COLORS.map((c) => `<button class="hl-dot hl-${c}" data-sel-hl="${c}" title="Highlight ${c}" aria-label="Highlight ${c}"></button>`).join("")}<button class="ghost" data-sel-note>Note</button><button class="ghost" data-sel-ask>Ask</button></div><div class="selbar-note" data-sel-notebox hidden><textarea class="textarea autogrow" data-sel-notetext rows="2" placeholder="Attach a private note…"></textarea><div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px"><button class="ghost" data-sel-notecancel>Cancel</button><button class="primary" data-sel-notesave>Save note</button></div></div>`;
-    const r = ctx.rect;
-    // The bar is positioned relative to the reader container (position:absolute
-    // inside it), so it needs the CONTAINER's coordinates — window.scrollY would
-    // double-count the page scroll and push the bar far below the selection.
-    const anchor = document.querySelector("[data-reader]") || document.body;
-    const anchorRect = anchor.getBoundingClientRect();
-    bar.style.top = Math.max(8, r.top - anchorRect.top - 46) + "px";
-    bar.hidden = false;
-    bar.querySelectorAll("[data-sel-hl]").forEach((b) => (b.onclick = () => {
-      addHighlight(b.dataset.selHl, "");
-      bar.hidden = true;
-    }));
-    const noteBox = bar.querySelector("[data-sel-notebox]");
-    bar.querySelector("[data-sel-note]").onclick = () => {
-      noteBox.hidden = !noteBox.hidden;
-      if (!noteBox.hidden) {
-        const ta = noteBox.querySelector("[data-sel-notetext]");
-        fitTextarea(ta);
-        ta.focus();
-      }
-    };
-    bar.querySelector("[data-sel-notecancel]").onclick = () => {
-      noteBox.hidden = true;
-    };
-    bar.querySelector("[data-sel-notesave]").onclick = () => {
-      const note = noteBox.querySelector("[data-sel-notetext]").value.trim().slice(0, 4000);
-      addHighlight("yellow", note);
-      bar.hidden = true;
-    };
-    bar.querySelector("[data-sel-ask]").onclick = () => {
-      bar.hidden = true;
-      R.panel = "companion";
-      R.askCtx = ctx.text;
-      applyReaderPanel();
-    };
+    openInkTray("new", ctx);
   }, 10);
 }
-async function addHighlight(color, note) {
+async function addHighlight(color, style, note) {
   if (!R || !R.selCtx) return;
-  const { text, prefix, suffix } = R.selCtx;
+  const { text, spans, prefix, suffix } = R.selCtx;
   const store = localStore(R.id);
-  const entry = { id: uid(), color, excerpt: text, prefix, suffix, note: note || "", ts: Date.now() };
-  store.highlights = [...store.highlights, entry];
+  const secOf = (pEl) => {
+    const sec = pEl.closest("[data-sec]");
+    return sec ? Number(sec.dataset.sec) || 0 : 0;
+  };
+  // One entry per touched paragraph so each repaints with its own exact range.
+  const entries = spans.map((sp, i) => ({
+    id: uid(), color, style: style || "marker",
+    excerpt: paraText(sp.p).slice(sp.start, sp.end),
+    pIdx: [...sp.p.closest("[data-sec]").querySelectorAll("p[data-p]")].indexOf(sp.p),
+    sec: secOf(sp.p), start: sp.start, end: sp.end,
+    prefix, suffix,
+    part: i === 0 ? "start" : i === spans.length - 1 ? "end" : "mid",
+    note: note || "", ts: Date.now(),
+  }));
+  store.highlights = [...store.highlights, ...entries];
   persist();
+  R.selCtx = null;
   if (backendConfigured && state.user) {
     try {
-      const { data, error } = await addBookHighlight(R.id, entry);
-      if (!error && data && data.id) {
-        entry.id = data.id;
-        persist();
+      for (const entry of entries) {
+        const { data, error } = await addBookHighlight(R.id, entry);
+        if (!error && data && data.id) {
+          entry.id = data.id;
+          persist();
+        }
       }
     } catch {
       /* local copy stands */
     }
   }
-  applyHighlights();
+  paintAllParagraphs();
   notify(note ? "Note saved" : "Highlighted");
   try {
     window.getSelection()?.removeAllRanges();
@@ -649,34 +842,45 @@ async function addHighlight(color, note) {
     /* ignore */
   }
 }
-function applyHighlights() {
-  const body = readerBodyEl();
-  if (!body || !R || R.kind !== "text") return;
+async function updateHighlight(draft) {
+  if (!R) return;
   const store = localStore(R.id);
-  if (!store.highlights.length) return;
-  body.querySelectorAll("[data-sec]").forEach((sec) => {
-    sec.querySelectorAll("p").forEach((p) => {
-      if (p.querySelector("mark[data-hl]")) return;
-      const text = p.textContent;
-      for (const h of store.highlights) {
-        if (!h.excerpt || !text.includes(h.excerpt)) continue;
-        if (h.prefix && !text.includes(h.prefix.slice(-40))) continue;
-        const i = text.indexOf(h.excerpt);
-        if (i < 0) continue;
-        const frag = document.createDocumentFragment();
-        frag.append(document.createTextNode(text.slice(0, i)));
-        const mark = document.createElement("mark");
-        mark.className = `hl-${h.color || "yellow"}`;
-        mark.dataset.hl = h.id;
-        mark.textContent = text.slice(i, i + h.excerpt.length);
-        mark.title = h.note ? "Has note — see Annotations" : "Highlighted";
-        frag.append(mark);
-        frag.append(document.createTextNode(text.slice(i + h.excerpt.length)));
-        p.replaceChildren(frag);
-        break;
-      }
-    });
-  });
+  const h = store.highlights.find((x) => x.id === draft.id);
+  if (!h) return;
+  h.color = draft.color;
+  h.style = draft.style;
+  h.note = draft.note;
+  persist();
+  if (backendConfigured && state.user && !String(h.id).startsWith("lh_")) {
+    try {
+      await updateBookHighlight(h.id, { color: h.color, note: h.note });
+    } catch {
+      /* local copy stands */
+    }
+  }
+  paintAllParagraphs();
+  renderNotesPanelIfOpen();
+  notify("Highlight updated");
+}
+async function removeHighlightById(id) {
+  if (!R) return;
+  const store = localStore(R.id);
+  store.highlights = store.highlights.filter((x) => x.id !== id);
+  persist();
+  if (backendConfigured && state.user && !String(id).startsWith("lh_")) {
+    try {
+      await removeBookHighlight(id);
+    } catch {
+      /* ignore */
+    }
+  }
+  paintAllParagraphs();
+  renderNotesPanelIfOpen();
+  notify("Highlight removed");
+}
+function renderNotesPanelIfOpen() {
+  const side = document.querySelector("[data-r-side]");
+  if (side && !side.hidden && R?.panel === "notes") renderNotesPanel(side);
 }
 function scrollHlIntoView(id) {
   const m = document.querySelector(`mark[data-hl="${id}"]`);
@@ -689,8 +893,8 @@ function scrollHlIntoView(id) {
   } catch {
     /* ignore */
   }
-  m.classList.add("hl-flash");
-  setTimeout(() => m.classList.remove("hl-flash"), 1200);
+  m.classList.add("ink-flash");
+  setTimeout(() => m.classList.remove("ink-flash"), 1200);
 }
 function renderMarksPanel(side) {
   const store = localStore(R.id);
@@ -737,9 +941,15 @@ function renderMarksPanel(side) {
 function renderNotesPanel(side) {
   const store = localStore(R.id);
   const items = [...store.highlights].reverse();
-  side.innerHTML = `${sideHead("Notes & highlights")}${items.length ? `<div class="reader-list">${items.map((h) => `<div class="reader-note"><button class="reader-note-excerpt hl-${h.color || "yellow"}" data-r-jumphl="${h.id}">${esc(h.excerpt.slice(0, 140))}${h.excerpt.length > 140 ? "…" : ""}</button>${h.note ? `<p>${esc(h.note)}</p>` : '<p class="muted">No note attached.</p>'}<div class="reader-note-actions"><button class="ghost" data-r-editnote="${h.id}">${h.note ? "Edit note" : "Add note"}</button><button class="ghost" data-r-delhl="${h.id}">Delete</button></div><div data-r-noteform="${h.id}" hidden><textarea class="textarea autogrow" data-r-notetext rows="2">${esc(h.note || "")}</textarea><div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px"><button class="ghost" data-r-notecancel="${h.id}">Cancel</button><button class="primary" data-r-notesave="${h.id}">Save</button></div></div></div>`).join("")}</div>` : '<p class="muted">Select any passage to highlight it or attach a private note. Everything here is yours alone.</p>'}`;
+  side.innerHTML = `${sideHead("Notes & highlights")}${items.length ? `<div class="reader-list">${items.map((h) => `<div class="reader-note"><button class="reader-note-excerpt ink-${h.style || "marker"} ink-${h.color || "yellow"}" data-r-jumphl="${h.id}">${esc(h.excerpt.slice(0, 140))}${h.excerpt.length > 140 ? "…" : ""}</button>${h.note ? `<p>${esc(h.note)}</p>` : '<p class="muted">No note attached.</p>'}<div class="reader-note-actions"><button class="ghost" data-r-editnote="${h.id}">${h.note ? "Edit note" : "Add note"}</button><button class="ghost" data-r-restyle="${h.id}">Ink</button><button class="ghost" data-r-delhl="${h.id}">Delete</button></div><div data-r-noteform="${h.id}" hidden><textarea class="textarea autogrow" data-r-notetext rows="2">${esc(h.note || "")}</textarea><div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px"><button class="ghost" data-r-notecancel="${h.id}">Cancel</button><button class="primary" data-r-notesave="${h.id}">Save</button></div></div></div>`).join("")}</div>` : '<p class="muted">Select any passage to highlight it — pick a color and a style in the ink tray, or tap a highlight in the text to change it later.</p>'}`;
   bindPanelClose(side);
   side.querySelectorAll("[data-r-jumphl]").forEach((b) => (b.onclick = () => scrollHlIntoView(b.dataset.rJumphl)));
+  side.querySelectorAll("[data-r-restyle]").forEach((b) => (b.onclick = () => {
+    const h = store.highlights.find((x) => x.id === b.dataset.rRestyle);
+    if (!h) return;
+    const m = document.querySelector(`mark[data-hl="${h.id}"]`);
+    openInkTray("edit", { ...h, rect: m ? m.getBoundingClientRect() : null });
+  }));
   side.querySelectorAll("[data-r-editnote]").forEach((b) => (b.onclick = () => {
     const form = side.querySelector(`[data-r-noteform="${b.dataset.rEditnote}"]`);
     if (form) {
@@ -789,7 +999,8 @@ function renderSettingsPanel(side) {
   <label class="field-label">Line spacing<input type="range" min="1.4" max="2.2" step="0.1" value="${s.lineHeight}" data-r-set-lh aria-label="Line spacing"></label>
   <label class="field-label">Reading width<select class="select" data-r-set-width><option value="narrow"${s.width === "narrow" ? " selected" : ""}>Narrow</option><option value="medium"${s.width === "medium" ? " selected" : ""}>Medium</option><option value="wide"${s.width === "wide" ? " selected" : ""}>Wide</option></select></label>
   <label class="field-label">Theme<select class="select" data-r-set-theme><option value="auto"${s.theme === "auto" ? " selected" : ""}>Match app theme</option><option value="light"${s.theme === "light" ? " selected" : ""}>Light</option><option value="dark"${s.theme === "dark" ? " selected" : ""}>Dark</option><option value="sepia"${s.theme === "sepia" ? " selected" : ""}>Sepia</option></select></label>
-  <label class="field-label">Alignment<select class="select" data-r-set-align><option value="left"${s.align !== "justify" ? " selected" : ""}>Left</option><option value="justify"${s.align === "justify" ? " selected" : ""}>Justified</option></select></label>`;
+  <label class="field-label">Alignment<select class="select" data-r-set-align><option value="left"${s.align !== "justify" ? " selected" : ""}>Left</option><option value="justify"${s.align === "justify" ? " selected" : ""}>Justified</option></select></label>
+  <label class="toggle-row"><span><strong>Ruler reading</strong><small>Dim all lines except the one under your cursor</small></span><input type="checkbox" data-r-set-ruler ${s.ruler ? "checked" : ""}></label>`;
   bindPanelClose(side);
   const restyle = () => {
     saveReaderSettings(R.settings);
@@ -823,5 +1034,11 @@ function renderSettingsPanel(side) {
   side.querySelector("[data-r-set-align]").onchange = (e) => {
     R.settings.align = e.target.value;
     restyle();
+  };
+  side.querySelector("[data-r-set-ruler]").onchange = (e) => {
+    R.settings.ruler = e.target.checked;
+    const body = readerBodyEl();
+    if (body) body.dataset.ruler = e.target.checked ? "1" : "0";
+    saveReaderSettings(R.settings);
   };
 }
