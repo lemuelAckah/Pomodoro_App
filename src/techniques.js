@@ -3,6 +3,9 @@ import {
   state, $, $$, uid, get, save, esc, sicon, persist, notify, confirmBox, viewHead,
   iconStar, bindFavorites, fmtDur, celebrate, checkReminder, maybeWhatsNew, requireAuth,
 } from "./core.js";
+import {
+  mirrorNotes, deleteNoteEverywhere, mirrorAssessment, mirrorTechniqueUsage,
+} from "./services/productivity-sync.js";
 import { sounds, playChime } from "./audio.js";
 import { applyDurations, durations, sessionInProgress } from "./timer.js";
 import { shell } from "./app.js";
@@ -226,6 +229,7 @@ function startTechCheck(mode) {
 function skipTechCheck() {
   state.techCheck = { done: false, skipped: true, date: Date.now() };
   persist();
+  mirrorAssessment();
   tcSession = null;
   if (techCheckReturn === "settings") {
     state.tab = "settings";
@@ -318,6 +322,7 @@ function finishTechCheck() {
     date: Date.now(),
   };
   persist();
+  mirrorAssessment();
   tcSession.step = TECH_CHECK_QUESTIONS.length;
   renderTechCheck();
   try {
@@ -801,6 +806,7 @@ function applyTechPreset(id) {
   state.techUses = { ...(state.techUses || {}), [id]: ((state.techUses || {})[id] || 0) + 1 };
   state.sessionTech = id;
   persist();
+  mirrorTechniqueUsage();
   activeTechnique = null;
   state.tab = "timer";
   shell();
@@ -1193,6 +1199,7 @@ function renderCornellList(t) {
     };
     state.cornellNotes.unshift(note);
     persist();
+    mirrorNotes("cornell", state.cornellNotes);
     cornellView = note.id;
     renderCornell(t);
   };
@@ -1210,8 +1217,10 @@ function renderCornellList(t) {
         e.stopPropagation();
         const note = (state.cornellNotes || []).find((n) => n.id === b.dataset.noteDelete);
         confirmBox(`Delete “${note?.title || "Untitled"}”?`, "The note will be gone for good.", () => {
-          state.cornellNotes = state.cornellNotes.filter((n) => n.id !== b.dataset.noteDelete);
+          const id = b.dataset.noteDelete;
+          state.cornellNotes = state.cornellNotes.filter((n) => n.id !== id);
           persist();
+          deleteNoteEverywhere("cornell", id);
           notify("Note deleted");
           renderCornellList(t);
         });
@@ -1234,6 +1243,7 @@ function renderCornellEditor(t, noteId) {
     confirmBox(`Delete “${note.title || "Untitled"}”?`, "The note will be gone for good.", () => {
       state.cornellNotes = state.cornellNotes.filter((n) => n.id !== noteId);
       persist();
+      deleteNoteEverywhere("cornell", noteId);
       cornellView = "list";
       renderCornell(t);
     });
@@ -1249,6 +1259,7 @@ function renderCornellEditor(t, noteId) {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       persist();
+      mirrorNotes("cornell", state.cornellNotes); // same debounce window = one cloud write
       const done = $("#cornell-saved", t);
       if (done) done.innerHTML = "saved " + sicon("check");
     }, 700);
@@ -1320,6 +1331,7 @@ function renderFeynmanList(t) {
     };
     state.feynmanNotes.unshift(note);
     persist();
+    mirrorNotes("feynman", state.feynmanNotes);
     feynmanView = note.id;
     renderFeynman(t);
   };
@@ -1337,8 +1349,10 @@ function renderFeynmanList(t) {
         e.stopPropagation();
         const note = (state.feynmanNotes || []).find((n) => n.id === b.dataset.feynmanDelete);
         confirmBox(`Delete “${note?.topic || "Untitled"}”?`, "It will be gone for good.", () => {
-          state.feynmanNotes = state.feynmanNotes.filter((n) => n.id !== b.dataset.feynmanDelete);
+          const id = b.dataset.feynmanDelete;
+          state.feynmanNotes = state.feynmanNotes.filter((n) => n.id !== id);
           persist();
+          deleteNoteEverywhere("feynman", id);
           notify("Explanation deleted");
           renderFeynmanList(t);
         });
@@ -1363,6 +1377,7 @@ function renderFeynmanEditor(t, noteId) {
     confirmBox("Delete this explanation?", "It will be gone for good.", () => {
       state.feynmanNotes = state.feynmanNotes.filter((n) => n.id !== noteId);
       persist();
+      deleteNoteEverywhere("feynman", noteId);
       feynmanView = "list";
       renderFeynman(t);
     });
@@ -1391,6 +1406,7 @@ function renderFeynmanEditor(t, noteId) {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       persist();
+      mirrorNotes("feynman", state.feynmanNotes);
       const done = $("#feynman-saved", t);
       if (done) done.innerHTML = "saved " + sicon("check");
     }, 900);
@@ -1403,6 +1419,7 @@ function renderFeynmanEditor(t, noteId) {
         note.checks = { ...(note.checks || {}), [box.dataset.feynmanCheck]: box.checked };
         note.updated = Date.now();
         persist();
+        mirrorNotes("feynman", state.feynmanNotes);
       }),
   );
 }
@@ -1631,6 +1648,7 @@ function renderMindList(t) {
     };
     state.mindmaps.unshift(map);
     persist();
+    mirrorNotes("mindmap", state.mindmaps);
     mindView = map.id;
     renderMind(t);
   };
@@ -1648,8 +1666,10 @@ function renderMindList(t) {
         e.stopPropagation();
         const map = (state.mindmaps || []).find((m) => m.id === b.dataset.mindDelete);
         confirmBox(`Delete “${map?.title || "Untitled"}”?`, "The map and all its branches will be gone.", () => {
-          state.mindmaps = state.mindmaps.filter((m) => m.id !== b.dataset.mindDelete);
+          const mid = b.dataset.mindDelete;
+          state.mindmaps = state.mindmaps.filter((m) => m.id !== mid);
           persist();
+          deleteNoteEverywhere("mindmap", mid);
           notify("Map deleted");
           renderMindList(t);
         });
@@ -1670,6 +1690,7 @@ function renderMindEditor(t, mapId) {
     const tag = $("#mind-saved", t);
     if (tag) tag.innerHTML = "saved " + sicon("check");
     persist();
+    mirrorNotes("mindmap", state.mindmaps);
   };
   $("[data-mind-back-list]", t).onclick = () => {
     mindView = "list";
@@ -1707,6 +1728,7 @@ function renderMindEditor(t, mapId) {
     confirmBox(`Delete “${map.title || "Untitled"}”?`, "The map and all its branches will be gone.", () => {
       state.mindmaps = state.mindmaps.filter((m) => m.id !== mapId);
       persist();
+      deleteNoteEverywhere("mindmap", mapId);
       mindView = "list";
       notify("Map deleted");
       renderMind(t);

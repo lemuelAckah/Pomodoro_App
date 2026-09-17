@@ -615,3 +615,28 @@
   filter: grayscale(1);
   opacity: .55;
 }
+
+/* Phase 3: cloud sync status pill (tasks card) */
+.sync-pill {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 3px 9px;
+  border-radius: 99px;
+  background: var(--paper, #f6f7f2);
+  border: 1px solid var(--line, #dfe6dc);
+  color: var(--muted, #66736a);
+  white-space: nowrap;
+}
+.sync-pill[data-state="saving"],
+.sync-pill[data-state="loading"] {
+  color: var(--sage, #47765a);
+  border-color: var(--sage, #47765a);
+}
+.sync-pill[data-state="error"] {
+  color: var(--coral, #e8795b);
+  border-color: var(--coral, #e8795b);
+}
+html[data-night="1"] .sync-pill {
+  background: rgba(148, 163, 184, 0.12);
+}

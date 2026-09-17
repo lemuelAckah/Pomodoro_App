@@ -897,3 +897,225 @@ export async function createWebRtcPeer({
     },
   };
 }
+
+// --- Phase 3: core productivity data (tasks, notes, techniques) -------------
+// Every helper resolves the user from the authenticated Supabase session —
+// never from a client-supplied id — and returns { data, error } like the rest
+// of this module. RLS on each table is the real ownership enforcement; these
+// functions simply never query outside the session user's rows.
+
+async function requireUserId() {
+  if (!supabase)
+    return { userId: null, error: new Error("Cloud sync is not configured") };
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { userId: null, error: new Error("Not signed in") };
+  return { userId: user.id, error: null };
+}
+
+const iso = (v) => (v ? new Date(v).toISOString() : null);
+
+// Tasks ----------------------------------------------------------------------
+
+export async function cloudListTasks() {
+  const { userId, error } = await requireUserId();
+  if (error) return { data: null, error };
+  const { data, error: e } = await supabase
+    .from("tasks")
+    .select("id,text,desc,done,pomodoros,due_at,client_created_at,client_updated_at")
+    .eq("user_id", userId);
+  if (e) return { data: null, error: e };
+  return {
+    data: (data || []).map((r) => ({
+      id: r.id,
+      text: r.text,
+      desc: r.desc || "",
+      done: Boolean(r.done),
+      pomodoros: r.pomodoros || 0,
+      dueAt: r.due_at,
+      clientCreatedAt: r.client_created_at,
+      clientUpdatedAt: r.client_updated_at,
+    })),
+    error: null,
+  };
+}
+
+const taskRow = (userId, t) => ({
+  user_id: userId,
+  id: String(t.id).slice(0, 64),
+  text: String(t.text || "").slice(0, 500),
+  desc: String(t.desc || "").slice(0, 2000),
+  done: Boolean(t.done),
+  pomodoros: Math.max(0, Number(t.pomodoros) || 0),
+  due_at: t.dueAt ? iso(t.dueAt) : null,
+  client_created_at: iso(t.created ?? t.clientCreatedAt),
+  client_updated_at: iso(t.updated ?? t.clientUpdatedAt),
+});
+
+// Upsert = offline-created tasks (already keyed by their client id) sync back
+// without remapping or duplication.
+export async function cloudUpsertTasks(tasks) {
+  const { userId, error } = await requireUserId();
+  if (error) return { data: null, error };
+  if (!tasks?.length) return { data: null, error: null };
+  const { error: e } = await supabase
+    .from("tasks")
+    .upsert(tasks.map((t) => taskRow(userId, t)), { onConflict: "user_id,id" });
+  return e ? { data: null, error: e } : { data: true, error: null };
+}
+
+export async function cloudDeleteTask(id) {
+  const { userId, error } = await requireUserId();
+  if (error) return { data: null, error };
+  const { error: e } = await supabase
+    .from("tasks")
+    .delete()
+    .eq("user_id", userId)
+    .eq("id", String(id).slice(0, 64));
+  return e ? { data: null, error: e } : { data: true, error: null };
+}
+
+// Notes ----------------------------------------------------------------------
+
+export async function cloudListNotes() {
+  const { userId, error } = await requireUserId();
+  if (error) return { data: null, error };
+  const { data, error: e } = await supabase
+    .from("user_notes")
+    .select("id,kind,title,payload,client_created_at,client_updated_at")
+    .eq("user_id", userId);
+  if (e) return { data: null, error: e };
+  return {
+    data: (data || []).map((r) => ({
+      id: r.id,
+      kind: r.kind,
+      title: r.title,
+      payload: r.payload || {},
+      clientCreatedAt: r.client_created_at,
+      clientUpdatedAt: r.client_updated_at,
+    })),
+    error: null,
+  };
+}
+
+const NOTE_TITLES = {
+  cornell: (p) => p.title || "Untitled",
+  feynman: (p) => p.topic || "Untitled",
+  mindmap: (p) => p.title || "Untitled",
+};
+
+export async function cloudUpsertNotes(kind, notes) {
+  const { userId, error } = await requireUserId();
+  if (error) return { data: null, error };
+  if (!notes?.length) return { data: null, error: null };
+  const rows = notes.map((n) => ({
+    user_id: userId,
+    id: String(n.id).slice(0, 64),
+    kind,
+    title: String((NOTE_TITLES[kind]?.(n) ?? n.title ?? "")).slice(0, 300),
+    payload: n,
+    client_created_at: iso(n.created ?? n.clientCreatedAt),
+    client_updated_at: iso(n.updated ?? n.clientUpdatedAt),
+  }));
+  const { error: e } = await supabase
+    .from("user_notes")
+    .upsert(rows, { onConflict: "user_id,id" });
+  return e ? { data: null, error: e } : { data: true, error: null };
+}
+
+export async function cloudDeleteNote(kind, id) {
+  const { userId, error } = await requireUserId();
+  if (error) return { data: null, error };
+  const { error: e } = await supabase
+    .from("user_notes")
+    .delete()
+    .eq("user_id", userId)
+    .eq("kind", kind)
+    .eq("id", String(id).slice(0, 64));
+  return e ? { data: null, error: e } : { data: true, error: null };
+}
+
+// Technique assessment -------------------------------------------------------
+
+export async function cloudGetAssessment() {
+  const { userId, error } = await requireUserId();
+  if (error) return { data: null, error };
+  const { data, error: e } = await supabase
+    .from("technique_assessments")
+    .select("done,skipped,answers,scores,top,signals,taken_at")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (e) return { data: null, error: e };
+  return {
+    data: data
+      ? {
+          done: Boolean(data.done),
+          skipped: Boolean(data.skipped),
+          answers: data.answers || [],
+          scores: data.scores || {},
+          top: data.top || [],
+          signals: data.signals || {},
+          takenAt: data.taken_at,
+        }
+      : null,
+    error: null,
+  };
+}
+
+export async function cloudSaveAssessment(techCheck) {
+  const { userId, error } = await requireUserId();
+  if (error) return { data: null, error };
+  const row = {
+    user_id: userId,
+    done: Boolean(techCheck?.done),
+    skipped: Boolean(techCheck?.skipped),
+    answers: Array.isArray(techCheck?.answers) ? techCheck.answers : [],
+    scores: techCheck?.scores || {},
+    top: Array.isArray(techCheck?.top) ? techCheck.top : [],
+    signals: techCheck?.signals || {},
+    taken_at: techCheck?.date ? iso(techCheck.date) : new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  const { error: e } = await supabase
+    .from("technique_assessments")
+    .upsert(row, { onConflict: "user_id" });
+  return e ? { data: null, error: e } : { data: true, error: null };
+}
+
+// Technique usage ------------------------------------------------------------
+
+export async function cloudGetTechniqueUsage() {
+  const { userId, error } = await requireUserId();
+  if (error) return { data: null, error };
+  const { data, error: e } = await supabase
+    .from("technique_usage")
+    .select("technique_id,uses,focus_minutes")
+    .eq("user_id", userId);
+  if (e) return { data: null, error: e };
+  const uses = {};
+  const minutes = {};
+  (data || []).forEach((r) => {
+    uses[r.technique_id] = r.uses || 0;
+    minutes[r.technique_id] = r.focus_minutes || 0;
+  });
+  return { data: { uses, minutes }, error: null };
+}
+
+export async function cloudSaveTechniqueUsage(uses, minutes) {
+  const { userId, error } = await requireUserId();
+  if (error) return { data: null, error };
+  const ids = [...new Set([...Object.keys(uses || {}), ...Object.keys(minutes || {})])];
+  if (!ids.length) return { data: true, error: null };
+  const rows = ids.map((id) => ({
+    user_id: userId,
+    technique_id: String(id).slice(0, 64),
+    uses: Math.max(0, Number(uses?.[id]) || 0),
+    focus_minutes: Math.max(0, Number(minutes?.[id]) || 0),
+    updated_at: new Date().toISOString(),
+  }));
+  const { error: e } = await supabase
+    .from("technique_usage")
+    .upsert(rows, { onConflict: "user_id,technique_id" });
+  return e ? { data: null, error: e } : { data: true, error: null };
+}

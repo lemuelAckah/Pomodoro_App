@@ -3,7 +3,9 @@ import {
   state, $, $$, uid, get, save, esc, sicon, stripIcon, haltPersist, pushUserSettings, persist, notify, confirmBox, viewHead,
   applyDisplay, applyEquippedTheme, applyMotion, avatarMarkup, cloudStateSubscription,
   dayKey, hydrateCloudState, openWhatsNew, setCloudSubscription, toggleNight, requireAuth,
+  archiveStateForSignOut, restoreArchivedState,
 } from "./core.js";
+import { pullProductivity } from "./services/productivity-sync.js";
 import {
   signUpWithEmail, signInWithEmail, resendVerification, requestPasswordReset,
   friendlyAuthError,
@@ -82,10 +84,13 @@ function openProfile() {
     await signOut();
     cloudStateSubscription?.unsubscribe();
     setCloudSubscription(null);
-    state.user = null;
-    modal.remove();
-    shell();
-    notify("Signed out");
+    // Wipe every personal record from this browser: the next screen is a
+    // true guest state (no coins, favorites, profile, notes…). The data is
+    // archived and returns automatically on the next sign-in.
+    archiveStateForSignOut(state.user?.id || null);
+    haltPersist();
+    sessionStorage.setItem("sf-signed-out", "1");
+    location.reload();
   });
   $("[data-profile-save]", modal).onclick = async () => {
     if (!requireAuth("save your profile")) return;
@@ -222,7 +227,16 @@ async function authenticate(modal, createAccount) {
     state.user = null;
     return notify("Almost there — confirm your email first, then sign in.");
   }
+  // Bring back anything archived at the last sign-out (same device, same
+  // account). The archive is written to storage and a reload rebuilds the
+  // whole app from it; cloud hydration then tops up on the fresh boot.
+  if (restoreArchivedState(state.user.id)) {
+    sessionStorage.setItem("sf-restored", "1");
+    location.reload();
+    return;
+  }
   await hydrateCloudState(state.user);
+  await pullProductivity(); // tasks, notes & technique data follow the account
   persist();
   modal.remove();
   shell();
@@ -532,7 +546,14 @@ function bindAccount(root) {
     // When email confirmation is required, signUp returns the user but there
     // is NO session — hydrateCloudState would only misfire a sync error.
     if (await hasActiveSession()) {
+      // Same-device archive from the last sign-out comes back first.
+      if (restoreArchivedState(state.user.id)) {
+        sessionStorage.setItem("sf-restored", "1");
+        location.reload();
+        return;
+      }
       await hydrateCloudState(state.user);
+      await pullProductivity();
       notify(create ? "Account created" : "Signed in successfully");
     } else {
       notify("Account created — check your email for the confirmation link, then sign in.");
@@ -576,10 +597,11 @@ function bindAccount(root) {
   $("[data-global-signout]", root)?.addEventListener("click", async () => {
     await signOut();
     cloudStateSubscription?.unsubscribe();
-    state.user = null;
-    state.accountView = "welcome";
-    shell();
-    notify("Signed out on all devices");
+    // Full guest state on sign-out: archive + purge all personal data.
+    archiveStateForSignOut(state.user?.id || null);
+    haltPersist();
+    sessionStorage.setItem("sf-signed-out", "1");
+    location.reload();
   });
   $("#profile-visibility", root)?.addEventListener("change", savePrivacy);
   $("#activity-visibility", root)?.addEventListener("change", savePrivacy);

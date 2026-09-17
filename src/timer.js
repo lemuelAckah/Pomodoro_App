@@ -8,6 +8,7 @@ import { playChime, stopAllLayers, startAmbient, applyLinkToTimer, warmAudio } f
 import { techniques, TECH_DETAILS, matchTech, totalDue, applyTechPreset } from "./techniques.js";
 import { logFocusDay, progressChallenges, missionDeskMarkup, bindMissionDesk, challengeLock, challengeLockBanner, leaveChallenge, paceSec } from "./community.js";
 import { shell } from "./app.js";
+import { mirrorTasks, deleteTaskEverywhere, mirrorTechniqueUsage, onSyncStatus } from "./services/productivity-sync.js";
 let timerHandle;
 
 let durations = { focus: 1500, short: 300, long: 900 };
@@ -214,7 +215,7 @@ function renderTimer() {
     )
     .join(
       "",
-    )}</div><div class="template-row">${TIMER_TEMPLATES.map((p) => `<button class="template-chip" data-template="${p.id}" title="Focus ${p.focus}:${String(p.focusSec ?? 0).padStart(2, "0")} · break ${p.short}:${String(p.shortSec ?? 0).padStart(2, "0")}">${p.name}</button>`).join("")}</div><div class="dur-row"><label class="field-label">Minutes<input class="input dur-input" id="dur-min" type="number" min="0" max="180" step="1" value="${Math.floor(durations[state.mode] / 60)}" aria-label="Custom minutes"></label><label class="field-label">Seconds<input class="input dur-input" id="dur-sec" type="number" min="0" max="59" step="1" value="${durations[state.mode] % 60}" aria-label="Custom seconds"></label><button class="ghost" data-set-dur title="Apply to ${modeLabels[state.mode]}">Set duration</button></div>${challengeLockBanner()}<div class="focus-live off" data-focus-live><span class="live-dot"></span>Focus live — leaving this page resets the session</div>${techTagMarkup()}<div class="timer-ring" style="--progress:${(state.time / durations[state.mode]) * 360}deg"><div><div class="time">${fmt(state.time)}</div><div class="timer-label">${modeLabels[state.mode]}</div></div></div><div class="timer-actions"><button class="icon-btn" data-reset title="Reset">↻</button><button class="primary" data-toggle>${state.running ? "Pause" : "Start session"}</button><button class="icon-btn" data-focusview title="Focus mode — just the timer">${sicon("expand")}</button></div><div class="muted" style="margin-top:36px">${state.sessions % 4}/4 sessions until a long break</div></div><div class="card tasks-card"><div class="section-row"><h2>Today’s tasks</h2><span class="tag" data-task-count>${state.tasks.filter((t) => t.done).length}/${state.tasks.length} complete</span></div><div class="input-row"><input class="input" id="task-input" placeholder="What are you working on?"><button class="primary" data-add-task>+</button></div><div id="task-list">${state.tasks.length ? state.tasks.map(taskRow).join("") : '<p class="muted" style="padding:25px 0">Your task list is clear. Add one small next step.</p>'}</div></div></div><div class="grid four stats"><div class="card stat"><span>Sessions</span><strong>${state.sessions}</strong><span>all time</span></div><div class="card stat"><span>Coins</span><strong data-coin="stat">${state.coins}</strong><span>available to spend</span></div><div class="card stat"><span>Tasks</span><strong>${state.tasks.filter((t) => t.done).length}</strong><span>completed</span></div><div class="card stat"><span>Focus streak</span><strong>${state.streak.count}</strong>${streakDots()}<span>day streak</span></div></div>${missionDeskMarkup()}${techOfDayMarkup()}${gardenMarkup()}${recordsMarkup()}${achievementsCabinetMarkup()}`;
+    )}</div><div class="template-row">${TIMER_TEMPLATES.map((p) => `<button class="template-chip" data-template="${p.id}" title="Focus ${p.focus}:${String(p.focusSec ?? 0).padStart(2, "0")} · break ${p.short}:${String(p.shortSec ?? 0).padStart(2, "0")}">${p.name}</button>`).join("")}</div><div class="dur-row"><label class="field-label">Minutes<input class="input dur-input" id="dur-min" type="number" min="0" max="180" step="1" value="${Math.floor(durations[state.mode] / 60)}" aria-label="Custom minutes"></label><label class="field-label">Seconds<input class="input dur-input" id="dur-sec" type="number" min="0" max="59" step="1" value="${durations[state.mode] % 60}" aria-label="Custom seconds"></label><button class="ghost" data-set-dur title="Apply to ${modeLabels[state.mode]}">Set duration</button></div>${challengeLockBanner()}<div class="focus-live off" data-focus-live><span class="live-dot"></span>Focus live — leaving this page resets the session</div>${techTagMarkup()}<div class="timer-ring" style="--progress:${(state.time / durations[state.mode]) * 360}deg"><div><div class="time">${fmt(state.time)}</div><div class="timer-label">${modeLabels[state.mode]}</div></div></div><div class="timer-actions"><button class="icon-btn" data-reset title="Reset">↻</button><button class="primary" data-toggle>${state.running ? "Pause" : "Start session"}</button><button class="icon-btn" data-focusview title="Focus mode — just the timer">${sicon("expand")}</button></div><div class="muted" style="margin-top:36px">${state.sessions % 4}/4 sessions until a long break</div></div><div class="card tasks-card"><div class="section-row"><h2>Today’s tasks</h2><span class="tag" data-task-count>${state.tasks.filter((t) => t.done).length}/${state.tasks.length} complete</span><span class="sync-pill" data-sync-pill hidden></span></div><div class="input-row"><input class="input" id="task-input" placeholder="What are you working on?"><button class="primary" data-add-task>+</button></div><div id="task-list">${state.tasks.length ? state.tasks.map(taskRow).join("") : '<p class="muted" style="padding:25px 0">Your task list is clear. Add one small next step.</p>'}</div></div></div><div class="grid four stats"><div class="card stat"><span>Sessions</span><strong>${state.sessions}</strong><span>all time</span></div><div class="card stat"><span>Coins</span><strong data-coin="stat">${state.coins}</strong><span>available to spend</span></div><div class="card stat"><span>Tasks</span><strong>${state.tasks.filter((t) => t.done).length}</strong><span>completed</span></div><div class="card stat"><span>Focus streak</span><strong>${state.streak.count}</strong>${streakDots()}<span>day streak</span></div></div>${missionDeskMarkup()}${techOfDayMarkup()}${gardenMarkup()}${recordsMarkup()}${achievementsCabinetMarkup()}`;
   $$("[data-mode]", target).forEach(
     (b) =>
       (b.onclick = () => {
@@ -319,13 +320,36 @@ function renderTimer() {
   $("#task-input", target).onkeydown = (e) => {
     if (e.key === "Enter") addTask();
   };
+  // Live sync status beside the task count (saving / saved / offline).
+  try {
+    const pill = $("[data-sync-pill]", target);
+    if (pill)
+      onSyncStatus((key, status) => {
+        if (key !== "tasks") return;
+        const label =
+          status === "saving"
+            ? "Saving…"
+            : status === "loading"
+              ? "Syncing…"
+              : status === "error"
+                ? "Saved on this device"
+                : "";
+        pill.textContent = label;
+        pill.dataset.state = status;
+        pill.hidden = !label;
+      });
+  } catch {
+    /* status pill is cosmetic */
+  }
   $$("[data-task-check]", target).forEach(
     (b) =>
       (b.onclick = () => {
         const t = state.tasks.find((t) => t.id === b.dataset.taskCheck);
         if (!t) return;
         t.done = !t.done;
+        t.updated = Date.now();
         persist();
+        mirrorTasks();
         const row = target.querySelector(`[data-task-row="${t.id}"]`);
         if (row) row.classList.toggle("done", t.done);
         b.classList.toggle("done", t.done);
@@ -347,10 +371,10 @@ function renderTimer() {
           "Remove task?",
           "Are you sure you want to remove this task?",
           () => {
-            state.tasks = state.tasks.filter(
-              (t) => t.id !== b.dataset.deleteTask,
-            );
+            const id = b.dataset.deleteTask;
+            state.tasks = state.tasks.filter((t) => t.id !== id);
             persist();
+            deleteTaskEverywhere(id); // cloud delete (queued if offline)
             renderTimer();
           },
         )),
@@ -750,6 +774,7 @@ function completeSession() {
         [tagged]:
           ((state.techTime || {})[tagged] || 0) + (state.sessionDuration || 0),
       };
+      mirrorTechniqueUsage();
       state.sessionTech = null;
     }
     const focusedMin = Math.max(
@@ -1058,7 +1083,9 @@ function openTaskEditor(id) {
     if (!title) return notify("Give the task a title");
     task.text = title;
     task.desc = $("[data-task-desc]", modal).value.trim();
+    task.updated = Date.now();
     persist();
+    mirrorTasks(); // debounced upsert — rapid saves collapse into one request
     modal.remove();
     renderTimer();
     notify("Task updated");
@@ -1072,14 +1099,19 @@ function openTaskEditor(id) {
 function addTask() {
   const input = $("#task-input");
   if (!input || !input.value.trim()) return;
+  const now = Date.now();
   state.tasks.push({
     id: uid(),
     text: input.value.trim(),
     desc: "",
     done: false,
     pomodoros: 0,
+    created: now,
+    updated: now,
   });
   persist();
+  mirrorTasks();
+  input.value = "";
   renderTimer();
 }
 

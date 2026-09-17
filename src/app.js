@@ -4,9 +4,10 @@ import {
   checkReminder, maybeWhatsNew, refreshServerTime, applyDisplay, applyEquippedTheme,
   applyMotion, avatarMarkup, cloudStateSubscription, hydrateCloudState, refreshCoinDisplays,
   syncThemeToggle, toggleNight, setCloudSubscription, sanitizeState, formatHeaderDate,
-  updateBarPadding,
+  updateBarPadding, restoreArchivedState, archiveStateForSignOut, haltPersist,
 } from "./core.js";
 import { getCurrentUser, onAuthStateChange } from "./services/backend.js";
+import { pullProductivity } from "./services/productivity-sync.js";
 import { migrateSongs, sounds, renderNowPlaying, initAudioState } from "./audio.js";
 import { renderTimer, renderMiniTimer, toggleTimer, toggleBoss, closeFocusView, initTimerState, resetFocusSession, openFocusView } from "./timer.js";
 import { renderTechniques, renderFavorites, openTechniqueGuide, techniques, TECH_DETAILS } from "./techniques.js";
@@ -455,6 +456,14 @@ try {
     sessionStorage.removeItem("sf-wiped");
     setTimeout(() => notify("All your data was permanently deleted"), 600);
   }
+  if (sessionStorage.getItem("sf-signed-out") === "1") {
+    sessionStorage.removeItem("sf-signed-out");
+    setTimeout(() => notify("Signed out — your data is safe and returns when you sign in"), 600);
+  }
+  if (sessionStorage.getItem("sf-restored") === "1") {
+    sessionStorage.removeItem("sf-restored");
+    setTimeout(() => notify("Welcome back — your workspace is exactly as you left it"), 600);
+  }
 } catch {
   /* ignore */
 }
@@ -504,8 +513,19 @@ if (
 
 getCurrentUser()
   .then(async (user) => {
+    if (!user) return;
+    // Returning session (e.g. page refresh): if a pre-sign-out archive
+    // exists, restore it and rebuild the app from storage; otherwise the
+    // cloud snapshot fills in on this boot.
+    if (restoreArchivedState(user.id)) {
+      sessionStorage.setItem("sf-restored", "1");
+      location.reload();
+      return;
+    }
     state.user = user;
     await hydrateCloudState(user);
+    // Phase 3: tasks, notes and technique data follow the account.
+    await pullProductivity();
   })
   .catch(() => {
     /* offline or unreachable backend — local mode continues */
@@ -517,9 +537,25 @@ onAuthStateChange((user) => {
   if (expired) {
     cloudStateSubscription?.unsubscribe();
     setCloudSubscription(null);
-    notify("Your session ended. Please sign in again.");
+    // Server-side session end (expired token, signed out elsewhere):
+    // archive + purge so the guest screen shows none of the account's data.
+    archiveStateForSignOut(null);
+    haltPersist();
+    sessionStorage.setItem("sf-signed-out", "1");
+    location.reload();
+    return;
   }
-  if (user) hydrateCloudState(user);
+  if (user) {
+    // OAuth or cross-tab sign-in lands here: restore the archive first —
+    // the reload it triggers rebuilds the app around the restored data.
+    if (restoreArchivedState(user.id)) {
+      sessionStorage.setItem("sf-restored", "1");
+      location.reload();
+      return;
+    }
+    hydrateCloudState(user);
+    pullProductivity();
+  }
   if (state.tab === "account" || state.tab === "settings") render();
 });
 

@@ -1461,12 +1461,74 @@ function confettiLoop() {
   requestAnimationFrame(step);
 }
 
-/* ---- Sign-up gate ----
-   Guest visitors can browse everything, but actions that create cloud data
-   (purchasing, gifting, posting, uploading books, saving a profile…) are
-   reserved for signed-up members. requireAuth(feature) returns true when
-   the user may proceed, otherwise it shows a polished gate modal with a
-   direct route to the sign-up screen and returns false. */
+/* ---- Sign-out data wipe / sign-in restore ----
+   Signing out must leave the browser in a true guest state: no coins,
+   favorites, profile, notes, books — nothing. Every personal sf-* key is
+   copied into a single opaque archive and removed from live storage; the
+   in-memory state is rebuilt from empty storage by the reload that follows.
+   When the same user signs back in, the archive is restored before cloud
+   hydration, so all their data returns. Device-level preferences (night
+   mode, motion, text size, volume, device id, tour flag) stay put — they
+   belong to the browser, not the account. */
+const SIGNOUT_ARCHIVE_KEY = "sf-archived-session";
+const SIGNOUT_KEEP = new Set([
+  "sf-device", "sf-night", "sf-motion", "sf-display", "sf-tab", "sf-toured",
+  "sf-sound-volume", "sf-chime-vol", "sf-chime",
+]);
+
+function archiveStateForSignOut(userId) {
+  try {
+    // Stop every writer FIRST — persist timers and beforeunload handlers
+    // must not re-save the in-memory state over the wiped keys during the
+    // sign-out reload.
+    haltPersist();
+    const keys = {};
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith("sf-") || k === SIGNOUT_ARCHIVE_KEY || SIGNOUT_KEEP.has(k)) continue;
+      keys[k] = localStorage.getItem(k);
+    }
+    localStorage.setItem(
+      SIGNOUT_ARCHIVE_KEY,
+      JSON.stringify({ user: userId || null, ts: Date.now(), keys }),
+    );
+    Object.keys(keys).forEach((k) => localStorage.removeItem(k));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function restoreArchivedState(userId) {
+  try {
+    const raw = localStorage.getItem(SIGNOUT_ARCHIVE_KEY);
+    if (!raw) return false;
+    localStorage.removeItem(SIGNOUT_ARCHIVE_KEY);
+    let payload = null;
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      return false;
+    }
+    if (!payload || typeof payload !== "object" || !payload.keys) return false;
+    // A different account's archive never comes back on this sign-in —
+    // that account's data lives in its own cloud workspace.
+    if (payload.user && userId && payload.user !== userId) return false;
+    // Halt writers before writing: the reload that follows must not let a
+    // beforeunload persist() clobber the restored keys with the stale
+    // guest in-memory state.
+    haltPersist();
+    // Archived values are the returning user's truth: they always win over
+    // any guest-session defaults that were written after the sign-out.
+    Object.entries(payload.keys).forEach(([k, v]) => {
+      if (typeof v === "string") localStorage.setItem(k, v);
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function requireAuth(feature) {
   if (state.user) return true;
   const what = feature || "use this feature";
@@ -1526,4 +1588,4 @@ function celebrate(big) {
 
 
 
-export { $, $$, uid, get, save, esc, SICON_PATHS, sicon, stripIcon, haltPersist, isPersistHalted, collectUserSettings, applyUserSettings, pushUserSettings, pullCloudProfile, state, sanitizeState, persistFailed, persist, persistNow, refreshCoinDisplays, updateBarPadding, makeDraggable, addCoins, spendCoins, cloudSnapshot, cloudSyncTimer, scheduleCloudSync, hydrateCloudState, cloudStateSubscription, fitTextarea, notify, notifOn, ensureNotifyPermission, browserNotify, dayKey, formatHeaderDate, serverOffsetMs, refreshServerTime, serverNow, serverDayKey, addNotification, avatarMarkup, iconStar, bindFavorites, THEME_SKINS, isDarkPaper, NIGHT_BASE, NIGHT_SHADOW, accentLuminance, onAccentText, applyEquippedTheme, toggleNight, syncThemeToggle, applyMotion, applyDisplay, viewHead, fmt, fmtDur, fmtClock, fmtSize, confirmBox, checkReminder, whatsNewShown, WHATS_NEW, openWhatsNew, closeWhatsNew, maybeWhatsNew, confettiPieces, confettiRunning, confettiCanvas, confettiBurst, confettiLoop, celebrate, requireAuth };
+export { $, $$, uid, get, save, esc, SICON_PATHS, sicon, stripIcon, haltPersist, isPersistHalted, collectUserSettings, applyUserSettings, pushUserSettings, pullCloudProfile, state, sanitizeState, persistFailed, persist, persistNow, refreshCoinDisplays, updateBarPadding, makeDraggable, addCoins, spendCoins, cloudSnapshot, cloudSyncTimer, scheduleCloudSync, hydrateCloudState, cloudStateSubscription, fitTextarea, notify, notifOn, ensureNotifyPermission, browserNotify, dayKey, formatHeaderDate, serverOffsetMs, refreshServerTime, serverNow, serverDayKey, addNotification, avatarMarkup, iconStar, bindFavorites, THEME_SKINS, isDarkPaper, NIGHT_BASE, NIGHT_SHADOW, accentLuminance, onAccentText, applyEquippedTheme, toggleNight, syncThemeToggle, applyMotion, applyDisplay, viewHead, fmt, fmtDur, fmtClock, fmtSize, confirmBox, checkReminder, whatsNewShown, WHATS_NEW, openWhatsNew, closeWhatsNew, maybeWhatsNew, confettiPieces, confettiRunning, confettiCanvas, confettiBurst, confettiLoop, celebrate, requireAuth, archiveStateForSignOut, restoreArchivedState };
