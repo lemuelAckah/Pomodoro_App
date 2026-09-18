@@ -694,6 +694,21 @@ html[data-night="1"] .profile-identity {
   white-space: nowrap;
 }
 
+/* Profile modal: the sign-out session card must breathe apart from the
+   Cancel/Save action row — never visually combined with it. */
+.profile-modal .auth-session {
+  margin: 16px 0 14px;
+}
+.profile-modal .modal-actions {
+  gap: 10px;
+  padding-top: 2px;
+}
+.profile-modal .modal-actions .ghost,
+.profile-modal .modal-actions .primary {
+  min-height: 44px;
+  padding: 10px 18px;
+}
+
 .notification-modal {
   max-width: 560px;
 }

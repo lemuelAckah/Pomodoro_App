@@ -524,6 +524,36 @@
 .sv-foot-actions .delete {
   min-height: 44px;
 }
+/* Inline delete confirmation lives inside the viewer frame so it can never
+   render underneath the overlay (app modals sit at a lower z-index). */
+.sv-confirm {
+  margin: 0 14px calc(10px + env(safe-area-inset-bottom));
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(20, 26, 22, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+  color: #f2f5ef;
+}
+.sv-confirm[hidden] {
+  display: none;
+}
+.sv-confirm-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.sv-confirm-actions .ghost {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.3);
+  min-height: 44px;
+}
+.sv-confirm-actions .delete {
+  min-height: 44px;
+}
 
 @media (max-width: 640px) {
   .sv-tap {

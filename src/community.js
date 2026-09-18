@@ -63,6 +63,15 @@ function friendlyUploadError(err) {
     return "You are not signed in or you do not have permission to upload this photo.";
   return "Couldn't upload that photo. Please try again.";
 }
+// Transient storage faults (5xx, rate limits, dropped connections) deserve
+// one automatic retry before surfacing an error — a single retry fixes
+// flaky uploads without ever fabricating success.
+function isTransientUploadError(err) {
+  const status = Number(err?.statusCode ?? err?.status);
+  if ([502, 503, 504, 429].includes(status)) return true;
+  return /network|fetch|failed to fetch|timeout|econnreset|503|502|504/i.test(String(err?.message || err || ""));
+}
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
 function cloudSocialSig() {
   return JSON.stringify([cloudFriends.map((f) => f.id), cloudFriendReqs.map((r) => r.id + r.incoming), [...cloudBlocked].sort()]);
 }
@@ -1732,40 +1741,8 @@ function buildStatusSequence() {
         id: s.id,
       }),
     );
-  const count = (state.streak && state.streak.count) || 0;
-  const best = state.bestStreak || count;
-  const cards = [
-    {
-      id: "current",
-      emoji: sicon("fire"),
-      title: `${count}-day streak`,
-      sub: `${state.sessions || 0} sessions all time`,
-    },
-    {
-      id: "best",
-      emoji: sicon("trophy"),
-      title: `Best: ${best} day${best === 1 ? "" : "s"}`,
-      sub: "personal record",
-    },
-    {
-      id: "week",
-      emoji: sicon("bolt"),
-      title: `${weekMinutes(weekKey(new Date()))} min this week`,
-      sub: "keep it burning",
-    },
-  ];
-  cards.forEach((c) =>
-    seq.push({
-      key: "streak:" + c.id,
-      type: "streak",
-      author: me,
-      ts: Date.now(),
-      emoji: c.emoji,
-      title: c.title,
-      sub: c.sub,
-      id: c.id,
-    }),
-  );
+  // The loop shows only posted device stories — no auto-generated streak,
+  // best-day, or minutes-this-week cards.
   return seq;
 }
 
@@ -1842,7 +1819,7 @@ function storiesMarkup() {
   const live = liveStories();
   const unseen = live.filter((s) => !isSeen("story:" + s.id)).length;
   const unseenCloud = cloudStories.filter((s) => !isSeen("cstory:" + s.id)).length;
-  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Stories</h2><span class="tag">24h${unseen + unseenCloud ? ` · ${unseen + unseenCloud} new` : ""}</span></div><div class="story-strip"><button type="button" class="story-add" data-status-play title="Play the full status loop">${sicon("play")}<small>Status</small></button><button type="button" class="story-add" data-story-flex title="Flex your streak">${sicon("fire")}<small>Flex</small></button><button type="button" class="story-add" data-story-photo title="Post a photo or video">${sicon("camera")}<small>Photo</small></button><input type="file" id="story-file" accept="image/*,video/*" hidden>${localStoryRings(live)}${cloudStories.map((s) => `<button type="button" class="story-ring${isSeen("cstory:" + s.id) ? " seen" : ""}" data-cloud-story="${s.id}" title="Shared story by @${esc(s.handle)}"><span>${s.kind === "image" && s.mediaPath ? `<img data-story-thumb="${esc(s.mediaPath)}" alt="Photo story">` : sicon("chat")}</span><small>${esc(s.handle.length > 8 ? s.handle.slice(0, 7) + "…" : s.handle)}</small></button>`).join("")}</div>${signedIn() ? `<div class="input-row" style="margin-top:10px;flex-wrap:wrap"><input class="input" id="cloud-story-text" maxlength="500" placeholder="Share a text story with your circle…" aria-label="Share a text story" value="${esc(state.storyDraft?.text || "")}" style="flex:1 1 160px;min-width:0"><select class="select" id="cloud-story-vis" aria-label="Story visibility" style="max-width:150px"><option value="connections">Connections</option><option value="public">Public</option><option value="private">Only me</option></select><button type="button" class="ghost" id="cloud-story-photo" title="Attach a photo" aria-label="Attach a photo">${sicon("camera")}</button><button type="button" class="primary" id="cloud-story-post">Post</button></div><input type="file" id="cloud-story-file" accept="image/jpeg,image/png,image/webp,image/gif" hidden aria-label="Choose a story photo"><div data-cloud-story-preview style="margin-top:8px">${cloudStoryPhoto?.url ? `<img src="${cloudStoryPhoto.url}" class="story-photo-preview" alt="Story photo preview"><div style="margin-top:6px"><button type="button" class="ghost" id="cloud-story-photo-remove">Remove photo</button></div>` : ""}</div><p class="muted" style="margin:6px 0 0">${state.storyDraft?.text ? "Draft restored — post when you're back online. " : ""}Photo stories upload to your private library and follow the same 24h + visibility rules as text.</p>` : ""}</div>`;
+  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Stories</h2><span class="tag">24h${unseen + unseenCloud ? ` · ${unseen + unseenCloud} new` : ""}</span></div><div class="story-strip"><button type="button" class="story-add" data-status-play title="Play the full status loop">${sicon("play")}<small>Status</small></button><button type="button" class="story-add" data-story-photo title="Post a photo or video">${sicon("camera")}<small>Photo</small></button><input type="file" id="story-file" accept="image/*,video/*" hidden>${localStoryRings(live)}${cloudStories.map((s) => `<button type="button" class="story-ring${isSeen("cstory:" + s.id) ? " seen" : ""}" data-cloud-story="${s.id}" title="Shared story by @${esc(s.handle)}"><span>${s.kind === "image" && s.mediaPath ? `<img data-story-thumb="${esc(s.mediaPath)}" alt="Photo story">` : sicon("chat")}</span><small>${esc(s.handle.length > 8 ? s.handle.slice(0, 7) + "…" : s.handle)}</small></button>`).join("")}</div>${signedIn() ? `<div class="input-row" style="margin-top:10px;flex-wrap:wrap"><input class="input" id="cloud-story-text" maxlength="500" placeholder="Share a text story with your circle…" aria-label="Share a text story" value="${esc(state.storyDraft?.text || "")}" style="flex:1 1 160px;min-width:0"><select class="select" id="cloud-story-vis" aria-label="Story visibility" style="max-width:150px"><option value="connections">Connections</option><option value="public">Public</option><option value="private">Only me</option></select><button type="button" class="ghost" id="cloud-story-photo" title="Attach a photo" aria-label="Attach a photo">${sicon("camera")}</button><button type="button" class="primary" id="cloud-story-post">Post</button></div><input type="file" id="cloud-story-file" accept="image/jpeg,image/png,image/webp,image/gif" hidden aria-label="Choose a story photo"><div data-cloud-story-preview style="margin-top:8px">${cloudStoryPhoto?.url ? `<img src="${cloudStoryPhoto.url}" class="story-photo-preview" alt="Story photo preview"><div style="margin-top:6px"><button type="button" class="ghost" id="cloud-story-photo-remove">Remove photo</button></div>` : ""}</div><p class="muted" style="margin:6px 0 0">${state.storyDraft?.text ? "Draft restored — post when you're back online. " : ""}Photo stories upload to your private library and follow the same 24h + visibility rules as text.</p>` : ""}</div>`;
 }
 
 // Shared cloud-story post path (Discover composer + Status home composer).
@@ -1889,7 +1866,16 @@ async function postCloudStory({ text, vis = "connections", file = null, btn = nu
         name: file.name, type: file.type, size: file.size,
         validation: window.__sfLastImageDiag?.verdict ?? null,
       });
-      const { data: up, error: upErr } = await uploadStoryPhoto(file);
+      // One automatic retry on transient faults (e.g. a 503 from Storage);
+      // persistent failures still surface honestly below.
+      let up = null;
+      let upErr = null;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        ({ data: up, error: upErr } = await uploadStoryPhoto(file));
+        if (!upErr || !isTransientUploadError(upErr)) break;
+        traceLog("storage-retry", { attempt: attempt + 1, error: String(upErr.message || upErr).slice(0, 160) });
+        await sleepMs(1500);
+      }
       if (upErr) throw upErr;
       mediaPath = up.path;
       kind = "image";
@@ -1978,19 +1964,7 @@ function bindStories(body) {
         .sort((a, b2) => new Date(a.createdAt) - new Date(b2.createdAt));
       openStoryViewer(items, Math.max(0, items.findIndex((s) => s.id === hit.id)));
     }),
-  );  $("[data-story-flex]", body).onclick = () => {
-    state.stories.unshift({
-      id: uid(),
-      kind: "flex",
-      text: `${state.streak.count}-day streak · ${state.sessions} sessions`,
-      author: state.profile.name,
-      ts: Date.now(),
-    });
-    state.stories = state.stories.filter((s) => Date.now() - s.ts < 86400000).slice(0, 30);
-    persist();
-    renderCommunity();
-    notify("Streak flexed for 24h " + sicon("fire"));
-  };
+  );
   $("[data-story-photo]", body).onclick = () =>
     $("#story-file", body)?.click();
   $("#story-file", body).onchange = async (e) => {
@@ -2098,30 +2072,11 @@ function svTheme(id) {
   for (const c of String(id || "?")) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   return SV_THEMES[h % SV_THEMES.length];
 }
-function statusGroups() {
-  const mine = cloudStories
-    .filter((s) => s.mine)
-    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-  const byUser = new Map();
-  for (const s of cloudStories) {
-    if (s.mine) continue;
-    if (!byUser.has(s.userId)) {
-      byUser.set(s.userId, { userId: s.userId, handle: s.handle, name: s.name, items: [] });
-    }
-    byUser.get(s.userId).items.push(s);
-  }
-  for (const u of byUser.values()) {
-    u.items.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-    u.latest = u.items[u.items.length - 1].createdAt;
-    u.unseen = u.items.filter((s) => !isSeen("cstory:" + s.id)).length;
-  }
-  return { mine, others: [...byUser.values()].sort((a, b) => new Date(b.latest) - new Date(a.latest)) };
-}
 function statusAvatarInner(handle, name, photo) {
   if (photo) return `<img src="${esc(photo)}" alt="">`;
   return esc(((handle || name || "?")[0] || "?").toUpperCase());
 }
-// Status home: composer + My Status + grouped Recent updates + device-local.
+// Status home: composer + My Status (your posts only) + device-local.
 function renderStatus(body) {
   if (signedIn()) {
     const before = JSON.stringify(cloudStories.map((s) => s.id));
@@ -2130,25 +2085,20 @@ function renderStatus(body) {
         && JSON.stringify(cloudStories.map((s) => s.id)) !== before) renderCommunity();
     }).catch(() => {});
   }
-  const { mine, others } = signedIn() ? statusGroups() : { mine: [], others: [] };
+  const mine = signedIn()
+    ? cloudStories.filter((s) => s.mine).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+    : [];
   const device = liveStories();
   const unseenMine = mine.filter((s) => !isSeen("cstory:" + s.id)).length;
   const latestMine = mine.length ? mine[mine.length - 1].createdAt : null;
   body.innerHTML = `${signedIn() ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>New status</h2><span class="tag" data-st-mode>${cloudStoryPhoto ? "photo" : "text"}</span></div><textarea class="textarea" id="st-text" rows="3" maxlength="500" placeholder="What's on your mind?" aria-label="Write a status">${esc(state.storyDraft?.text || "")}</textarea><div class="st-composer-meta"><span><span data-st-count>0</span>/500 · 24h</span><span class="st-composer-actions"><select class="select" id="st-vis" aria-label="Status visibility"><option value="connections">Connections</option><option value="public">Public</option><option value="private">Only me</option></select><button type="button" class="ghost" id="st-photo" aria-label="Add photo">${sicon("camera")} Photo</button><button type="button" class="primary" id="st-post">Post</button></span></div><input type="file" id="st-file" accept="image/jpeg,image/png,image/webp,image/gif" hidden aria-label="Choose a status photo"><div data-st-preview>${cloudStoryPhoto?.url ? `<img src="${cloudStoryPhoto.url}" class="story-photo-preview" alt="Status photo preview"><div style="margin-top:6px"><button type="button" class="ghost" id="st-photo-remove">Remove</button></div>` : ""}</div>${state.storyDraft?.text ? `<p class="muted" style="margin:6px 0 0">Draft restored — post when you're back online.</p>` : ""}</div>` : `<div class="card" style="margin-bottom:18px"><h2>Status</h2><p class="muted">Sign in to post 24h statuses for your circle.</p></div>`}`
     + `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>My Status</h2><span class="tag">${mine.length ? `${mine.length} update${mine.length === 1 ? "" : "s"}` : "none yet"}</span></div>${mine.length ? `<button type="button" class="status-row" data-status-mine><span class="status-avatar" style="--sv-accent:${svAccent(state.profile.handle)}">${avatarMarkup(state.profile.photo, state.profile.avatar)}</span><span class="status-meta"><strong>My Status</strong><small>${relTime(latestMine)}${unseenMine ? ` · ${unseenMine} new` : ""}</small></span>${unseenMine ? '<span class="status-dot" aria-label="Unseen updates"></span>' : `<span class="tag">${sicon("check")}</span>`}</button>` : `<p class="muted">Share your first update above — text or photo, live for 24h.</p>`}</div>`
-    + `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Recent updates</h2><span class="tag">${others.length}</span></div>${others.length ? others.map((u) => `<button type="button" class="status-row" data-status-user="${esc(u.userId)}"><span class="status-avatar" style="--sv-accent:${svAccent(u.handle)}">${esc(((u.handle || "?")[0] || "?").toUpperCase())}</span><span class="status-meta"><strong>@${esc(u.handle)}</strong><small>${u.items.length} update${u.items.length === 1 ? "" : "s"} · ${relTime(u.latest)}${u.unseen ? ` · ${u.unseen} new` : ""}</small></span>${u.unseen ? '<span class="status-dot" aria-label="Unseen updates"></span>' : ""}</button>`).join("") : `<p class="muted">${signedIn() ? "No updates from others yet." : "Sign in to see statuses from your circle."}</p>`}</div>`
     + (device.length ? `<div class="card"><div class="section-row"><h2>On this device</h2><span class="tag">local</span></div><div class="story-strip">${localStoryRings(device)}</div></div>` : "");
   bindStatusHome(body);
 }
 function bindStatusHome(body) {
   $$("[data-status-mine]", body).forEach((b) => (b.onclick = () => {
     const items = cloudStories.filter((s) => s.mine)
-      .sort((a, b2) => new Date(a.createdAt) - new Date(b2.createdAt));
-    if (!items.length) return;
-    openStoryViewer(items, Math.max(0, items.findIndex((s) => !isSeen("cstory:" + s.id))));
-  }));
-  $$("[data-status-user]", body).forEach((b) => (b.onclick = () => {
-    const items = cloudStories.filter((s) => s.userId === b.dataset.statusUser)
       .sort((a, b2) => new Date(a.createdAt) - new Date(b2.createdAt));
     if (!items.length) return;
     openStoryViewer(items, Math.max(0, items.findIndex((s) => !isSeen("cstory:" + s.id))));
@@ -2210,7 +2160,7 @@ function openStoryViewer(items, startIdx) {
   };
   const ov = document.createElement("div");
   ov.id = "story-viewer";
-  ov.innerHTML = `<div class="sv-frame" role="dialog" aria-label="Status viewer"><div class="sv-progress" data-sv-progress></div><div class="sv-top"><span class="status-avatar sm" data-sv-avatar></span><span class="sv-who"><strong data-sv-name></strong><small data-sv-time></small></span><button type="button" class="sv-close" data-sv-close aria-label="Close status viewer">×</button></div><div class="sv-stage" data-sv-stage></div><button type="button" class="sv-tap left" data-sv-prev aria-label="Previous status">‹</button><button type="button" class="sv-tap right" data-sv-next aria-label="Next status">›</button><div class="sv-foot"><span class="muted" data-sv-views></span><span class="sv-foot-actions"><button type="button" class="ghost" data-sv-prev-btn>Prev</button><button type="button" class="ghost" data-sv-next-btn>Next</button><button type="button" class="delete" data-sv-del hidden>Delete</button></span></div></div>`;
+  ov.innerHTML = `<div class="sv-frame" role="dialog" aria-label="Status viewer"><div class="sv-progress" data-sv-progress></div><div class="sv-top"><span class="status-avatar sm" data-sv-avatar></span><span class="sv-who"><strong data-sv-name></strong><small data-sv-time></small></span><button type="button" class="sv-close" data-sv-close aria-label="Close status viewer">×</button></div><div class="sv-stage" data-sv-stage></div><button type="button" class="sv-tap left" data-sv-prev aria-label="Previous status">‹</button><button type="button" class="sv-tap right" data-sv-next aria-label="Next status">›</button><div class="sv-foot"><span class="muted" data-sv-views></span><span class="sv-foot-actions"><button type="button" class="delete" data-sv-del hidden>Delete</button></span></div><div class="sv-confirm" data-sv-confirm hidden><span>Delete this status? It disappears for everyone.</span><span class="sv-confirm-actions"><button type="button" class="ghost" data-sv-del-cancel>Keep it</button><button type="button" class="delete" data-sv-del-yes>Delete</button></span></div></div>`;
   document.body.append(ov);
   const bar = () => ov.querySelector("[data-sv-progress]");
   const stage = () => ov.querySelector("[data-sv-stage]");
@@ -2325,10 +2275,11 @@ function openStoryViewer(items, startIdx) {
       box.innerHTML = `<div class="sv-text-card" style="background:${svTheme(item.id)}"><p>${esc(item.text || "")}</p><div class="sv-card-foot"><strong>${esc(item.mine ? "You" : "@" + item.handle)}</strong><small>${relTime(item.createdAt)}</small></div></div>`;
       schedule(5000);
     }
-    const prevBtns = [ov.querySelector("[data-sv-prev-btn]"), ov.querySelector("[data-sv-prev]")];
-    const nextBtns = [ov.querySelector("[data-sv-next-btn]"), ov.querySelector("[data-sv-next]")];
+    const prevBtns = [ov.querySelector("[data-sv-prev]")];
+    const nextBtns = [ov.querySelector("[data-sv-next]")];
     prevBtns.forEach((b) => { if (b) b.disabled = st.idx === 0; });
     nextBtns.forEach((b) => { if (b) b.disabled = st.idx === st.items.length - 1; });
+    ov.querySelector("[data-sv-confirm]").hidden = true;
     markSeen(item);
   }
   function advance(d, auto) {
@@ -2352,26 +2303,36 @@ function openStoryViewer(items, startIdx) {
   };
   ov.querySelector("[data-sv-prev]").onclick = () => advance(-1, false);
   ov.querySelector("[data-sv-next]").onclick = () => advance(1, false);
-  ov.querySelector("[data-sv-prev-btn]").onclick = () => advance(-1, false);
-  ov.querySelector("[data-sv-next-btn]").onclick = () => advance(1, false);
+  // Delete confirmation lives INSIDE the viewer (an app-wide modal would
+  // render underneath this overlay), pausing playback until resolved.
+  const confirmRow = ov.querySelector("[data-sv-confirm]");
   ov.querySelector("[data-sv-del]").onclick = () => {
     const item = st.items[st.idx];
     if (!item?.mine) return;
     pause();
-    confirmBox("Delete this status?", "It disappears for everyone.", async () => {
-      await deleteStory(item.id).catch(() => {});
-      if (item.mediaPath) await deleteStoryMedia(item.mediaPath).catch(() => {});
-      cloudStories = cloudStories.filter((x) => x.id !== item.id);
-      st.items = st.items.filter((x) => x.id !== item.id);
-      if (!st.items.length) {
-        closeStoryViewer();
-        renderCommunity();
-        notify("Status deleted");
-        return;
-      }
-      show(Math.min(st.idx, st.items.length - 1));
+    confirmRow.hidden = false;
+    ov.querySelector("[data-sv-del-cancel]")?.focus();
+  };
+  ov.querySelector("[data-sv-del-cancel]").onclick = () => {
+    confirmRow.hidden = true;
+    resume();
+  };
+  ov.querySelector("[data-sv-del-yes]").onclick = async () => {
+    const item = st.items[st.idx];
+    if (!item?.mine) return;
+    confirmRow.hidden = true;
+    await deleteStory(item.id).catch(() => {});
+    if (item.mediaPath) await deleteStoryMedia(item.mediaPath).catch(() => {});
+    cloudStories = cloudStories.filter((x) => x.id !== item.id);
+    st.items = st.items.filter((x) => x.id !== item.id);
+    if (!st.items.length) {
+      closeStoryViewer();
+      renderCommunity();
       notify("Status deleted");
-    }, { onCancel: () => resume() });
+      return;
+    }
+    show(Math.min(st.idx, st.items.length - 1));
+    notify("Status deleted");
   };
   stage().addEventListener("pointerdown", pause);
   stage().addEventListener("pointerup", resume);
@@ -2394,6 +2355,13 @@ function openStoryViewer(items, startIdx) {
       advance(-1, false);
     } else if (e.key === "Escape") {
       e.preventDefault();
+      if (!ov.querySelector("[data-sv-confirm]").hidden) {
+        ov.querySelector("[data-sv-confirm]").hidden = true;
+        resume();
+        const cur = ov.querySelector("[data-sv-del]");
+        if (cur && !cur.hidden) cur.focus();
+        return;
+      }
       closeStoryViewer();
       renderCommunity();
     }
