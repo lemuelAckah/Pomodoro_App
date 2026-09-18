@@ -588,11 +588,19 @@ let cloudSyncTimer;
 // focus and scroll position — feels like a phantom refresh).
 let lastCloudVersion = 0;
 
+// Signature of the last state payload we applied OR uploaded. Realtime echoes
+// arrive with a fresh server version even when they carry our own bytes, so
+// the version guard alone cannot identify them — content can.
+let lastAppliedCloudSig = "";
+
 function scheduleCloudSync() {
   if (!backendConfigured || !state.user) return;
   clearTimeout(cloudSyncTimer);
   cloudSyncTimer = setTimeout(async () => {
     const snapshot = cloudSnapshot();
+    // Remember what we uploaded so the realtime echo of this exact payload is
+    // recognised as ours and never rebuilds the app mid-action.
+    lastAppliedCloudSig = JSON.stringify(snapshot);
     const result = await syncUserState(state.user.id, snapshot);
     if (!result.error && result.data && Number.isFinite(+result.data.version)) {
       lastCloudVersion = Math.max(lastCloudVersion, +result.data.version);
@@ -835,6 +843,16 @@ async function hydrateCloudState(user) {
     // modals, inputs and scroll. Only genuinely newer cross-device writes
     // go through.
     if (remoteVersion <= lastCloudVersion) return;
+    // Version guards can miss (clock skew, two tabs writing): compare the
+    // actual content. A payload that matches what this device already holds
+    // is by definition an echo — absorbing it into state and rebuilding the
+    // UI for it is exactly the "phantom refresh" users feel mid-action.
+    const incomingSig = JSON.stringify(remoteState);
+    if (incomingSig === lastAppliedCloudSig) {
+      lastCloudVersion = Math.max(lastCloudVersion, remoteVersion);
+      return;
+    }
+    lastAppliedCloudSig = incomingSig;
     lastCloudVersion = remoteVersion;
     Object.assign(state, remoteState);
     save("sf-tasks", state.tasks);

@@ -5,7 +5,7 @@ import {
   ensureNotifyPermission, notifOn, updateBarPadding, makeDraggable,
 } from "./core.js";
 import { playChime, stopAllLayers, startAmbient, applyLinkToTimer, warmAudio } from "./audio.js";
-import { techniques, TECH_DETAILS, matchTech, totalDue, applyTechPreset } from "./techniques.js";
+import { techniques, TECH_DETAILS, matchTech, totalDue, openTechniqueGuide } from "./techniques.js";
 import { logFocusDay, progressChallenges, missionDeskMarkup, bindMissionDesk, challengeLock, challengeLockBanner, leaveChallenge, paceSec } from "./community.js";
 import { shell } from "./app.js";
 import { mirrorTasks, deleteTaskEverywhere, mirrorTechniqueUsage, onSyncStatus } from "./services/productivity-sync.js";
@@ -328,7 +328,10 @@ function renderTimer() {
   }
   const todayTech = $("[data-today-tech]", target);
   if (todayTech)
-    todayTech.onclick = () => applyTechPreset(todayTech.dataset.todayTech);
+    // "Try it" takes you to the technique's full guide in the Techniques tab
+    // (steps, mistakes, pads and its own "Set up my timer" button) instead of
+    // silently reconfiguring the timer from behind your back.
+    todayTech.onclick = () => openTechniqueGuide(todayTech.dataset.todayTech);
   $("[data-reset]", target).onclick = () => {
     clearInterval(timerHandle);
     state.time = durations[state.mode];
@@ -642,7 +645,8 @@ function techniqueOfDay() {
 
 function techOfDayMarkup() {
   const x = techniqueOfDay();
-  return `<div class="card" style="margin-top:18px"><div class="section-row"><h2>Technique of the day</h2><span class="tag">try it</span></div><div class="section-row" style="margin-bottom:0"><div><strong>${x[2]} ${x[1]}</strong><br><small class="muted">${esc(x[3])}</small></div><button type="button" class="primary" data-today-tech="${x[0]}" style="padding:9px 14px;font-size:12px;flex-shrink:0">Try it</button></div></div>`;
+  const details = TECH_DETAILS[x[0]] || {};
+  return `<div class="card tech-day" style="margin-top:18px"><div class="section-row"><h2>${sicon("sun")} Technique of the day</h2><span class="tag tech-day-tag">today's pick</span></div><div class="tech-day-body"><span class="tech-day-ico" aria-hidden="true">${x[2]}</span><div class="tech-day-copy"><strong>${x[1]}</strong><span class="muted">${esc(x[3])}</span><span class="tech-day-meta">${details.category ? `${esc(details.category)} · ` : ""}${esc(x[4])}</span></div><button type="button" class="primary tech-day-btn" data-today-tech="${x[0]}" title="Opens the full ${esc(x[1])} guide in the Techniques tab">Read &amp; try it →</button></div></div>`;
 }
 
 function biggestDay() {

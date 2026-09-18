@@ -283,6 +283,42 @@ let presenceInfo = { chatId: null, users: [] };
 
 let sprintTicker = null;
 
+// True while the user is mid-action on this page — typing, holding a pointer
+// or mouse button, or with an open menu/select/modal. Ambient loops must not
+// rebuild the panel underneath them; anything they produced is picked up on
+// the next natural render instead.
+function userIsBusy() {
+  try {
+    const el = document.activeElement;
+    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return true;
+    // A pressed pointer (dragging, selecting, mid-click) blocks re-render.
+    if (window.__sfPointerDown > 0) return true;
+    // Any open modal, popup or expanded menu blocks re-render too.
+    if (document.querySelector(".modal-backdrop, [data-picker]:not([hidden]), .post-menu:not([hidden]), [data-chat-pop]:not([hidden]), [data-chat-extras-pop]:not([hidden]), .friend-pick.drop:not([hidden])")) return true;
+  } catch {
+    /* never let a busy-check break the ticker */
+  }
+  return false;
+}
+
+if (!window.__sfPointerWatch) {
+  window.__sfPointerWatch = true;
+  window.__sfPointerDown = 0;
+  const releasePointer = () => {
+    window.__sfPointerDown = Math.max(0, window.__sfPointerDown - 1);
+  };
+  document.addEventListener("pointerdown", () => {
+    window.__sfPointerDown++;
+  }, true);
+  document.addEventListener("pointerup", releasePointer, true);
+  document.addEventListener("pointercancel", releasePointer, true);
+  // Released outside the window (drag out, OS-level steal) never fires
+  // pointerup here — clear on blur so "busy" can never stick permanently.
+  window.addEventListener("blur", () => {
+    window.__sfPointerDown = 0;
+  });
+}
+
 function weekKey(d) {
   const dt = new Date(d.getTime ? d.getTime() : d);
   const day = (dt.getDay() + 6) % 7;
@@ -586,10 +622,9 @@ function ensureSprintTicker() {
       if (!sp.result && (sp.invites || []).some((i) => i.status === "pending") && Math.random() < 0.03) {
         if (resolveOneInvite(sp)) {
           changed = true;
-          // Never wipe a half-typed room title / purpose for ambient news —
+          // Never wipe a half-typed room title / open menu for ambient news —
           // just persist and let the chips catch up on the next render.
-          const typing = document.activeElement && ["INPUT", "TEXTAREA"].includes(document.activeElement.tagName);
-          if (!typing) {
+          if (!userIsBusy()) {
             renderCommunity();
             return;
           } else {
@@ -660,8 +695,7 @@ function ensureSprintTicker() {
       if (Math.random() < 0.02 && resolveOneEventInvite(e)) raceNews = true;
     });
     if (raceNews) {
-      const typing = document.activeElement && ["INPUT", "TEXTAREA"].includes(document.activeElement.tagName);
-      if (!typing && state.tab === "community" && state.subtab === "sprints") {
+      if (!userIsBusy() && state.tab === "community" && state.subtab === "sprints") {
         persist();
         renderCommunity();
         return;
@@ -756,11 +790,12 @@ function renderCommunity() {
   paintStoryThumbs(body);
   if (state.subtab === "sprints") ensureSprintTicker();
   // Refresh the shared public group list in the background; repaint only when
-  // it actually changed (same token-guard pattern as the book library).
+  // it actually changed AND the user isn't mid-action (an open menu or half-
+  // typed draft outlives the repaint — the next render picks the data up).
   const seenCloudAt = cloudGroupsAt;
   refreshCloudGroups(false).then(() => {
     if (cloudGroupsAt === seenCloudAt || !cloudGroups.length) return;
-    if (state.tab === "community") renderCommunity();
+    if (state.tab === "community" && !userIsBusy()) renderCommunity();
   }).catch(() => {});
   // Social caches + notification badge refresh silently; repaint only the badge.
   if (signedIn()) {
@@ -4073,12 +4108,28 @@ function bindChat(root, id) {
     document
       .querySelectorAll("[data-chat-pop]")
       .forEach((el) => (el.hidden = true));
+    const xp = root.querySelector("[data-chat-extras-pop]");
+    if (xp) {
+      xp.hidden = true;
+      root.querySelector("[data-chat-extras]")?.setAttribute("aria-expanded", "false");
+    }
     pop.hidden = !open;
     if (!pop.hidden) {
       const first = pop.querySelector("button");
       if (first) first.focus();
     }
   });
+  // Clicking anywhere outside the open chat menu closes it (Escape is
+  // already handled globally). Guarded: the chat root outlives re-renders.
+  if (!window.__sfChatMenuCloser) {
+    window.__sfChatMenuCloser = true;
+    document.addEventListener("pointerdown", (e) => {
+      const open = document.querySelector('[data-chat-pop]:not([hidden])');
+      if (open && !open.contains(e.target) && !e.target.closest?.("[data-chat-menu]")) {
+        open.hidden = true;
+      }
+    }, true);
+  }
   bindGroupMenuActions(root);
   $$("[data-chat-block]", root).forEach(
     (b) =>
@@ -4197,16 +4248,25 @@ function bindChat(root, id) {
     extrasToggle.onclick = (e) => {
       e.stopPropagation();
       const open = !extrasPop.hidden;
+      closePostMenus();
       extrasPop.hidden = open;
       extrasToggle.setAttribute("aria-expanded", !open);
     };
     extrasPop.onclick = (e) => e.stopPropagation();
-    root.addEventListener("click", (e) => {
-      if (!extrasPop.contains(e.target) && e.target !== extrasToggle) {
-        extrasPop.hidden = true;
-        extrasToggle.setAttribute("aria-expanded", "false");
-      }
-    });
+    // The chat root element survives re-renders (only innerHTML is swapped),
+    // so this closer must be attached once — otherwise every chat open adds
+    // another duplicate listener.
+    if (!root.dataset.extrasCloser) {
+      root.dataset.extrasCloser = "1";
+      root.addEventListener("click", (e) => {
+        const pop = $("[data-chat-extras-pop]", root);
+        const toggle = $("[data-chat-extras]", root);
+        if (pop && !pop.hidden && !pop.contains(e.target) && e.target !== toggle && !toggle?.contains(e.target)) {
+          pop.hidden = true;
+          toggle?.setAttribute("aria-expanded", "false");
+        }
+      });
+    }
   }
   $("#poll-button", root).onclick = () => openPollBuilder(id, root);
   $("#voice-button", root).onclick = () => {
@@ -5378,8 +5438,15 @@ function subscribePresenceFor(id) {
       const others = (users || []).filter(
         (u) => u.user_id !== state.user.id,
       );
+      // Presence syncs fire on every track — including our own resubscribe
+      // (with a fresh timestamp, so the payload ALWAYS differs). Rebuilding
+      // Community on each one creates a self-sustaining render storm that
+      // kills open menus, drafts, and scroll. Re-render only when the actual
+      // member set changes, and only for the actively viewed chat.
+      const sig = others.map((u) => u.user_id).sort().join(",");
+      const prev = ((id === presenceInfo.chatId && presenceInfo.users) || []).map((u) => u.user_id).sort().join(",");
       presenceInfo = { chatId: id, users: others };
-      if (state.tab === "community") renderCommunity();
+      if (sig !== prev && state.tab === "community" && state.activeChat === id) renderCommunity();
     },
   );
 }

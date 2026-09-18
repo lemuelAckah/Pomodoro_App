@@ -679,6 +679,11 @@ kbd {
   z-index: 20;
   min-width: 120px;
 }
+/* Without this, `display:flex` above overrides the hidden attribute and the
+   menu is always visible (toggle looks dead, popup "hovers" permanently). */
+.chat-extras-menu[hidden] {
+  display: none;
+}
 .chat-extras-item {
   display: flex;
   align-items: center;

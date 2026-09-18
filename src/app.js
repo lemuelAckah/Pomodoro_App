@@ -24,6 +24,11 @@ import {
 } from "./account.js";
 let searchHits = [];
 
+// Guards the one-time-per-session cloud hydration: auth events repeat
+// (INITIAL_SESSION, TOKEN_REFRESHED, visibility changes) and every repeat
+// used to rebuild the whole app underneath the user.
+let hydrationInFlight = false;
+
 function openSearch() {
   closeSearch();
   const overlay = document.createElement("div");
@@ -524,8 +529,19 @@ getCurrentUser()
       location.reload();
       return;
     }
+    // The INITIAL_SESSION auth echo can win the race and hydrate first —
+    // skip the duplicate hydrate + shell that would land right behind it.
+    if (state.user?.id === user.id && (cloudStateSubscription || hydrationInFlight)) {
+      state.user = user;
+      return;
+    }
     state.user = user;
-    await hydrateCloudState(user);
+    // Mark hydration in-flight so the INITIAL_SESSION auth echo (fired for
+    // this same user) waits instead of running a second full hydrate + shell.
+    hydrationInFlight = true;
+    await hydrateCloudState(user).finally(() => {
+      hydrationInFlight = false;
+    });
     // Phase 3: tasks, notes and technique data follow the account.
     await pullProductivity();
     // Phase 4: authoritative coins, inventory, achievements, streak, boxes.
@@ -541,8 +557,8 @@ getCurrentUser()
 
 onAuthStateChange((user) => {
   const expired = state.user && !user;
-  state.user = user;
   if (expired) {
+    state.user = null;
     cloudStateSubscription?.unsubscribe();
     setCloudSubscription(null);
     // Server-side session end (expired token, signed out elsewhere):
@@ -554,6 +570,21 @@ onAuthStateChange((user) => {
     return;
   }
   if (user) {
+    // Token refreshes, tab re-focuses and Supabase's INITIAL_SESSION echo all
+    // land here with the SAME user we already have. Re-hydrating on each one
+    // rebuilds the entire app (scroll, focus, open menus gone) and feels like
+    // the site "keeps refreshing". Hydrate only on a genuinely new session —
+    // the user was absent, or it is a different account.
+    const sameUser =
+      state.user && state.user.id === user.id &&
+      (cloudStateSubscription || hydrationInFlight);
+    if (sameUser) {
+      state.user = user;
+      if (state.tab === "account" || state.tab === "settings") render();
+      return;
+    }
+    state.user = user;
+    hydrationInFlight = true;
     // OAuth or cross-tab sign-in lands here: restore the archive first —
     // the reload it triggers rebuilds the app around the restored data.
     if (restoreArchivedState(user.id)) {
@@ -561,7 +592,11 @@ onAuthStateChange((user) => {
       location.reload();
       return;
     }
-    hydrateCloudState(user);
+    hydrateCloudState(user)
+      .catch(() => {})
+      .finally(() => {
+        hydrationInFlight = false;
+      });
     pullProductivity();
     pullRewards().catch(() => {});
     pullMusic().catch(() => {});
