@@ -11,6 +11,7 @@
   --coral: #e8795b;
   --gold: #e9ae3f;
   --shadow: 0 18px 50px rgba(45, 67, 48, 0.08);
+  --faint: #eef2eb;
 }
 
 html[data-night="1"] {

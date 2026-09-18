@@ -102,6 +102,7 @@ const SICON_PATHS = {
   chat: '<path d="M4 5.5h16a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H9.5L4 19.5z"/><path d="M8.5 10h7M8.5 12.8h4"/>',
   clip: '<path d="M9.5 4.5a2.8 2.8 0 0 1 2.8 2.8v9.2a4.3 4.3 0 0 1-8.6 0V9.2a1.4 1.4 0 0 1 2.8 0v7.6a1 1 0 0 0 2 0V7.3"/>',
   pin: '<path d="M9 3.5h6l-1 7 3 3v1.5H7V13.5l3-3z"/><path d="M12 15v6"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
   run: '<circle cx="15" cy="4.5" r="1.8"/><path d="M6.5 20l3-3.8 2.2 1.8.8 2.5M11.5 16L8.5 13l3-2 2.3 1.3L16.5 8.5M13.5 4.5L11 8.5l3.8 1 2.7 3"/>',
   palette: '<path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.4 0 2-.9 2-2 0-1.6-1.4-2-1.4-3.4 0-1.2 1-2.1 2.2-2.1H17a4.5 4.5 0 0 0 4.5-4.5c0-2.8-4-5-9.5-5z"/><circle cx="8" cy="10.2" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="7.6" r="1" fill="currentColor" stroke="none"/><circle cx="16" cy="10.2" r="1" fill="currentColor" stroke="none"/>',
   lock: '<rect x="5.5" y="10.5" width="13" height="9.5" rx="2"/><path d="M8.5 10.5V7.5a3.5 3.5 0 0 1 7 0v3"/>',

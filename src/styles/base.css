@@ -656,54 +656,177 @@ kbd {
   height: 36px;
   display: grid;
   place-items: center;
+  overflow: hidden;
 }
-.chat-extras-dots {
-  font-size: 20px;
-  font-weight: 700;
-  line-height: 1;
-  letter-spacing: 2px;
+.chat-extras-toggle .sicon {
+  width: 18px;
+  height: 18px;
+}
+/* Toggle icon morphs from + to × when the menu is open. */
+.chat-extras-plus {
+  display: grid;
+  place-items: center;
+  transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.chat-extras-toggle[aria-expanded="true"] {
+  background: var(--sage);
+  color: #fff;
+}
+.chat-extras-toggle[aria-expanded="true"] .chat-extras-plus {
+  transform: rotate(45deg);
+}
+.chat-extras-toggle[aria-expanded="true"]:hover {
+  background: var(--sage);
+  color: #fff;
+  transform: none;
 }
 .chat-extras-menu {
   position: absolute;
   bottom: 42px;
   left: 50%;
-  transform: translateX(-50%);
+  /* Center with margin (not transform) so the open animation owns transform
+     and small-screen overrides stay trivial. */
+  margin-left: -122px;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 6px;
+  border-radius: 14px;
+  padding: 8px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+  gap: 8px;
+  box-shadow: var(--shadow), 0 8px 24px rgba(0, 0, 0, 0.14);
   z-index: 20;
-  min-width: 120px;
+  width: 244px;
 }
 /* Without this, `display:flex` above overrides the hidden attribute and the
    menu is always visible (toggle looks dead, popup "hovers" permanently). */
 .chat-extras-menu[hidden] {
   display: none;
 }
-.chat-extras-item {
+/* Springy fade/rise-in for the open state. */
+.chat-extras-menu:not([hidden]) {
+  animation: chat-extras-in 0.22s cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+@keyframes chat-extras-in {
+  from {
+    opacity: 0;
+    transform: translateY(7px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.chat-extras-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 2px 4px 0 6px;
+}
+.chat-extras-head strong {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.chat-extras-close {
+  width: 24px;
+  height: 24px;
   border-radius: 8px;
+  color: var(--muted);
+  background: transparent;
+}
+.chat-extras-close .sicon {
+  width: 13px;
+  height: 13px;
+}
+.chat-extras-close:hover {
+  background: #e7ede6;
+  color: var(--ink);
+  transform: none;
+}
+.chat-extras-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.chat-extras-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 4px 9px;
+  border-radius: 12px;
   background: none;
   border: none;
   color: inherit;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 12.5px;
+  font-weight: 600;
   white-space: nowrap;
+  transition: background-color 0.16s ease, border-color 0.16s ease, transform 0.16s ease;
 }
 .chat-extras-item:hover {
-  background: var(--faint);
+  background: #f0f4ee;
 }
-.chat-extras-item .sicon {
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
+.chat-extras-item:active {
+  transform: scale(0.95);
+}
+/* Tinted icon disc per action. */
+.chat-extras-ic {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+}
+.chat-extras-ic .sicon {
+  width: 17px;
+  height: 17px;
+}
+.chat-extras-ic.file {
+  background: rgba(71, 118, 90, 0.14);
+  color: var(--sage);
+}
+.chat-extras-ic.poll {
+  background: rgba(233, 174, 63, 0.16);
+  color: #c98b2a;
+}
+.chat-extras-ic.voice {
+  background: rgba(232, 121, 91, 0.14);
+  color: var(--coral);
+}
+/* Dotted focus ring inside tiles (matches the app's keyboard style). */
+.chat-extras-item:focus-visible {
+  outline: 2px dashed var(--sage);
+  outline-offset: -4px;
+}
+.chat-extras-foot {
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--muted);
+  padding: 0 4px 2px;
+}
+/* Night mode: softer tile hover + auto-derived disc colors. */
+html[data-night="1"] .chat-extras-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+html[data-night="1"] .chat-extras-close:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+html[data-night="1"] .chat-extras-ic.file {
+  background: rgba(184, 215, 124, 0.13);
+  color: var(--lime);
+}
+html[data-night="1"] .chat-extras-ic.poll {
+  background: rgba(233, 174, 63, 0.14);
+  color: var(--gold);
+}
+html[data-night="1"] .chat-extras-ic.voice {
+  background: rgba(232, 121, 91, 0.16);
+  color: var(--coral);
 }
 
 #status-viewer.paused .st-body {

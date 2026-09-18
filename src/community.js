@@ -4084,7 +4084,16 @@ function chatMarkup(id) {
   const nav = groupNav && groupNav.id === id && groupNav.matches.length
     ? `<div class="msg-nav"><button type="button" data-gnav="prev" aria-label="Previous match">‹</button><span>${groupNav.pos + 1} / ${groupNav.matches.length}</span><button type="button" data-gnav="next" aria-label="Next match">›</button><button type="button" data-gnav="close" aria-label="Close search navigation">×</button></div>`
     : "";
-  return `<div class="chat-head"><div class="chat-head-who">${isGroup ? groupAvatarMarkup(allGroups().find((g) => g.id === id)) : ""}<div><strong>${esc(target?.name || "@" + (target?.username || target?.handle || "?"))}</strong>${mutedTag}${typing}${presence}</div></div><span class="friend-actions"><button type="button" class="primary" data-start-call="${id}" style="padding:8px 12px;font-size:11px">Video call</button>${isFriendChat ? `<span class="post-menu-wrap"><button type="button" class="icon-btn" data-chat-menu="${id}" title="Conversation options" aria-label="Conversation options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden><button type="button" data-chat-block="${id}">Block user</button></span></span>` : ""}${isGroup && !isFriendChat ? `<span class="post-menu-wrap"><button type="button" class="icon-btn" data-chat-menu="${id}" title="Group options" aria-label="Group options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden>${groupMenuMarkup(id)}</span></span>` : ""}</span></div>${pinbar}${nav}<div class="chat-body">${msgs.map((m, i) => `<div class="bubble ${m.me ? "me" : ""}" data-midx="${i}">${messageHtml(m)}</div>`).join("") || '<span class="muted">No messages yet. Start the conversation.</span>'}</div>${reply}${rec}<div class="chat-input"><textarea class="input autogrow chat-textarea" id="chat-text" rows="1" data-grow-max="150" placeholder="Type a message (Shift + Enter for a new line)" aria-label="Type a message"></textarea><div class="chat-extras-wrap"><button type="button" class="icon-btn chat-extras-toggle" data-chat-extras title="Attach, poll or voice" aria-label="Attach, poll or voice"><span class="chat-extras-dots">⋯</span></button><div class="chat-extras-menu" data-chat-extras-pop hidden><label class="chat-extras-item" style="display:grid;place-items:center;cursor:pointer"><input type="file" id="chat-file" hidden>${sicon("clip")} <span>File</span></label><button type="button" class="chat-extras-item" id="poll-button">${sicon("chart")} <span>Poll</span></button><button type="button" class="chat-extras-item" id="voice-button">${sicon("mic")} <span>Voice</span></button></div></div><button type="button" class="primary" id="send-message">Send</button></div>`;
+  return `<div class="chat-head"><div class="chat-head-who">${isGroup ? groupAvatarMarkup(allGroups().find((g) => g.id === id)) : ""}<div><strong>${esc(target?.name || "@" + (target?.username || target?.handle || "?"))}</strong>${mutedTag}${typing}${presence}</div></div><span class="friend-actions"><button type="button" class="primary" data-start-call="${id}" style="padding:8px 12px;font-size:11px">Video call</button>${isFriendChat ? `<span class="post-menu-wrap"><button type="button" class="icon-btn" data-chat-menu="${id}" title="Conversation options" aria-label="Conversation options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden><button type="button" data-chat-block="${id}">Block user</button></span></span>` : ""}${isGroup && !isFriendChat ? `<span class="post-menu-wrap"><button type="button" class="icon-btn" data-chat-menu="${id}" title="Group options" aria-label="Group options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden>${groupMenuMarkup(id)}</span></span>` : ""}</span></div>${pinbar}${nav}<div class="chat-body">${msgs.map((m, i) => `<div class="bubble ${m.me ? "me" : ""}" data-midx="${i}">${messageHtml(m)}</div>`).join("") || '<span class="muted">No messages yet. Start the conversation.</span>'}</div>${reply}${rec}<div class="chat-input"><textarea class="input autogrow chat-textarea" id="chat-text" rows="1" data-grow-max="150" placeholder="Type a message (Shift + Enter for a new line)" aria-label="Type a message"></textarea><div class="chat-extras-wrap"><button type="button" class="icon-btn chat-extras-toggle" data-chat-extras title="Add to your message" aria-label="Add to your message" aria-haspopup="true" aria-expanded="false"><span class="chat-extras-plus">${sicon("plus")}</span></button><div class="chat-extras-menu" data-chat-extras-pop hidden role="dialog" aria-label="Add to your message"><div class="chat-extras-head"><strong>Add to chat</strong><button type="button" class="icon-btn chat-extras-close" data-chat-extras-close title="Close" aria-label="Close menu">${sicon("x")}</button></div><div class="chat-extras-grid"><label class="chat-extras-item" title="Attach a file up to 3 MB"><input type="file" id="chat-file" hidden><span class="chat-extras-ic file">${sicon("clip")}</span><span>File</span></label><button type="button" class="chat-extras-item" id="poll-button" title="Create a poll"><span class="chat-extras-ic poll">${sicon("chart")}</span><span>Poll</span></button><button type="button" class="chat-extras-item" id="voice-button" title="Record a voice note"><span class="chat-extras-ic voice">${sicon("mic")}</span><span>Voice</span></button></div><div class="chat-extras-foot">Files up to 3 MB. Attach documents, start a poll, or record a voice note.</div></div></div><button type="button" class="primary" id="send-message">Send</button></div>`;
+}
+
+function closeChatExtras(root) {
+  const pop = root?.querySelector("[data-chat-extras-pop]");
+  if (!pop || pop.hidden) return;
+  pop.hidden = true;
+  root
+    .querySelector("[data-chat-extras]")
+    ?.setAttribute("aria-expanded", "false");
 }
 
 function bindChat(root, id) {
@@ -4109,9 +4118,8 @@ function bindChat(root, id) {
       .querySelectorAll("[data-chat-pop]")
       .forEach((el) => (el.hidden = true));
     const xp = root.querySelector("[data-chat-extras-pop]");
-    if (xp) {
-      xp.hidden = true;
-      root.querySelector("[data-chat-extras]")?.setAttribute("aria-expanded", "false");
+    if (xp && !xp.hidden) {
+      closeChatExtras(root);
     }
     pop.hidden = !open;
     if (!pop.hidden) {
@@ -4220,6 +4228,7 @@ function bindChat(root, id) {
     }
     const file = e.target.files[0];
     if (!file) return;
+    closeChatExtras(root);
     if (file.size > 3 * 1024 * 1024)
       return notify("Files must be under 3 MB");
     const reader = new FileReader();
@@ -4252,6 +4261,10 @@ function bindChat(root, id) {
       extrasPop.hidden = open;
       extrasToggle.setAttribute("aria-expanded", !open);
     };
+    $("button[data-chat-extras-close]", root)?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeChatExtras(root);
+    });
     extrasPop.onclick = (e) => e.stopPropagation();
     // The chat root element survives re-renders (only innerHTML is swapped),
     // so this closer must be attached once — otherwise every chat open adds
@@ -4262,14 +4275,17 @@ function bindChat(root, id) {
         const pop = $("[data-chat-extras-pop]", root);
         const toggle = $("[data-chat-extras]", root);
         if (pop && !pop.hidden && !pop.contains(e.target) && e.target !== toggle && !toggle?.contains(e.target)) {
-          pop.hidden = true;
-          toggle?.setAttribute("aria-expanded", "false");
+          closeChatExtras(root);
         }
       });
     }
   }
-  $("#poll-button", root).onclick = () => openPollBuilder(id, root);
+  $("#poll-button", root).onclick = () => {
+    closeChatExtras(root);
+    openPollBuilder(id, root);
+  };
   $("#voice-button", root).onclick = () => {
+    closeChatExtras(root);
     if (voiceRec) stopRecording("send");
     else startRecording(id, root);
   };
@@ -5095,6 +5111,15 @@ if (!window.__sfGroupKeysBound) {
     const pop = document.querySelector('[data-chat-pop]:not([hidden])');
     if (pop) {
       pop.hidden = true;
+      return;
+    }
+    const extras = document.querySelector('[data-chat-extras-pop]:not([hidden])');
+    if (extras) {
+      extras.hidden = true;
+      extras
+        .closest(".chat-extras-wrap")
+        ?.querySelector("[data-chat-extras]")
+        ?.setAttribute("aria-expanded", "false");
       return;
     }
     if (mediaViewer) {

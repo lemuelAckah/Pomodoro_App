@@ -444,7 +444,7 @@ button.coins:hover {
   .chat-extras-menu {
     left: auto;
     right: 0;
-    transform: none;
+    margin-left: 0;
     bottom: 44px;
   }
 }
