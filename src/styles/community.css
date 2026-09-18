@@ -730,12 +730,311 @@ html[data-night="1"] .pin-entry-main {
 .rec-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   border-top: 1px solid var(--line);
-  padding: 10px 12px;
+  padding: 9px 12px;
+  animation: rec-bar-in 0.2s ease;
+  background: linear-gradient(180deg, rgba(232, 121, 91, 0.07), transparent 65%);
+}
+@keyframes rec-bar-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.rec-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: rgba(232, 121, 91, 0.12);
+  color: var(--coral);
+  flex: none;
+}
+.rec-btn .sicon {
+  width: 16px;
+  height: 16px;
+}
+.rec-btn:hover {
+  background: rgba(232, 121, 91, 0.22);
+  color: var(--coral);
+}
+/* Pulsing live dot — the WhatsApp-style "recording now" signal. */
+.rec-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #e0452f;
+  flex: none;
+  animation: rec-pulse 1.4s ease-out infinite;
+}
+@keyframes rec-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(224, 69, 47, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 9px rgba(224, 69, 47, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(224, 69, 47, 0);
+  }
+}
+/* Live waveform — staggered bars bouncing like the speaker's voice. */
+.rec-wave {
+  display: flex;
+  align-items: center;
+  gap: 2.5px;
+  height: 26px;
+  flex: 0 1 auto;
+  width: 90px;
+  min-width: 40px;
+  overflow: hidden;
+}
+.rec-wave i {
+  width: 3px;
+  border-radius: 2px;
+  background: var(--sage);
+  opacity: 0.85;
+  animation: rec-bar-bounce 1s ease-in-out infinite;
+}
+.rec-wave i:nth-child(5n + 1) {
+  animation-delay: 0s;
+  height: 40%;
+}
+.rec-wave i:nth-child(5n + 2) {
+  animation-delay: 0.15s;
+  height: 70%;
+}
+.rec-wave i:nth-child(5n + 3) {
+  animation-delay: 0.3s;
+  height: 30%;
+}
+.rec-wave i:nth-child(5n + 4) {
+  animation-delay: 0.45s;
+  height: 85%;
+}
+.rec-wave i:nth-child(5n + 5) {
+  animation-delay: 0.6s;
+  height: 55%;
+}
+@keyframes rec-bar-bounce {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+.rec-time {
+  font-family: "Space Mono", monospace;
   font-size: 13px;
   font-weight: 700;
   color: #c0392b;
+  flex: none;
+  min-width: 44px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.rec-hint {
+  font-size: 11.5px;
+  color: var(--muted);
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rec-send {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  font-size: 12.5px;
+}
+.rec-send .sicon {
+  width: 14px;
+  height: 14px;
+}
+html[data-night="1"] .rec-time {
+  color: #ff8a75;
+}
+@media (max-width: 560px) {
+  .rec-hint {
+    display: none;
+  }
+  .rec-wave {
+    flex: 1;
+    width: auto;
+  }
+}
+
+/* ---------- Poll builder modal ---------- */
+.poll-modal {
+  max-width: 460px;
+}
+.poll-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.poll-modal-head h2 {
+  margin: 2px 0 0;
+}
+.poll-modal-close {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  color: var(--muted);
+  background: transparent;
+  flex: none;
+}
+.poll-modal-close .sicon {
+  width: 15px;
+  height: 15px;
+}
+.poll-modal-close:hover {
+  background: #e7ede6;
+  color: var(--ink);
+  transform: none;
+}
+html[data-night="1"] .poll-modal-close:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--ink);
+}
+.poll-modal .field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.field-label-inline {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-family: "Space Mono", monospace;
+}
+.poll-opts-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 14px 0 8px;
+}
+.poll-count {
+  font-size: 11px;
+}
+.poll-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 264px;
+  overflow-y: auto;
+  padding: 2px;
+  margin: -2px;
+}
+.poll-opt-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  animation: poll-row-in 0.18s ease;
+}
+@keyframes poll-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.poll-opt-num {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: rgba(71, 118, 90, 0.12);
+  color: var(--sage);
+  font-size: 11px;
+  font-weight: 800;
+  font-family: "Space Mono", monospace;
+}
+html[data-night="1"] .poll-opt-num {
+  background: rgba(184, 215, 124, 0.12);
+  color: var(--lime);
+}
+.poll-opt-row .input {
+  flex: 1;
+  min-width: 0;
+}
+.poll-opt-del {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  flex: none;
+}
+.poll-opt-del .sicon {
+  width: 13px;
+  height: 13px;
+}
+.poll-opt-del:hover {
+  background: rgba(232, 121, 91, 0.12);
+  color: var(--coral);
+  transform: none;
+}
+.poll-opt-del:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.poll-opt-del:disabled:hover {
+  background: transparent;
+  color: var(--muted);
+}
+.poll-add {
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1.5px dashed var(--line);
+  color: var(--sage);
+}
+.poll-add .sicon {
+  width: 14px;
+  height: 14px;
+}
+.poll-add:hover {
+  border-color: var(--sage);
+  background: rgba(71, 118, 90, 0.08);
+  transform: none;
+}
+.poll-add:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+html[data-night="1"] .poll-add {
+  color: var(--lime);
+}
+html[data-night="1"] .poll-add:hover {
+  border-color: var(--lime);
+  background: rgba(184, 215, 124, 0.08);
 }
 
 .presence {

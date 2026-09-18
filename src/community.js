@@ -4076,7 +4076,7 @@ function chatMarkup(id) {
       ? `<div class="reply-strip"><div><strong>Replying to ${esc(chatReply.author)}</strong><span>${escSnippet(chatReply.text, 80)}</span></div><button type="button" data-reply-cancel title="Cancel reply">×</button></div>`
       : "";
   const rec = voiceRec
-    ? `<div class="rec-bar"><span data-rec-time>● 0s / 60s</span><button type="button" class="ghost" data-rec-cancel>Cancel</button><button type="button" class="primary" data-rec-send>Send</button></div>`
+    ? `<div class="rec-bar" role="status" aria-label="Recording voice note"><button type="button" class="icon-btn rec-btn" data-rec-cancel title="Discard recording" aria-label="Discard recording">${sicon("trash")}</button><span class="rec-dot" aria-hidden="true"></span><span class="rec-wave" data-rec-wave aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="rec-time" data-rec-time>00:00</span><span class="rec-hint">Recording… tap Send when done</span><button type="button" class="primary rec-send" data-rec-send>${sicon("check")} <span>Send</span></button></div>`
     : "";
   const isFriendChat = (state.friends || []).some((f) => f.id === id) || cloudFriends.some((f) => f.id === id);
   const isGroup = allGroups().some((g) => g.id === id);
@@ -5303,11 +5303,51 @@ function bindGroupSearch(body, id) {
 }
 
 function openPollBuilder(id, root) {
+  const MAX_OPTIONS = 10;
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
-  modal.innerHTML = `<div class="modal"><div class="eyebrow">New poll</div><h2>Ask the group</h2><label class="field-label">Question<input class="input" id="poll-q" placeholder="e.g. Sprint at 6pm?"></label>${[1, 2, 3, 4].map((n) => `<label class="field-label">Option ${n}${n > 2 ? " (optional)" : ""}<input class="input" data-poll-opt placeholder="Option ${n}"></label>`).join("")}<div class="modal-actions"><button type="button" class="ghost" data-poll-cancel>Cancel</button><button type="button" class="primary" data-poll-create>Create poll</button></div></div>`;
+  modal.innerHTML = `<div class="modal poll-modal"><div class="poll-modal-head"><div><div class="eyebrow">New poll</div><h2>Ask the group</h2></div><button type="button" class="icon-btn poll-modal-close" data-poll-cancel title="Close" aria-label="Close poll builder">${sicon("x")}</button></div><label class="field-label">Question<input class="input" id="poll-q" placeholder="e.g. Sprint at 6pm?" maxlength="140"></label><div class="poll-opts-head"><span class="field-label-inline">Options</span><span class="poll-count muted" data-poll-count></span></div><div class="poll-opts" data-poll-opts></div><button type="button" class="ghost poll-add" data-poll-add>${sicon("plus")} <span>Add option</span></button><div class="modal-actions"><button type="button" class="ghost" data-poll-cancel2>Cancel</button><button type="button" class="primary" data-poll-create>Create poll</button></div></div>`;
   $("#modal-root").append(modal);
-  $("[data-poll-cancel]", modal).onclick = () => modal.remove();
+  const list = $("[data-poll-opts]", modal);
+  const countEl = $("[data-poll-count]", modal);
+  const addBtn = $("[data-poll-add]", modal);
+  const optionRow = (n) => `<div class="poll-opt-row" data-poll-row><span class="poll-opt-num">${n}</span><input class="input" data-poll-opt placeholder="Option ${n}" maxlength="80"><button type="button" class="icon-btn poll-opt-del" data-poll-row-del title="Remove option" aria-label="Remove option ${n}">${sicon("x")}</button></div>`;
+  const rows = () => [...list.querySelectorAll("[data-poll-row]")];
+  const sync = () => {
+    const n = rows().length;
+    rows().forEach((row, i) => {
+      const num = row.querySelector(".poll-opt-num");
+      if (num) num.textContent = String(i + 1);
+      const del = row.querySelector("[data-poll-row-del]");
+      if (del) {
+        del.disabled = n <= 2;
+        del.title = n <= 2 ? "A poll needs at least two options" : "Remove option";
+      }
+    });
+    if (countEl) countEl.textContent = `${n} of ${MAX_OPTIONS}`;
+    addBtn.disabled = n >= MAX_OPTIONS;
+    addBtn.style.display = n >= MAX_OPTIONS ? "none" : "";
+  };
+  const addRow = (focus = true) => {
+    if (rows().length >= MAX_OPTIONS) return;
+    list.insertAdjacentHTML("beforeend", optionRow(rows().length + 1));
+    sync();
+    if (focus) list.querySelector("[data-poll-row]:last-child [data-poll-opt]")?.focus();
+  };
+  list.addEventListener("click", (e) => {
+    const del = e.target.closest?.("[data-poll-row-del]");
+    if (!del || del.disabled) return;
+    del.closest("[data-poll-row]").remove();
+    sync();
+  });
+  addBtn.onclick = () => addRow();
+  addRow();
+  addRow();
+  sync();
+  $("#poll-q", modal).focus();
+  const close = () => modal.remove();
+  $("[data-poll-cancel]", modal).onclick = close;
+  $("[data-poll-cancel2]", modal).onclick = close;
   $("[data-poll-create]", modal).onclick = () => {
     if (isBlockedKey(id)) {
       modal.remove();
@@ -5315,8 +5355,8 @@ function openPollBuilder(id, root) {
       return notify("You have blocked this conversation");
     }
     const question = $("#poll-q", modal).value.trim();
-    const options = $$("[data-poll-opt]", modal)
-      .map((input) => input.value.trim())
+    const options = rows()
+      .map((row) => row.querySelector("[data-poll-opt]").value.trim())
       .filter(Boolean)
       .map((text) => ({ text }));
     if (!question) return notify("Give your poll a question");
@@ -5367,17 +5407,28 @@ function startRecording(id, root) {
           if (blob.size) saveVoice(id, blob, startedAt, root);
         }
       };
-      rec.start();
+      // Timeslice: data arrives every second, so the size hint stays live.
+      rec.start(1000);
       voiceRec = {
         rec,
         chunks,
         startedAt: Date.now(),
         timer: setInterval(() => {
+          if (!voiceRec) return;
           const s = Math.floor((Date.now() - voiceRec.startedAt) / 1000);
           const label = $("[data-rec-time]");
-          if (label) label.textContent = `● ${s}s / 60s`;
-          if (s >= 60) stopRecording("send");
-        }, 500),
+          // Live clock, minutes:seconds — recordings can run as long as the
+          // user wants; the only hard limit is the 5 MB message size,
+          // surfaced in the hint so it is never a surprise.
+          if (label) label.textContent = `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+          const hint = $(".rec-hint");
+          if (hint) {
+            const size = chunks.reduce((a, c) => a + (c.size || 0), 0) / (1024 * 1024);
+            hint.textContent = size >= 4
+              ? `Storage almost full (${size.toFixed(1)} / 5 MB) — send soon`
+              : "Recording… tap Send when done";
+          }
+        }, 250),
       };
       renderMessages(root);
     })
