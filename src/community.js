@@ -2097,12 +2097,14 @@ function renderStatus(body) {
   bindStatusHome(body);
 }
 function bindStatusHome(body) {
-  $$("[data-status-mine]", body).forEach((b) => (b.onclick = () => {
-    const items = cloudStories.filter((s) => s.mine)
-      .sort((a, b2) => new Date(a.createdAt) - new Date(b2.createdAt));
-    if (!items.length) return;
-    openStoryViewer(items, Math.max(0, items.findIndex((s) => !isSeen("cstory:" + s.id))));
-  }));
+  $$("[data-status-mine]", body).forEach((b) => {
+    b.onclick = () => {
+      const items = cloudStories.filter((s) => s.mine)
+        .sort((a, b2) => new Date(a.createdAt) - new Date(b2.createdAt));
+      if (!items.length) return;
+      openStoryViewer(items, Math.max(0, items.findIndex((s) => !isSeen("cstory:" + s.id))));
+    };
+  });
   $$("[data-story-view]", body).forEach(
     (b2) => (b2.onclick = () => openStatus("story:" + b2.dataset.storyView)),
   );
@@ -2142,9 +2144,53 @@ function bindStatusHome(body) {
 function closeStoryViewer() {
   const ov = $("#story-viewer");
   if (!ov) return;
+  closeStoryMenu();
   if (ov.__svKey) document.removeEventListener("keydown", ov.__svKey);
   if (ov.__svClear) ov.__svClear();
   ov.remove();
+}
+// Viewer ⋮ options menu (the ONLY status-deletion entry point). Anchored to
+// the top-bar button, themed by tokens, clamped to the viewport. Ownership
+// is a UX gate only — deleteStory/storage RLS stays authoritative.
+let svMoreMenu = null;
+function closeStoryMenu() {
+  if (svMoreMenu) svMoreMenu.remove();
+  svMoreMenu = null;
+  document.removeEventListener("pointerdown", svMoreOutside, true);
+}
+function svMoreOutside(e) {
+  if (svMoreMenu && !svMoreMenu.contains(e.target)) closeStoryMenu();
+}
+function openStoryMenu(anchorBtn, onDelete) {
+  closeStoryMenu();
+  const menu = document.createElement("div");
+  menu.className = "sv-ctxmenu";
+  menu.setAttribute("role", "menu");
+  menu.setAttribute("aria-label", "Status options");
+  menu.innerHTML = `<button type="button" role="menuitem" data-m-del>${sicon("trash")}<span>Delete</span></button>`;
+  document.body.append(menu);
+  // Anchor under the ⋮ button, clamped inside the viewport.
+  const b = anchorBtn.getBoundingClientRect();
+  const r = menu.getBoundingClientRect();
+  const m = 8;
+  menu.style.left = Math.max(m, Math.min(b.right - r.width, window.innerWidth - r.width - m)) + "px";
+  menu.style.top = Math.max(m, Math.min(b.bottom + 6, window.innerHeight - r.height - m)) + "px";
+  svMoreMenu = menu;
+  document.addEventListener("pointerdown", svMoreOutside, true);
+  menu.querySelector("[data-m-del]").onclick = () => {
+    closeStoryMenu();
+    onDelete();
+  };
+  menu.querySelector("[data-m-del]").focus();
+  return menu;
+}
+// Deletes a cloud status row + its media file (best-effort), then drops it
+// from the local cache. RLS owns the permission check, not this helper.
+async function deleteCloudStatus(item) {
+  if (!item) return;
+  await deleteStory(item.id).catch(() => {});
+  if (item.mediaPath) await deleteStoryMedia(item.mediaPath).catch(() => {});
+  cloudStories = cloudStories.filter((x) => x.id !== item.id);
 }
 function openStoryViewer(items, startIdx) {
   if (!Array.isArray(items) || !items.length) return;
@@ -2160,7 +2206,7 @@ function openStoryViewer(items, startIdx) {
   };
   const ov = document.createElement("div");
   ov.id = "story-viewer";
-  ov.innerHTML = `<div class="sv-frame" role="dialog" aria-label="Status viewer"><div class="sv-progress" data-sv-progress></div><div class="sv-top"><span class="status-avatar sm" data-sv-avatar></span><span class="sv-who"><strong data-sv-name></strong><small data-sv-time></small></span><button type="button" class="sv-close" data-sv-close aria-label="Close status viewer">×</button></div><div class="sv-stage" data-sv-stage></div><button type="button" class="sv-tap left" data-sv-prev aria-label="Previous status">‹</button><button type="button" class="sv-tap right" data-sv-next aria-label="Next status">›</button><div class="sv-foot"><span class="muted" data-sv-views></span><span class="sv-foot-actions"><button type="button" class="delete" data-sv-del hidden>Delete</button></span></div><div class="sv-confirm" data-sv-confirm hidden><span>Delete this status? It disappears for everyone.</span><span class="sv-confirm-actions"><button type="button" class="ghost" data-sv-del-cancel>Keep it</button><button type="button" class="delete" data-sv-del-yes>Delete</button></span></div></div>`;
+  ov.innerHTML = `<div class="sv-frame" role="dialog" aria-label="Status viewer"><div class="sv-progress" data-sv-progress></div><div class="sv-top"><span class="status-avatar sm" data-sv-avatar></span><span class="sv-who"><strong data-sv-name></strong><small data-sv-time></small></span><button type="button" class="sv-more" data-sv-more aria-label="Status options" title="Status options" hidden>⋮</button><button type="button" class="sv-close" data-sv-close aria-label="Close status viewer">×</button></div><div class="sv-stage" data-sv-stage></div><button type="button" class="sv-tap left" data-sv-prev aria-label="Previous status">‹</button><button type="button" class="sv-tap right" data-sv-next aria-label="Next status">›</button><div class="sv-foot"><span class="muted" data-sv-views></span></div></div>`;
   document.body.append(ov);
   const bar = () => ov.querySelector("[data-sv-progress]");
   const stage = () => ov.querySelector("[data-sv-stage]");
@@ -2225,6 +2271,7 @@ function openStoryViewer(items, startIdx) {
   function show(i) {
     // Single source of truth for the index: clamped, never out of range.
     st.idx = Math.min(Math.max(i, 0), st.items.length - 1);
+    closeStoryMenu();
     const item = st.items[st.idx];
     if (!item) {
       closeStoryViewer();
@@ -2237,8 +2284,6 @@ function openStoryViewer(items, startIdx) {
     ov.querySelector("[data-sv-time]").textContent = `${relTime(item.createdAt)} · ${item.visibility}`;
     const views = ov.querySelector("[data-sv-views]");
     views.textContent = "";
-    const del = ov.querySelector("[data-sv-del]");
-    del.hidden = !item.mine;
     if (item.mine && signedIn()) {
       listStoryViews(item.id).then(({ data } = {}) => {
         if (st.items[st.idx]?.id !== item.id) return;
@@ -2279,7 +2324,7 @@ function openStoryViewer(items, startIdx) {
     const nextBtns = [ov.querySelector("[data-sv-next]")];
     prevBtns.forEach((b) => { if (b) b.disabled = st.idx === 0; });
     nextBtns.forEach((b) => { if (b) b.disabled = st.idx === st.items.length - 1; });
-    ov.querySelector("[data-sv-confirm]").hidden = true;
+    ov.querySelector("[data-sv-more]").hidden = !item.mine;
     markSeen(item);
   }
   function advance(d, auto) {
@@ -2303,36 +2348,34 @@ function openStoryViewer(items, startIdx) {
   };
   ov.querySelector("[data-sv-prev]").onclick = () => advance(-1, false);
   ov.querySelector("[data-sv-next]").onclick = () => advance(1, false);
-  // Delete confirmation lives INSIDE the viewer (an app-wide modal would
-  // render underneath this overlay), pausing playback until resolved.
-  const confirmRow = ov.querySelector("[data-sv-confirm]");
-  ov.querySelector("[data-sv-del]").onclick = () => {
+  // ⋮ options menu (the ONLY status-deletion entry point): visible only on
+  // your own statuses, works identically on desktop and touch. Deletion is
+  // immediate — no confirmation step.
+  const moreBtn = ov.querySelector("[data-sv-more]");
+  moreBtn.onclick = (e) => {
+    e.stopPropagation();
     const item = st.items[st.idx];
     if (!item?.mine) return;
-    pause();
-    confirmRow.hidden = false;
-    ov.querySelector("[data-sv-del-cancel]")?.focus();
-  };
-  ov.querySelector("[data-sv-del-cancel]").onclick = () => {
-    confirmRow.hidden = true;
-    resume();
-  };
-  ov.querySelector("[data-sv-del-yes]").onclick = async () => {
-    const item = st.items[st.idx];
-    if (!item?.mine) return;
-    confirmRow.hidden = true;
-    await deleteStory(item.id).catch(() => {});
-    if (item.mediaPath) await deleteStoryMedia(item.mediaPath).catch(() => {});
-    cloudStories = cloudStories.filter((x) => x.id !== item.id);
-    st.items = st.items.filter((x) => x.id !== item.id);
-    if (!st.items.length) {
-      closeStoryViewer();
-      renderCommunity();
+    openStoryMenu(moreBtn, async () => {
+      const cur = st.items[st.idx];
+      if (!cur?.mine || cur.id !== item.id) {
+        // Index moved on (auto-advance) while the menu was open: delete the
+        // item the menu was opened for, then resync to a valid index.
+        await deleteCloudStatus(item);
+        st.items = st.items.filter((x) => x.id !== item.id);
+      } else {
+        await deleteCloudStatus(cur);
+        st.items = st.items.filter((x) => x.id !== cur.id);
+      }
+      if (!st.items.length) {
+        closeStoryViewer();
+        renderCommunity();
+        notify("Status deleted");
+        return;
+      }
+      show(Math.min(st.idx, st.items.length - 1));
       notify("Status deleted");
-      return;
-    }
-    show(Math.min(st.idx, st.items.length - 1));
-    notify("Status deleted");
+    });
   };
   stage().addEventListener("pointerdown", pause);
   stage().addEventListener("pointerup", resume);
@@ -2355,11 +2398,9 @@ function openStoryViewer(items, startIdx) {
       advance(-1, false);
     } else if (e.key === "Escape") {
       e.preventDefault();
-      if (!ov.querySelector("[data-sv-confirm]").hidden) {
-        ov.querySelector("[data-sv-confirm]").hidden = true;
-        resume();
-        const cur = ov.querySelector("[data-sv-del]");
-        if (cur && !cur.hidden) cur.focus();
+      // An open ⋮ menu closes first (it is a separate layer above the viewer).
+      if (svMoreMenu) {
+        closeStoryMenu();
         return;
       }
       closeStoryViewer();

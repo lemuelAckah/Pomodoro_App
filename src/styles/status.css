@@ -284,6 +284,9 @@
   text-align: left;
   color: inherit;
   min-height: 56px;
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 .status-avatar {
   width: 48px;
@@ -512,47 +515,58 @@
   color: rgba(242, 245, 239, 0.7);
   font-size: 12px;
 }
-.sv-foot-actions {
-  display: flex;
-  gap: 8px;
-}
-.sv-foot-actions .ghost {
+/* Viewer ⋮ button beside the close button (owner statuses only). */
+.sv-more {
+  background: rgba(255, 255, 255, 0.12);
+  border: 0;
   color: #fff;
-  border-color: rgba(255, 255, 255, 0.3);
-  min-height: 44px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  flex-shrink: 0;
 }
-.sv-foot-actions .delete {
-  min-height: 44px;
-}
-/* Inline delete confirmation lives inside the viewer frame so it can never
-   render underneath the overlay (app modals sit at a lower z-index). */
-.sv-confirm {
-  margin: 0 14px calc(10px + env(safe-area-inset-bottom));
-  padding: 12px 14px;
-  border-radius: 14px;
-  background: rgba(20, 26, 22, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  font-size: 13px;
-  color: #f2f5ef;
-}
-.sv-confirm[hidden] {
+.sv-more[hidden] {
   display: none;
 }
-.sv-confirm-actions {
+
+/* Viewer ⋮ dropdown: themed, viewport-clamped, above the overlay. */
+.sv-ctxmenu {
+  position: fixed;
+  z-index: 450;
+  min-width: 170px;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 6px;
+}
+.sv-ctxmenu button {
   display: flex;
+  align-items: center;
   gap: 8px;
-  justify-content: flex-end;
-}
-.sv-confirm-actions .ghost {
-  color: #fff;
-  border-color: rgba(255, 255, 255, 0.3);
+  width: 100%;
+  background: none;
+  border: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #c0392b;
+  cursor: pointer;
   min-height: 44px;
 }
-.sv-confirm-actions .delete {
-  min-height: 44px;
+.sv-ctxmenu button:hover,
+.sv-ctxmenu button:focus-visible {
+  background: color-mix(in srgb, #c0392b 10%, transparent);
+  outline: none;
+}
+.sv-ctxmenu .sicon {
+  width: 18px;
+  height: 18px;
 }
 
 @media (max-width: 640px) {

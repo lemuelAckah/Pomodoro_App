@@ -43,11 +43,9 @@ create trigger groups_visibility_owner_guard
   before update on public.groups
   for each row execute procedure public.enforce_group_visibility_owner();
 
--- Helpers used by the policies below. Defined after community_blocks because
--- CREATE FUNCTION and CREATE POLICY both validate table references at
--- creation time.
--- community_blocks must exist before ANY function, policy, RPC, or query
--- references it. This is the single authoritative definition.
+-- Helpers used by the policies below. community_blocks is created FIRST
+-- because CREATE FUNCTION and CREATE POLICY both validate table references
+-- at creation time — this is the single authoritative definition.
 create table if not exists public.community_blocks (
   blocker_id uuid not null references auth.users(id) on delete cascade,
   blocked_id uuid not null references auth.users(id) on delete cascade,
@@ -103,9 +101,10 @@ create index if not exists messages_sender_created_idx
 
 -- Admins (not just owners) may update group rows, but never delete them and
 -- never flip visibility (see the trigger above).
-drop policy if exists groups_owner_write on public.groups;
+drop policy if exists groups_owner_all on public.groups;
 create policy groups_owner_all on public.groups
-  for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+  for all using (auth.uid() = owner_id)
+  with check (auth.uid() = owner_id);
 drop policy if exists groups_admin_update on public.groups;
 create policy groups_admin_update on public.groups
   for update using (
@@ -137,6 +136,7 @@ create policy memberships_admin_remove on public.group_memberships
 -- joining private groups directly. (Admin adds go through the policy above
 -- or the sf_group_* RPCs; ownership only via RPC.)
 drop policy if exists memberships_self_write on public.group_memberships;
+drop policy if exists memberships_self_insert on public.group_memberships;
 create policy memberships_self_insert on public.group_memberships
   for insert with check (
     user_id = auth.uid() and (
@@ -306,9 +306,7 @@ create policy story_views_self_read on public.story_views
 -- 7. storage: group avatars + story/group media reads
 -- ---------------------------------------------------------------------------
 insert into storage.buckets (id, name, public) values
-  ('studyflow-groups', 'studyflow-groups', false),
-  ('studyflow-stories', 'studyflow-stories', false),
-  ('studyflow-files', 'studyflow-files', false)
+  ('studyflow-groups', 'studyflow-groups', false)
 on conflict (id) do nothing;
 
 -- Group avatar/media paths: <group_id>/... — owner/admin write, members read.
