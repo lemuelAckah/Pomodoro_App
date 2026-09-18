@@ -1,26 +1,43 @@
 /* books-reader.js — text/PDF reader: sections, progress, search, highlights, notes, bookmarks, settings */
 import {
-  state, $, $$, uid, esc, sicon, persist, notify, fitTextarea, get, save,
+  state, $, $$, uid, esc, sicon, persist, toast, fitTextarea, get, save,
   isPersistHalted,
 } from "./core.js";
 import {
-  getBookBlob, getBookText, bookProgressOf,
-  toggleBookFavorite, isBookFav, renderLibrary, BOOK_COLORS,
+  getBookBlob, getBookText, bookProgressOf, resizeCover,
+  renderLibrary, BOOK_COLORS,
+  recordBookOpen, recordBookTime, markBookCompleted, isBookCompleted,
+  bookFingerprintOf,
 } from "./books.js";
 import {
-  backendConfigured, saveBookProgress,
+  backendConfigured, saveBookProgress, cloudUpsertBooks,
   listBookBookmarks, addBookBookmark, removeBookBookmark,
   listBookHighlights, addBookHighlight, updateBookHighlight, removeBookHighlight,
+  listBookNotes, addBookNote, updateBookNote, removeBookNote,
 } from "./services/backend.js";
 import { renderCompanionPanel as paintCompanion } from "./books-companion.js";
+import { parseEpub, epubSupported } from "./books-epub.js";
 
 let R = null;
 function readerSettings() {
+  let raw = {};
+  try {
+    raw = JSON.parse(localStorage.getItem("sf-book-settings") || "{}") || {};
+  } catch {
+    /* corrupted settings reset to defaults */
+  }
+  const fonts = ["serif", "sans", "system"];
   return {
     fontSize: 18, lineHeight: 1.7, width: "medium", theme: "auto", align: "left",
-    ...(JSON.parse(localStorage.getItem("sf-book-settings") || "{}")),
+    font: "serif", ...raw,
+    fontSize: Math.min(24, Math.max(14, Number(raw.fontSize) || 18)),
+    lineHeight: Math.min(2.2, Math.max(1.4, Number(raw.lineHeight) || 1.7)),
+    width: ["narrow", "medium", "wide"].includes(raw.width) ? raw.width : "medium",
+    theme: ["auto", "light", "dark", "sepia"].includes(raw.theme) ? raw.theme : "auto",
+    align: raw.align === "justify" ? "justify" : "left",
+    font: fonts.includes(raw.font) ? raw.font : "serif",
+    ruler: raw.ruler === true,
   };
-  if (s.ruler === undefined) s.ruler = false;
 }
 function saveReaderSettings(s) {
   try {
@@ -32,12 +49,166 @@ function saveReaderSettings(s) {
 function localStore(bookId) {
   const all = state.bookLocal || {};
   if (!all[bookId] || typeof all[bookId] !== "object")
-    all[bookId] = { highlights: [], bookmarks: [] };
+    all[bookId] = { highlights: [], bookmarks: [], notes: [] };
   const s = all[bookId];
   if (!Array.isArray(s.highlights)) s.highlights = [];
   if (!Array.isArray(s.bookmarks)) s.bookmarks = [];
+  if (!Array.isArray(s.notes)) s.notes = [];
+  if (typeof s.dirtyAnn !== "boolean") s.dirtyAnn = false;
+  if (!s.deletedAnn || typeof s.deletedAnn !== "object") {
+    s.deletedAnn = { highlights: [], bookmarks: [], notes: [] };
+  }
+  for (const k of ["highlights", "bookmarks", "notes"]) {
+    if (!Array.isArray(s.deletedAnn[k])) s.deletedAnn[k] = [];
+  }
   state.bookLocal = all;
   return s;
+}
+
+// Tombstone a deleted server row so an offline delete still lands later.
+// Local-only ids need no tombstone (they never reached the cloud).
+function queueAnnDelete(kind, id) {
+  if (!R || !UUID_LIKE.test(String(id || ""))) return;
+  try {
+    const store = localStore(R.id);
+    const list = store.deletedAnn[kind] || (store.deletedAnn[kind] = []);
+    if (!list.includes(id)) list.push(id);
+    persist();
+  } catch {
+    /* ignore */
+  }
+}
+
+// Annotations created offline get local ids; this backlog inserts them when
+// the connection returns (remapping to server uuids). Edits to already-synced
+// rows write through immediately at their action sites.
+const UUID_LIKE = /^[0-9a-f]{8}-/i;
+let annFlushT = 0;
+
+function markAnnotationsDirty() {
+  if (!R) return;
+  try {
+    const store = localStore(R.id);
+    store.dirtyAnn = true;
+    persist();
+  } catch {
+    /* ignore */
+  }
+  scheduleAnnotationFlush();
+}
+
+function scheduleAnnotationFlush() {
+  clearTimeout(annFlushT);
+  annFlushT = setTimeout(() => {
+    flushAnnotations().catch(() => {});
+  }, 3000);
+}
+
+async function flushAnnotations(bookId) {
+  const id = bookId || R?.id;
+  if (!id || !backendConfigured || !state.user || navigator.onLine === false) return;
+  const store = localStore(id);
+  if (!store.dirtyAnn) return;
+  // Make sure the parent book row exists first (offline-first books may never
+  // have been mirrored); annotation inserts FK-fail without it.
+  try {
+    const book = (state.books || []).find((b) => b && b.id === id);
+    if (book) await cloudUpsertBooks([book]);
+  } catch {
+    /* row mirror is best-effort here; per-item errors retry later */
+  }
+  const dropTombstone = (kind, tid) => {
+    store.deletedAnn[kind] = (store.deletedAnn[kind] || []).filter((x) => x !== tid);
+  };
+  for (const tid of [...(store.deletedAnn.highlights || [])]) {
+    try {
+      await removeBookHighlight(tid);
+      dropTombstone("highlights", tid);
+    } catch {
+      /* retry later */
+    }
+  }
+  for (const tid of [...(store.deletedAnn.bookmarks || [])]) {
+    try {
+      await removeBookBookmark(tid);
+      dropTombstone("bookmarks", tid);
+    } catch {
+      /* retry later */
+    }
+  }
+  for (const tid of [...(store.deletedAnn.notes || [])]) {
+    try {
+      await removeBookNote(tid);
+      dropTombstone("notes", tid);
+    } catch {
+      /* retry later */
+    }
+  }
+  let remapped = false;
+  for (const h of store.highlights) {
+    if (!h || UUID_LIKE.test(String(h.id || ""))) continue;
+    try {
+      const { data, error } = await addBookHighlight(id, h);
+      if (!error && data && data.id) {
+        h.id = data.id;
+        remapped = true;
+      }
+    } catch {
+      /* retry later */
+    }
+  }
+  for (const b of store.bookmarks) {
+    if (!b || UUID_LIKE.test(String(b.id || ""))) continue;
+    try {
+      const { data, error } = await addBookBookmark(id, b.label || "", `sec=${b.sec || 0} frac=${Number(b.frac || 0).toFixed(3)}`);
+      if (!error && data && data.id) {
+        b.id = data.id;
+        remapped = true;
+      }
+    } catch {
+      /* retry later */
+    }
+  }
+  for (const n of store.notes || []) {
+    if (!n || !n.body || UUID_LIKE.test(String(n.id || ""))) continue;
+    try {
+      const { data, error } = await addBookNote(id, { kind: n.kind, label: n.label, locator: n.locator, body: n.body });
+      if (!error && data && data.id) {
+        n.id = data.id;
+        remapped = true;
+      }
+    } catch {
+      /* retry later */
+    }
+  }
+  const stillLocal =
+    store.highlights.some((h) => h && !UUID_LIKE.test(String(h.id || ""))) ||
+    store.bookmarks.some((b) => b && !UUID_LIKE.test(String(b.id || ""))) ||
+    (store.notes || []).some((n) => n && n.body && !UUID_LIKE.test(String(n.id || ""))) ||
+    (store.deletedAnn.highlights || []).length > 0 ||
+    (store.deletedAnn.bookmarks || []).length > 0 ||
+    (store.deletedAnn.notes || []).length > 0;
+  store.dirtyAnn = stillLocal;
+  persist();
+  if (remapped && R && R.id === id) {
+    paintAllParagraphs();
+    renderNotesPanelIfOpen();
+  }
+  if (stillLocal) scheduleAnnotationFlush();
+}
+
+if (!window.__sfReaderAnnFlush) {
+  window.__sfReaderAnnFlush = true;
+  window.addEventListener("online", () => {
+    try {
+      const all = state.bookLocal || {};
+      Object.keys(all).forEach((bid) => {
+        if (all[bid]?.dirtyAnn) flushAnnotations(bid).catch(() => {});
+      });
+    } catch {
+      /* ignore */
+    }
+  });
 }
 function unionById(local, remote) {
   const map = new Map();
@@ -79,6 +250,46 @@ function parseBookText(text) {
   }
   return out.length ? out : [{ title: null, paras: ["(Empty book)"] }];
 }
+// --- Section windowing math (pure; exported for tests) -------------------------
+// Only a small window of sections lives in the DOM at once (large books must
+// never render fully). Progress is a global fraction over per-section text
+// weights, so saved fractions, bookmarks and highlights stay valid.
+export function sectionWeights(sections) {
+  const weights = (sections || []).map((s) =>
+    Math.max(1, (s.paras || []).reduce((a, p) => a + (typeof p === "string" ? p.length : 0), 0)));
+  const total = weights.reduce((a, w) => a + w, 0);
+  return { weights, total };
+}
+
+export function fractionToSection(sections, frac) {
+  const { weights, total } = sectionWeights(sections);
+  const f = Math.min(0.9999, Math.max(0, Number(frac) || 0));
+  if (!total) return { sec: 0, frac: 0 };
+  let acc = 0;
+  for (let i = 0; i < weights.length; i++) {
+    const w = weights[i] / total;
+    if (f < acc + w || i === weights.length - 1) {
+      return { sec: i, frac: Math.min(1, Math.max(0, (f - acc) / w)) };
+    }
+    acc += w;
+  }
+  return { sec: 0, frac: 0 };
+}
+
+export function globalFraction(sections, secIdx, intraFrac) {
+  const { weights, total } = sectionWeights(sections);
+  if (!total || !weights.length) return 0;
+  const i = Math.max(0, Math.min(secIdx, weights.length - 1));
+  let acc = 0;
+  for (let k = 0; k < i; k++) acc += weights[k];
+  const f = Math.min(1, Math.max(0, Number(intraFrac) || 0));
+  return Math.min(1, Math.max(0, (acc + f * weights[i]) / total));
+}
+
+export function sectionPlainText(sec) {
+  return (sec.paras || []).filter((p) => typeof p === "string").join(" ");
+}
+
 function bookKind(b) {
   const nm = `${b.fileName || ""} ${b.fileType || ""}`.toLowerCase();
   if (nm.includes("pdf")) return "pdf";
@@ -86,41 +297,164 @@ function bookKind(b) {
   return "text";
 }
 
-export async function openReader(id) {
+function closeReaderState() {
+  if (!R) return;
+  noteReadingTime();
+  try {
+    if (R.pdfUrl) URL.revokeObjectURL(R.pdfUrl);
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (R.epubHandle) R.epubHandle.release();
+  } catch {
+    /* ignore */
+  }
+  R = null;
+}
+
+function noteReadingTime() {
+  if (!R || !R.t0) return;
+  const secs = Math.max(0, Math.min(12 * 3600, Math.round((Date.now() - R.t0) / 1000)));
+  R.t0 = Date.now();
+  if (secs > 0) recordBookTime(R.id, secs, R.pdfTurns || 0);
+  R.pdfTurns = 0;
+}
+
+export async function openReader(id, opts = {}) {
   const { findBook } = await import("./books.js");
+  closeReaderState();
   const book = findBook(id);
   if (!book) {
-    notify("Book unavailable");
+    toast("Book unavailable");
     state.bookView = { name: "home" };
     persist();
     renderLibrary();
     return;
   }
   const kind = bookKind(book);
-  if (kind === "epub") {
-    state.bookView = { name: "details", id };
-    persist();
-    const { downloadBook } = await import("./books.js");
-    notify("EPUB preview is not supported in this version — use Download to read it");
+  if (kind !== "text" && kind !== "pdf" && kind !== "epub") {
+    toast("This book format is not currently supported.");
     return;
   }
   R = {
     id: book.id, book, kind, sections: [], panel: null,
     settings: readerSettings(), search: { q: "", hits: [], idx: -1 },
-    saveT: 0, cloudT: 0, scrollT: 0,
+    saveT: 0, cloudT: 0, scrollT: 0, win: 0,
+    pdf: null, epubHandle: null, imgMaps: {}, pdfUrl: null,
+    t0: Date.now(), pdfTurns: 0, fromStart: opts.fromStart === true,
   };
-  if (kind === "text") {
-    const text = await getBookText(book);
-    if (!text) {
-      notify("No readable text found in this book");
-      return;
+  try {
+    if (kind === "text") {
+      const text = await getBookText(book);
+      if (!text) {
+        toast("No readable text found in this book");
+        R = null;
+        return;
+      }
+      R.sections = parseBookText(text);
+      if (!book.wordCount) {
+        const words = text.split(/\s+/).filter(Boolean).length;
+        book.wordCount = words;
+        book.updatedAt = Date.now();
+        persist();
+      }
+    } else if (kind === "epub") {
+      if (!epubSupported()) {
+        toast("EPUB reading needs a modern browser (this one can't decompress EPUB files)");
+        R = null;
+        return;
+      }
+      const blob = await getBookBlob(book);
+      if (!blob) {
+        toast("Could not load the EPUB file — it may have been removed");
+        R = null;
+        return;
+      }
+      let parsed;
+      try {
+        parsed = await parseEpub(blob);
+      } catch (e) {
+        toast(e?.message || "This EPUB file is corrupted or unsupported");
+        R = null;
+        return;
+      }
+      R.epubHandle = parsed;
+      R.epubChapters = parsed.chapters;
+      R.sections = [];
+      for (const ch of parsed.chapters) {
+        for (const s of ch.sections) R.sections.push({ ...s, chapter: ch.title, chapterId: ch.id });
+      }
+      if (!R.sections.length) {
+        toast("No readable chapters found in this EPUB");
+        R = null;
+        return;
+      }
+      if (parsed.title && (!book.title || book.title === "Untitled")) {
+        book.title = parsed.title.slice(0, 300);
+        book.updatedAt = Date.now();
+      }
+      if (parsed.author && (!book.author || book.author === "Unknown author")) {
+        book.author = parsed.author.slice(0, 200);
+        book.updatedAt = Date.now();
+      }
+      if (!book.wordCount) {
+        book.wordCount = R.sections.reduce((a, s) => a + sectionPlainText(s).split(/\s+/).filter(Boolean).length, 0);
+        book.updatedAt = Date.now();
+      }
+      if (!book.coverData && parsed.coverBlob) {
+        try {
+          book.coverData = await resizeCover(new File([parsed.coverBlob], "cover", { type: parsed.coverBlob.type || "image/jpeg" })).catch(() => "");
+          book.updatedAt = Date.now();
+        } catch {
+          /* cover stays monogram */
+        }
+      }
+      persist();
+    } else {
+      // PDF: browser embed renders pages; the reader tracks a manual page
+      // counter (estimated total) for progress, resume and stats.
+      const blob = await getBookBlob(book);
+      if (!blob) {
+        toast("Could not load the PDF file — it may have been removed");
+        R = null;
+        return;
+      }
+      R.pdfBlob = blob;
+      const total = Number(book.pageCount) || null;
+      const savedPage = pdfSavedPage(book.id);
+      R.pdf = { page: 1, pages: total, turns: 0 };
+      if (Number.isFinite(savedPage) && savedPage >= 1) R.pdf.page = Math.round(savedPage);
     }
-    R.sections = parseBookText(text);
+    // Backfill the duplicate fingerprint once audio/file bytes are at hand.
+    if (!book.fingerprint) {
+      try {
+        const blob = kind === "pdf" && R.pdfBlob ? R.pdfBlob : await getBookBlob(book);
+        if (blob) {
+          const fp = await bookFingerprintOf({ name: book.fileName, size: blob.size, type: blob.type, slice: blob.slice.bind(blob) });
+          if (fp) {
+            book.fingerprint = fp;
+            book.updatedAt = Date.now();
+            persist();
+          }
+        }
+      } catch {
+        /* best-effort */
+      }
+    }
+  } catch (e) {
+    toast(e?.message || "Unable to open this book.");
+    R = null;
+    return;
   }
   // load annotations: backend wins when signed in, union with local (local intent wins ties)
   if (backendConfigured && state.user) {
     try {
-      const [h, bkm] = await Promise.all([listBookHighlights(book.id), listBookBookmarks(book.id)]);
+      const [h, bkm, nts] = await Promise.all([
+        listBookHighlights(book.id),
+        listBookBookmarks(book.id),
+        listBookNotes(book.id),
+      ]);
       const store = localStore(book.id);
       if (!h.error && Array.isArray(h.data) && h.data.length) {
         const mapped = h.data.map((x) => ({ id: x.id, color: x.color, excerpt: x.excerpt, prefix: x.prefix || "", suffix: x.suffix || "", note: x.note || "", ts: new Date(x.created_at).getTime() || Date.now() }));
@@ -130,16 +464,73 @@ export async function openReader(id) {
         const mapped = bkm.data.map((x) => ({ id: x.id, label: x.label, sec: 0, frac: 0, locator: x.locator || "", ts: new Date(x.created_at).getTime() || Date.now() }));
         store.bookmarks = unionById(store.bookmarks, mapped.map((m) => ({ ...m, ...parseLocator(m.locator) })));
       }
+      if (!nts.error && Array.isArray(nts.data) && nts.data.length) {
+        const mapped = nts.data.map((x) => ({ id: x.id, kind: x.kind || "general", label: x.label || "", locator: x.locator || "", body: x.body || "", ts: new Date(x.created_at).getTime() || Date.now() }));
+        store.notes = unionById(store.notes, mapped);
+      }
       persist();
     } catch {
       /* offline — local store stands */
     }
   }
+  recordBookOpen(book.id);
   state.bookView = { name: "reader", id: book.id };
   persist();
   renderReader();
-  // restore position after paint
-  setTimeout(() => restoreReaderPosition(), 60);
+  maybeResumePrompt();
+}
+
+function pdfSavedPage(bookId) {
+  const pos = bookProgressOf(bookId);
+  const pages = R?.pdf?.pages;
+  if (!pages || pages <= 1 || !(pos > 0)) return null;
+  return Math.min(pages, Math.max(1, Math.round(pos * (pages - 1)) + 1));
+}
+
+// "Continue where you left off?" — asked when real progress exists, never
+// erasing anything on a plain open. Explicit Start-over resets by choice.
+function maybeResumePrompt() {
+  if (!R || R.fromStart) {
+    if (R?.fromStart) resetReaderProgress();
+    setTimeout(() => restoreReaderPosition(), 60);
+    return;
+  }
+  const pos = bookProgressOf(R.id);
+  const hasProgress = R.kind === "pdf"
+    ? (R.pdf.pages ? pos > 0.005 && pos < 0.999 : false) || (R.pdf.page || 1) > 1
+    : pos > 0.02 && pos < 0.98;
+  if (!hasProgress) {
+    setTimeout(() => restoreReaderPosition(), 60);
+    return;
+  }
+  const pct = Math.round(pos * 100);
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.setAttribute("data-rs-modal", "");
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Welcome back</div><h2>Continue where you left off?</h2><p class="muted">${esc(R.book.title)} · ${R.kind === "pdf" ? `page ${R.pdf.page}` : `${pct}% read`}</p><div class="modal-actions"><button type="button" class="ghost" data-rs-start>Start from beginning</button><button type="button" class="primary" data-rs-continue>Continue</button></div></div>`;
+  const host = $("#modal-root") || document.body;
+  host.append(modal);
+  const done = (reset) => {
+    try { modal.remove(); } catch { /* ignore */ }
+    if (!R) return;
+    if (reset) resetReaderProgress();
+    else setTimeout(() => restoreReaderPosition(), 60);
+  };
+  modal.querySelector("[data-rs-start]").onclick = () => done(true);
+  modal.querySelector("[data-rs-continue]").onclick = () => done(false);
+  modal.addEventListener("click", (e) => { if (e.target === modal) done(false); });
+}
+
+function resetReaderProgress() {
+  if (!R) return;
+  if (R.kind === "pdf" && R.pdf) {
+    R.pdf.page = 1;
+    R.pdf.turns = 0;
+  }
+  state.bookProgress = { ...(state.bookProgress || {}), [R.id]: 0 };
+  persist();
+  if (backendConfigured && state.user) saveBookProgress(R.id, 0).catch(() => {});
+  renderReader();
 }
 export function readerOpenId() {
   return R ? R.id : null;
@@ -165,25 +556,28 @@ export function renderReader() {
   const t = readerRoot();
   if (!t || !R) return;
   const { book, settings: s } = R;
-  const pct = Math.round(bookProgressOf(book.id) * 100);
+  const pct = Math.round(currentFraction() * 100);
   const themeCls = s.theme === "auto" ? "" : ` reader-${s.theme}`;
   const widthPx = s.width === "narrow" ? 560 : s.width === "wide" ? 860 : 700;
+  const fontFam = s.font === "sans"
+    ? "system-ui, -apple-system, 'Segoe UI', sans-serif"
+    : s.font === "system" ? "inherit" : "Georgia, 'Times New Roman', serif";
   t.innerHTML = `<div class="reader${themeCls}" data-reader>
-    <div class="reader-top"><button class="ghost" data-r-back>← Library</button>
+    <div class="reader-top"><button type="button" class="ghost" data-r-back>← Library</button>
       <div class="reader-title"><strong>${esc(book.title)}</strong><small>${esc(book.author || "")} · <span data-r-pct>${pct}%</span></small></div>
       <div class="reader-top-actions">
-        <button class="icon-btn" data-r-panel="toc" title="Contents">${sicon("list")}</button>
-        <button class="icon-btn" data-r-panel="search" title="Search in book">${sicon("search")}</button>
-        <button class="icon-btn" data-r-panel="marks" title="Bookmarks">${sicon("bookmark")}</button>
-        <button class="icon-btn" data-r-panel="notes" title="Notes & highlights">${sicon("doc")}</button>
-        <button class="icon-btn" data-r-panel="companion" title="Study companion">${sicon("robot")}</button>
-        <button class="icon-btn" data-r-panel="settings" title="Reading settings">${sicon("gear")}</button>
-        <button class="icon-btn" data-r-full title="Fullscreen">${sicon("expand")}</button>
+        <button type="button" class="icon-btn" data-r-panel="toc" title="Contents">${sicon("list")}</button>
+        <button type="button" class="icon-btn" data-r-panel="search" title="Search in book">${sicon("search")}</button>
+        <button type="button" class="icon-btn" data-r-panel="marks" title="Bookmarks">${sicon("bookmark")}</button>
+        <button type="button" class="icon-btn" data-r-panel="notes" title="Notes & highlights">${sicon("doc")}</button>
+        <button type="button" class="icon-btn" data-r-panel="companion" title="Study companion">${sicon("robot")}</button>
+        <button type="button" class="icon-btn" data-r-panel="settings" title="Reading settings">${sicon("gear")}</button>
+        <button type="button" class="icon-btn" data-r-full title="Fullscreen">${sicon("expand")}</button>
       </div></div>
     <div class="reader-main">
       <div class="reader-bodywrap"><div class="reader-progress"><i data-r-bar style="width:${pct}%"></i></div>
-        <div class="reader-body" data-r-body data-ruler="${s.ruler ? 1 : 0}" style="--read-fs:${s.fontSize}px;--read-lh:${s.lineHeight};--read-w:${widthPx}px;text-align:${s.align === "justify" ? "justify" : "left"}"></div>
-        <div class="reader-foot"><button class="ghost" data-r-prev>‹ Prev</button><span class="muted" data-r-page></span><button class="ghost" data-r-next>Next ›</button></div>
+        <div class="reader-body" data-r-body data-ruler="${s.ruler ? 1 : 0}" style="--read-fs:${s.fontSize}px;--read-lh:${s.lineHeight};--read-w:${widthPx}px;--read-ff:${fontFam};text-align:${s.align === "justify" ? "justify" : "left"}"></div>
+        <div class="reader-foot"><button type="button" class="ghost" data-r-prev>‹ Prev</button><span class="muted" data-r-page></span><button type="button" class="ghost" data-r-next>Next ›</button></div>
       </div>
       <aside class="reader-side" data-r-side hidden></aside>
     </div>
@@ -193,20 +587,21 @@ export function renderReader() {
   bindReader(t);
   applyReaderPanel();
 }
+
+// Window of sections actually in the DOM: [win-1, win, win+1]. Large books
+// never render fully — this is what keeps thousand-page imports fluid.
+function windowRange() {
+  const n = R.sections.length;
+  const c = Math.max(0, Math.min(R.win || 0, Math.max(0, n - 1)));
+  R.win = c;
+  return [Math.max(0, c - 1), Math.min(n - 1, c + 1)];
+}
+
 function renderReaderBody() {
   const body = document.querySelector("[data-r-body]");
   if (!body || !R) return;
   if (R.kind === "pdf") {
-    body.innerHTML = `<p class="muted">PDFs open in your browser's viewer below. Highlights, bookmarks, and tracked progress are available for text books in this version.</p><div data-r-pdfwrap class="muted">Loading PDF…</div>`;
-    getBookBlobLazy().then((url) => {
-      const wrap = document.querySelector("[data-r-pdfwrap]");
-      if (!wrap || !url) {
-        if (wrap) wrap.textContent = "Could not load the PDF file.";
-        return;
-      }
-      wrap.innerHTML = `<embed class="reader-pdf" src="${url}" type="application/pdf">`;
-    });
-    updateReaderFoot();
+    renderPdfBody(body);
     return;
   }
   // "Chapterplate" reading design — an original StudyFlow layout:
@@ -216,60 +611,172 @@ function renderReaderBody() {
   //     its place when you return
   //   · while a session is live the reader dims every line except the one
   //     you're on (ruler reading), driven by pure CSS hover/focus
-  body.innerHTML = R.sections.map((sec, i) =>
-    `<section class="reader-sec" data-sec="${i}"><div class="reader-sec-head">${sec.title ? `<span class="reader-sec-rule"></span><h3>${esc(sec.title)}</h3>` : `<span class="reader-sec-rule"></span><h3 class="reader-sec-auto">§ ${i + 1}</h3>`}</div>${sec.paras.map((p, j) => `<p class="reader-p${j === 0 ? " reader-p-first" : ""}${(j + 1) % 5 === 0 ? " reader-tick" : ""}" data-p>${esc(p)}</p>`).join("")}</section>`,
-  ).join("");
+  const [lo, hi] = windowRange();
+  body.innerHTML = R.sections.slice(lo, hi + 1).map((sec, k) => {
+    const i = lo + k;
+    let pi = -1;
+    const blocks = (sec.paras || []).map((p) => {
+      if (p && typeof p === "object" && p.img) {
+        const url = (R.imgMaps[chapterIndexForSection(i)] || new Map()).get(p.img);
+        return url
+          ? `<div class="reader-img"><img src="${url}" alt="Book illustration" loading="lazy"></div>`
+          : `<div class="reader-img reader-img-loading"><span class="muted">Loading image…</span></div>`;
+      }
+      if (typeof p !== "string") return "";
+      pi++;
+      const j = pi;
+      return `<p class="reader-p${j === 0 ? " reader-p-first" : ""}${(j + 1) % 5 === 0 ? " reader-tick" : ""}" data-p data-pidx="${j}">${esc(p)}</p>`;
+    }).join("");
+    return `<section class="reader-sec" data-sec="${i}"><div class="reader-sec-head">${sec.title ? `<span class="reader-sec-rule"></span><h3>${esc(sec.title)}</h3>` : `<span class="reader-sec-rule"></span><h3 class="reader-sec-auto">§ ${i + 1}</h3>`}</div>${blocks}</section>`;
+  }).join("");
+  resolveWindowImages(lo, hi);
   applyHighlights();
   applySearchMarks();
   updateReaderFoot();
 }
-async function getBookBlobLazy() {
-  const { getBookBlob } = await import("./books.js");
-  if (!R) return null;
-  const blob = await getBookBlob(R.book);
-  if (!blob) return null;
-  return URL.createObjectURL(blob);
+
+// Resolve chapter artwork only for rendered sections (lazy, bounded).
+async function resolveWindowImages(lo, hi) {
+  if (!R || !R.epubHandle) return;
+  const mine = R.win;
+  const jobs = [];
+  for (let i = lo; i <= hi; i++) {
+    const chIdx = chapterIndexForSection(i);
+    if (chIdx < 0 || R.imgMaps[chIdx]) continue;
+    jobs.push(
+      R.epubHandle.resolveImages(R.epubChapters[chIdx]).then((map) => {
+        if (!R || R.win !== mine) return; // user moved on; drop it
+        R.imgMaps[chIdx] = map;
+        // Preserve the user's exact scroll: async image fills must never
+        // yank the page out from under active reading.
+        const body = readerBodyEl();
+        const top = body ? body.scrollTop : 0;
+        renderReaderBody();
+        try {
+          const fresh = readerBodyEl();
+          if (fresh) fresh.scrollTop = top;
+        } catch {
+          /* ignore */
+        }
+      }).catch(() => {}),
+    );
+  }
+  if (jobs.length) await Promise.all(jobs);
 }
+
+function chapterIndexForSection(secIdx) {
+  if (!R?.epubChapters) return -1;
+  let acc = 0;
+  for (let c = 0; c < R.epubChapters.length; c++) {
+    const n = (R.epubChapters[c].sections || []).length;
+    if (secIdx >= acc && secIdx < acc + n) return c;
+    acc += n;
+  }
+  return -1;
+}
+function renderPdfBody(body) {
+  body.innerHTML = `<p class="muted">Read in the viewer below; track your page with the Prev/Next controls so progress and resume keep working.</p><div data-r-pdfwrap class="muted">Loading PDF…</div>`;
+  getBookBlob(R.book).then((blob) => {
+    const wrap = document.querySelector("[data-r-pdfwrap]");
+    if (!R || R.kind !== "pdf") return;
+    if (!wrap || !blob) {
+      if (wrap) wrap.textContent = "Could not load the PDF file.";
+      return;
+    }
+    try {
+      if (R.pdfUrl) URL.revokeObjectURL(R.pdfUrl);
+    } catch {
+      /* ignore */
+    }
+    R.pdfUrl = URL.createObjectURL(blob);
+    wrap.innerHTML = `<embed class="reader-pdf" src="${R.pdfUrl}" type="application/pdf">`;
+  }).catch(() => {
+    const wrap = document.querySelector("[data-r-pdfwrap]");
+    if (wrap) wrap.textContent = "Could not load the PDF file.";
+  });
+  updateReaderFoot();
+}
+
 function readerBodyEl() {
   return document.querySelector("[data-r-body]");
 }
+function pdfFraction() {
+  if (!R?.pdf) return 0;
+  const pages = Number(R.pdf.pages) || 0;
+  const page = Math.max(1, Number(R.pdf.page) || 1);
+  if (pages <= 1) return 0;
+  return Math.min(1, Math.max(0, (page - 1) / (pages - 1)));
+}
+
 function updateReaderFoot() {
   const body = readerBodyEl();
   const page = document.querySelector("[data-r-page]");
   if (!body || !page || !R) return;
-  if (R.kind !== "text") {
-    page.textContent = R.book.pageCount ? `${R.book.pageCount} pages` : "PDF";
+  const prev = document.querySelector("[data-r-prev]");
+  const next = document.querySelector("[data-r-next]");
+  const setDisabled = (btn, off) => {
+    if (!btn) return;
+    btn.disabled = off;
+    btn.setAttribute("aria-disabled", String(off));
+  };
+  if (R.kind === "pdf") {
+    const p = R.pdf || { page: 1, pages: null };
+    page.textContent = p.pages ? `Page ${p.page} of ${p.pages}` : `Page ${p.page}`;
+    setDisabled(prev, p.page <= 1);
+    setDisabled(next, Boolean(p.pages) && p.page >= p.pages);
     return;
   }
   const secs = R.sections.length;
-  const y = body.scrollTop;
-  let cur = 0;
-  const nodes = body.querySelectorAll("[data-sec]");
-  nodes.forEach((n, i) => {
-    if (n.offsetTop <= y + 8) cur = i;
-  });
-  page.textContent = `Section ${Math.min(cur + 1, secs)} of ${secs}`;
+  const win = R.win || 0;
+  page.textContent = secs ? `Section ${Math.min(win + 1, secs)} of ${secs}` : "";
+  setDisabled(prev, win <= 0);
+  setDisabled(next, win >= Math.max(0, secs - 1));
 }
+
 function currentFraction() {
+  if (!R) return 0;
+  if (R.kind === "pdf") return pdfFraction();
   const body = readerBodyEl();
-  if (!body || !R || R.kind !== "text") return bookProgressOf(R ? R.id : "");
+  if (!body) return bookProgressOf(R.id);
+  // Global position = completed weight before the top section + intra-window
+  // progress mapped onto the rendered window's weight.
+  const { weights, total } = sectionWeights(R.sections);
+  if (!total) return 0;
+  const nodes = [...body.querySelectorAll("[data-sec]")];
+  if (!nodes.length) return bookProgressOf(R.id);
+  const y = body.scrollTop;
+  let top = 0;
+  nodes.forEach((n, i) => {
+    if (n.offsetTop <= y + 8) top = i;
+  });
+  const gTop = Number(nodes[top].dataset.sec) || 0;
+  let acc = 0;
+  for (let k = 0; k < gTop; k++) acc += weights[k] || 0;
+  const winAcc = nodes.reduce((a, n) => a + (weights[Number(n.dataset.sec)] || 0), 0);
   const max = body.scrollHeight - body.clientHeight;
-  if (max <= 0) return 0;
-  return Math.min(1, Math.max(0, body.scrollTop / max));
+  const local = max > 0 ? Math.min(1, Math.max(0, y / max)) : 0;
+  return Math.min(1, Math.max(0, (acc + local * winAcc) / total));
 }
 function saveReaderProgress(force) {
-  if (!R || R.kind !== "text") return;
+  if (!R) return;
   const now = Date.now();
   if (!force && now - R.saveT < 1000) return;
   R.saveT = now;
   const pos = currentFraction();
   state.bookProgress = { ...(state.bookProgress || {}), [R.id]: pos };
+  const book = (R.book) || {};
+  book.updatedAt = Date.now();
   persist();
+  if (pos >= 0.995 && !isBookCompleted(R.id)) {
+    markBookCompleted(R.id, true);
+    toast(`Finished “${book.title || "book"}” — nice work`);
+  }
   const pct = Math.round(pos * 100);
   const bar = document.querySelector("[data-r-bar]");
   if (bar) bar.style.width = pct + "%";
   const label = document.querySelector("[data-r-pct]");
   if (label) label.textContent = pct + "%";
+  if (R.kind === "pdf") updateReaderFoot();
   if (force || now - R.cloudT > 10000) {
     R.cloudT = now;
     if (backendConfigured && state.user) {
@@ -279,36 +786,65 @@ function saveReaderProgress(force) {
 }
 function restoreReaderPosition() {
   const body = readerBodyEl();
-  if (!body || !R || R.kind !== "text") return;
-  const pos = bookProgressOf(R.id);
-  if (pos > 0) {
-    const max = body.scrollHeight - body.clientHeight;
-    body.scrollTop = Math.round(max * pos);
+  if (!body || !R) return;
+  if (R.kind === "pdf") {
+    updateReaderFoot();
+    return;
+  }
+  const { sec, frac } = fractionToSection(R.sections, bookProgressOf(R.id));
+  R.win = sec;
+  renderReaderBody();
+  const fresh = readerBodyEl();
+  const node = fresh?.querySelector(`[data-sec="${sec}"]`);
+  if (node && fresh) {
+    try {
+      fresh.scrollTop = Math.round(node.offsetTop + Math.min(1, Math.max(0, frac)) * node.offsetHeight);
+    } catch {
+      /* ignore */
+    }
   }
   updateReaderFoot();
 }
 function currentLocator() {
   const body = readerBodyEl();
   if (!body || !R) return { sec: 0, frac: 0 };
+  if (R.kind === "pdf") {
+    return { sec: Math.max(1, Number(R.pdf?.page) || 1), frac: 0 };
+  }
   const nodes = [...body.querySelectorAll("[data-sec]")];
   const y = body.scrollTop;
-  let sec = 0;
-  nodes.forEach((n, i) => {
-    if (n.offsetTop <= y + 8) sec = i;
+  let gSec = R.win || 0;
+  let top = null;
+  nodes.forEach((n) => {
+    if (n.offsetTop <= y + 8) {
+      top = n;
+      gSec = Number(n.dataset.sec) || 0;
+    }
   });
-  const node = nodes[sec];
   let frac = 0;
-  if (node && node.offsetHeight > 0)
-    frac = Math.min(1, Math.max(0, (y - node.offsetTop) / node.offsetHeight));
-  return { sec, frac };
+  if (top && top.offsetHeight > 0)
+    frac = Math.min(1, Math.max(0, (y - top.offsetTop) / top.offsetHeight));
+  return { sec: gSec, frac };
 }
 function jumpToLocator(sec, frac) {
   const body = readerBodyEl();
-  if (!body) return;
-  const nodes = body.querySelectorAll("[data-sec]");
-  const node = nodes[Math.min(Math.max(0, sec), nodes.length - 1)];
-  if (!node) return;
-  body.scrollTop = Math.round(node.offsetTop + frac * node.offsetHeight);
+  if (!body || !R) return;
+  if (R.kind === "pdf") {
+    setPdfPage(Math.max(1, Math.round(Number(sec) || 1)));
+    return;
+  }
+  const n = R.sections.length;
+  R.win = Math.max(0, Math.min(sec | 0, Math.max(0, n - 1)));
+  renderReaderBody();
+  const fresh = readerBodyEl();
+  const node = fresh?.querySelector(`[data-sec="${R.win}"]`);
+  if (node && fresh) {
+    try {
+      fresh.scrollTop = Math.round(node.offsetTop + Math.min(1, Math.max(0, Number(frac) || 0)) * node.offsetHeight);
+    } catch {
+      /* ignore */
+    }
+  }
   updateReaderFoot();
   saveReaderProgress(true);
 }
@@ -316,7 +852,12 @@ function bindReader(t) {
   const body = t.querySelector("[data-r-body]");
   t.querySelector("[data-r-back]").onclick = () => {
     saveReaderProgress(true);
-    R = null;
+    closeReaderState();
+    try {
+      document.querySelectorAll("[data-rs-modal]").forEach((m) => m.remove());
+    } catch {
+      /* ignore */
+    }
     state.bookView = { name: "home" };
     persist();
     renderLibrary();
@@ -327,21 +868,37 @@ function bindReader(t) {
       if (document.fullscreenElement) document.exitFullscreen();
       else root.requestFullscreen();
     } catch {
-      notify("Fullscreen is not available here");
+      toast("Fullscreen is not available here");
     }
   };
   t.querySelector("[data-r-prev]").onclick = () => stepSection(-1);
   t.querySelector("[data-r-next]").onclick = () => stepSection(1);
+  // Keyboard: arrows turn sections/pages, Escape closes the side panel.
+  // Never hijack typing inside inputs.
+  t.onkeydown = (e) => {
+    const tag = (e.target?.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select" || e.target?.isContentEditable) return;
+    if (e.key === "ArrowRight") {
+      e.preventDefault();
+      stepSection(1);
+    } else if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      stepSection(-1);
+    } else if (e.key === "Escape" && R?.panel) {
+      R.panel = null;
+      applyReaderPanel();
+    }
+  };
   $$("[data-r-panel]", t).forEach((b) => (b.onclick = () => {
     const next = R.panel === b.dataset.rPanel ? null : b.dataset.rPanel;
     if (next !== "companion") R.askCtx = null; // selection context only lives for the companion
     R.panel = next;
     applyReaderPanel();
   }));
-  if (body && R.kind === "text") {
+  if (body && R.kind !== "pdf") {
     let ticking = false;
     body.addEventListener("scroll", () => {
-      if (R && R.kind === "text") {
+      if (R && R.kind !== "pdf") {
         if (!ticking) {
           ticking = true;
           // rAF is throttled/paused for hidden documents (background tabs and
@@ -372,9 +929,9 @@ function bindReader(t) {
       return () => {
         clearTimeout(t);
         t = setTimeout(() => {
-          // Only react to selections made inside an open text reader.
+          // Only react to selections made inside an open text/epub reader.
           const body = document.querySelector("[data-r-body]");
-          if (!body || !R || R.kind !== "text") return;
+          if (!body || !R || R.kind === "pdf") return;
           const sel = window.getSelection();
           if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
           if (!body.contains(sel.anchorNode)) return;
@@ -386,7 +943,7 @@ function bindReader(t) {
     document.addEventListener("click", (e) => {
       const mark = e.target.closest?.("mark[data-hl]");
       if (!mark) return;
-      if (!R || R.kind !== "text") return;
+      if (!R || R.kind === "pdf") return;
       const store = localStore(R.id);
       const h = store.highlights.find((x) => x.id === mark.dataset.hl);
       if (!h) return;
@@ -407,36 +964,51 @@ function bindReader(t) {
     window.addEventListener("beforeunload", () => {
       try {
         if (isPersistHalted()) return;
-        if (R && R.kind === "text") saveReaderProgress(true);
+        if (R) saveReaderProgress(true);
+        noteReadingTime();
       } catch { /* ignore */ }
     });
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) {
         try {
-          if (R && R.kind === "text") saveReaderProgress(true);
+          if (R) saveReaderProgress(true);
+          noteReadingTime();
         } catch { /* ignore */ }
       }
     });
   }
 }
+function setPdfPage(page) {
+  if (!R || R.kind !== "pdf" || !R.pdf) return;
+  const pages = Number(R.pdf.pages) || 0;
+  const next = Math.max(1, pages > 0 ? Math.min(pages, Math.round(page)) : Math.round(page));
+  if (next === R.pdf.page) {
+    updateReaderFoot();
+    return;
+  }
+  R.pdf.page = next;
+  R.pdf.turns = (R.pdf.turns || 0) + 1;
+  updateReaderFoot();
+  saveReaderProgress(true);
+}
+
 function stepSection(dir) {
   const body = readerBodyEl();
   if (!body || !R) return;
-  const nodes = body.querySelectorAll("[data-sec]");
-  const y = body.scrollTop;
-  let target = dir > 0 ? nodes.length - 1 : 0;
-  if (dir > 0) {
-    for (const n of nodes) {
-      if (n.offsetTop > y + 8) { target = n; break; }
-    }
-    body.scrollTop = typeof target === "number" ? body.scrollHeight : target.offsetTop;
-  } else {
-    let prev = null;
-    for (const n of nodes) {
-      if (n.offsetTop < y - 8) prev = n;
-      else break;
-    }
-    body.scrollTop = prev ? prev.offsetTop : 0;
+  if (R.kind === "pdf") {
+    setPdfPage((Number(R.pdf?.page) || 1) + dir);
+    return;
+  }
+  const n = R.sections.length;
+  if (!n) return;
+  R.win = Math.max(0, Math.min((R.win || 0) + dir, n - 1));
+  renderReaderBody();
+  const fresh = readerBodyEl();
+  try {
+    if (dir > 0) fresh.scrollTop = 0;
+    else fresh.scrollTop = Math.max(0, fresh.scrollHeight - fresh.clientHeight);
+  } catch {
+    /* ignore */
   }
   updateReaderFoot();
   saveReaderProgress(true);
@@ -478,7 +1050,8 @@ function buildCompanionMod() {
     ctxShort: title,
     sectionTitle: title,
     contextText: text,
-    highlights: (R.kind === "text" ? localStore(R.id).highlights : []) || [],
+    askPhrase: R.askCtx ? String(R.askCtx).slice(0, 80) : "",
+    highlights: (R.kind === "pdf" ? [] : localStore(R.id).highlights) || [],
     onClose: () => {
       R.askCtx = null;
       R.panel = null;
@@ -493,7 +1066,7 @@ function refreshCompanionContext() {
   Object.assign(side.__compMod, buildCompanionMod());
 }
 function sideHead(title) {
-  return `<div class="section-row"><h3>${esc(title)}</h3><button class="ghost" data-r-closepanel>Close</button></div>`;
+  return `<div class="section-row"><h3>${esc(title)}</h3><button type="button" class="ghost" data-r-closepanel>Close</button></div>`;
 }
 function bindPanelClose(side) {
   const c = side.querySelector("[data-r-closepanel]");
@@ -503,14 +1076,26 @@ function bindPanelClose(side) {
   };
 }
 function renderTocPanel(side) {
-  side.innerHTML = `${sideHead("Contents")}${R.kind !== "text" ? '<p class="muted">Contents are available for text books.</p>' : `<div class="reader-list">${R.sections.map((s, i) => `<button class="reader-row" data-r-goto="${i}"><span>${esc(s.title || "Section " + (i + 1))}</span></button>`).join("")}</div>`}`;
+  if (R.kind === "epub" && R.epubChapters?.length) {
+    let acc = 0;
+    const rows = R.epubChapters.map((ch) => {
+      const start = acc;
+      acc += (ch.sections || []).length;
+      return `<button type="button" class="reader-row" data-r-goto="${start}"><span>${esc(ch.title || "Chapter")}</span><small class="muted">${ch.sections.length} §</small></button>`;
+    }).join("");
+    side.innerHTML = `${sideHead("Contents")}<div class="reader-list">${rows}</div>`;
+  } else if (R.kind === "pdf") {
+    side.innerHTML = `${sideHead("Contents")}<p class="muted">Use the page controls below the document to move through this PDF.</p>`;
+  } else {
+    side.innerHTML = `${sideHead("Contents")}<div class="reader-list">${R.sections.map((s, i) => `<button type="button" class="reader-row" data-r-goto="${i}"><span>${esc(s.title || "Section " + (i + 1))}</span></button>`).join("")}</div>`;
+  }
   bindPanelClose(side);
   side.querySelectorAll("[data-r-goto]").forEach((b) => (b.onclick = () => {
     jumpToLocator(+b.dataset.rGoto, 0);
   }));
 }
 function renderSearchPanel(side) {
-  side.innerHTML = `${sideHead("Search in book")}<div class="input-row"><input class="input" data-r-q placeholder="Find in this book…" aria-label="Search in book" value="${esc(R.search.q)}"><button class="primary" data-r-find>Find</button></div><div data-r-hits></div>`;
+  side.innerHTML = `${sideHead("Search in book")}<div class="input-row"><input class="input" data-r-q placeholder="Find in this book…" aria-label="Search in book" value="${esc(R.search.q)}"><button type="button" class="primary" data-r-find>Find</button></div><div data-r-hits></div>`;
   bindPanelClose(side);
   const input = side.querySelector("[data-r-q]");
   const run = () => {
@@ -529,6 +1114,10 @@ function renderSearchPanel(side) {
 function paintSearchHits(side) {
   const box = side.querySelector("[data-r-hits]");
   if (!box) return;
+  if (R.kind === "pdf") {
+    box.innerHTML = '<p class="muted">Search inside PDF isn\'t supported here — use your browser viewer\'s search (Ctrl+F).</p>';
+    return;
+  }
   const { hits, q } = R.search;
   if (!q) {
     box.innerHTML = '<p class="muted">Type a word or phrase above.</p>';
@@ -538,7 +1127,7 @@ function paintSearchHits(side) {
     box.innerHTML = '<p class="muted">No matches in this book.</p>';
     return;
   }
-  box.innerHTML = `<div class="section-row"><span class="muted">${hits.length} match${hits.length === 1 ? "" : "es"}</span><span><button class="ghost" data-r-hitprev>‹</button> <button class="ghost" data-r-hitnext>›</button></span></div>`;
+  box.innerHTML = `<div class="section-row"><span class="muted">${hits.length} match${hits.length === 1 ? "" : "es"}${R.search.capped ? " (first 2000)" : ""}</span><span><span class="muted" data-r-hitpos>${R.search.idx >= 0 ? `${R.search.idx + 1} of ${hits.length}` : ""}</span> <button type="button" class="ghost" data-r-hitprev>‹</button> <button type="button" class="ghost" data-r-hitnext>›</button></span></div>`;
   box.querySelector("[data-r-hitprev]").onclick = () => stepSearchHit(-1);
   box.querySelector("[data-r-hitnext]").onclick = () => stepSearchHit(1);
 }
@@ -578,7 +1167,7 @@ function paintParagraph(p, hls, marks, secIdx = 0, pIdx = 0) {
       at = i + needle.length;
     }
   }
-  for (const m of marks) ranges.push({ start: m.start, end: m.end, kind: "mark" });
+  for (const m of marks) ranges.push({ start: m.start, end: m.end, kind: "mark", sh: m.sh });
   if (!ranges.length) {
     if (p.firstChild?.nodeType !== 3 || p.textContent !== text) p.replaceChildren(document.createTextNode(text));
     return;
@@ -607,7 +1196,7 @@ function paintParagraph(p, hls, marks, secIdx = 0, pIdx = 0) {
       el.title = r.h.note ? "Has a note — tap to view" : "Tap to restyle or edit";
     } else {
       el.className = "search-hit";
-      R.search.hits.push(el);
+      if (r.sh) el.dataset.sh = r.sh;
     }
     el.textContent = text.slice(r.start, r.end);
     frag.append(el);
@@ -619,32 +1208,58 @@ function paintParagraph(p, hls, marks, secIdx = 0, pIdx = 0) {
 
 function paintAllParagraphs() {
   const body = readerBodyEl();
-  if (!body || !R || R.kind !== "text") return;
+  if (!body || !R || R.kind === "pdf") return;
   const store = localStore(R.id);
-  const q = (R.search.q || "").trim().toLowerCase();
+  const byPara = R.search.map || new Map();
   body.querySelectorAll("[data-sec]").forEach((secEl) => {
     const secIdx = Number(secEl.dataset.sec) || 0;
     secEl.querySelectorAll("p[data-p]").forEach((p, pIdx) => {
-      const text = paraText(p);
-      const marks = [];
-      if (q.length >= 2) {
-        const lower = text.toLowerCase();
-        let at = 0;
-        while (true) {
-          const i = lower.indexOf(q, at);
-          if (i < 0) break;
-          marks.push({ start: i, end: i + q.length });
-          at = i + q.length;
-        }
-      }
+      const marks = byPara.get(`${secIdx}:${pIdx}`) || [];
       paintParagraph(p, store.highlights, marks, secIdx, pIdx);
     });
   });
 }
 
+// Search runs over section DATA (all of it, not just the rendered window),
+// so large books stay fast and hits outside the viewport are still found.
 function applySearchMarks() {
+  if (!R) return;
+  // Recomputes deterministically, so window jumps during hit-stepping keep
+  // their place: callers own R.search.idx (run() resets it for new queries).
   R.search.hits = [];
-  R.search.idx = -1;
+  R.search.map = new Map();
+  R.search.capped = false;
+  const q = (R.search.q || "").trim().toLowerCase();
+  if (q.length >= 2 && R.kind !== "pdf") {
+    let capped = false;
+    (R.sections || []).forEach((sec, secIdx) => {
+      if (capped) return;
+      let pIdx = -1;
+      for (const para of sec.paras || []) {
+        if (capped) break;
+        if (typeof para !== "string") continue;
+        // pIdx counts text paras only, matching the paint engine.
+        pIdx++;
+        const lower = para.toLowerCase();
+        let at = 0;
+        while (true) {
+          const i = lower.indexOf(q, at);
+          if (i < 0) break;
+          const hit = { sec: secIdx, pIdx, start: i, end: i + q.length };
+          R.search.hits.push(hit);
+          const key = `${secIdx}:${pIdx}`;
+          if (!R.search.map.has(key)) R.search.map.set(key, []);
+          R.search.map.get(key).push({ ...hit, sh: key + `:${i}` });
+          at = i + q.length;
+          if (R.search.hits.length >= 2000) {
+            capped = true;
+            R.search.capped = true;
+            break;
+          }
+        }
+      }
+    });
+  }
   paintAllParagraphs();
 }
 
@@ -654,14 +1269,26 @@ function applyHighlights() {
 function stepSearchHit(dir) {
   if (!R || !R.search.hits.length) return;
   R.search.idx = (R.search.idx + dir + R.search.hits.length) % R.search.hits.length;
-  const m = R.search.hits[R.search.idx];
-  document.querySelectorAll(".search-hit.current").forEach((x) => x.classList.remove("current"));
-  m.classList.add("current");
-  try {
-    m.scrollIntoView({ block: "center", behavior: state.reduceMotion ? "auto" : "smooth" });
-  } catch {
-    /* ignore */
+  const h = R.search.hits[R.search.idx];
+  // Jump the render window if the hit lives outside it.
+  const body = readerBodyEl();
+  let el = body?.querySelector(`.search-hit[data-sh="${h.sec}:${h.pIdx}:${h.start}"]`) || null;
+  if (!el) {
+    R.win = Math.max(0, Math.min(h.sec, R.sections.length - 1));
+    renderReaderBody();
+    el = readerBodyEl()?.querySelector(`.search-hit[data-sh="${h.sec}:${h.pIdx}:${h.start}"]`) || null;
   }
+  document.querySelectorAll(".search-hit.current").forEach((x) => x.classList.remove("current"));
+  if (el) {
+    el.classList.add("current");
+    try {
+      el.scrollIntoView({ block: "center", behavior: state.reduceMotion ? "auto" : "smooth" });
+    } catch {
+      /* ignore */
+    }
+  }
+  const pos = document.querySelector("[data-r-hitpos]");
+  if (pos) pos.textContent = `${R.search.idx + 1} of ${R.search.hits.length}${R.search.capped ? "+" : ""}`;
   const side = document.querySelector("[data-r-side]");
   if (side && !side.hidden) paintSearchHits(side);
 }
@@ -747,9 +1374,9 @@ function positionInkTray(tray, rect) {
 function inkTrayMarkup(mode, h) {
   const editing = mode === "edit";
   const cur = h || {};
-  const colors = BOOK_COLORS.map((c) => `<button class="ink-dot ink-${c}${(cur.color || "yellow") === c ? " picked" : ""}" data-ink-color="${c}" title="${c}" aria-label="${c} ink" aria-pressed="${(cur.color || "yellow") === c}"></button>`).join("");
-  const styles = INK_STYLES.map((st) => `<button class="ink-style-chip${(cur.style || "marker") === st ? " picked" : ""}" data-ink-style="${st}" title="${st}"><span class="ink-chip-sample ink-${st} ink-${cur.color || "yellow"}">Ab</span>${st}</button>`).join("");
-  return `<div class="ink-tray-head"><span class="ink-tray-title">${editing ? "Ink" : "Highlight"}</span>${editing ? `<button class="ghost" data-ink-delete>${sicon("trash")} Remove</button>` : ""}</div><div class="ink-tray-colors" role="group" aria-label="Ink color">${colors}</div><div class="ink-tray-styles" role="group" aria-label="Ink style">${styles}</div><div class="ink-tray-note" data-ink-notebox ${cur.note ? "" : "hidden"}><textarea class="textarea autogrow" data-ink-notetext rows="2" placeholder="Private note on this passage…">${esc(cur.note || "")}</textarea></div><div class="ink-tray-actions"><button class="ghost" data-ink-note>${sicon("memo")} ${cur.note ? "Edit note" : "Note"}</button><button class="primary" data-ink-apply>${editing ? "Save" : "Apply"}</button></div>`;
+  const colors = BOOK_COLORS.map((c) => `<button type="button" class="ink-dot ink-${c}${(cur.color || "yellow") === c ? " picked" : ""}" data-ink-color="${c}" title="${c}" aria-label="${c} ink" aria-pressed="${(cur.color || "yellow") === c}"></button>`).join("");
+  const styles = INK_STYLES.map((st) => `<button type="button" class="ink-style-chip${(cur.style || "marker") === st ? " picked" : ""}" data-ink-style="${st}" title="${st}"><span class="ink-chip-sample ink-${st} ink-${cur.color || "yellow"}">Ab</span>${st}</button>`).join("");
+  return `<div class="ink-tray-head"><span class="ink-tray-title">${editing ? "Ink" : "Highlight"}</span>${editing ? `<button type="button" class="ghost" data-ink-delete>${sicon("trash")} Remove</button>` : ""}</div><div class="ink-tray-colors" role="group" aria-label="Ink color">${colors}</div><div class="ink-tray-styles" role="group" aria-label="Ink style">${styles}</div><div class="ink-tray-note" data-ink-notebox ${cur.note ? "" : "hidden"}><textarea class="textarea autogrow" data-ink-notetext rows="2" placeholder="Private note on this passage…">${esc(cur.note || "")}</textarea></div><div class="ink-tray-actions"><button type="button" class="ghost" data-ink-note>${sicon("memo")} ${cur.note ? "Edit note" : "Note"}</button><button type="button" class="primary" data-ink-apply>${editing ? "Save" : "Apply"}</button></div>`;
 }
 function openInkTray(mode, payload) {
   const tray = document.querySelector("[data-r-selbar]");
@@ -792,7 +1419,7 @@ function openInkTray(mode, payload) {
   };
 }
 function onReaderSelect() {
-  if (!R || R.kind !== "text") return;
+  if (!R || R.kind === "pdf") return;
   setTimeout(() => {
     const ctx = selContext();
     if (!ctx || !R) return;
@@ -820,6 +1447,7 @@ async function addHighlight(color, style, note) {
   }));
   store.highlights = [...store.highlights, ...entries];
   persist();
+  markAnnotationsDirty();
   R.selCtx = null;
   if (backendConfigured && state.user) {
     try {
@@ -835,7 +1463,7 @@ async function addHighlight(color, style, note) {
     }
   }
   paintAllParagraphs();
-  notify(note ? "Note saved" : "Highlighted");
+  toast(note ? "Note saved" : "Highlighted");
   try {
     window.getSelection()?.removeAllRanges();
   } catch {
@@ -851,6 +1479,7 @@ async function updateHighlight(draft) {
   h.style = draft.style;
   h.note = draft.note;
   persist();
+  markAnnotationsDirty();
   if (backendConfigured && state.user && !String(h.id).startsWith("lh_")) {
     try {
       await updateBookHighlight(h.id, { color: h.color, note: h.note });
@@ -860,13 +1489,15 @@ async function updateHighlight(draft) {
   }
   paintAllParagraphs();
   renderNotesPanelIfOpen();
-  notify("Highlight updated");
+  toast("Highlight updated");
 }
 async function removeHighlightById(id) {
   if (!R) return;
   const store = localStore(R.id);
   store.highlights = store.highlights.filter((x) => x.id !== id);
+  queueAnnDelete("highlights", id);
   persist();
+  markAnnotationsDirty();
   if (backendConfigured && state.user && !String(id).startsWith("lh_")) {
     try {
       await removeBookHighlight(id);
@@ -876,7 +1507,55 @@ async function removeHighlightById(id) {
   }
   paintAllParagraphs();
   renderNotesPanelIfOpen();
-  notify("Highlight removed");
+  toast("Highlight removed");
+}
+async function newStandaloneNote(side) {
+  if (!R) return;
+  const loc = currentLocator();
+  const locator = R.kind === "pdf" ? `sec=${loc.sec} frac=0` : `sec=${loc.sec} frac=${Number(loc.frac || 0).toFixed(3)}`;
+  const label = R.kind === "pdf"
+    ? `Page ${Math.max(1, loc.sec)}`
+    : `§${(loc.sec || 0) + 1} · ${Math.round(bookProgressOf(R.id) * 100)}%`;
+  const store = localStore(R.id);
+  const entry = { id: uid(), kind: "page", label, locator, body: "", ts: Date.now() };
+  store.notes = [...(store.notes || []), entry];
+  persist();
+  renderNotesPanel(side);
+  // Open the fresh note's editor immediately.
+  const form = side.querySelector(`[data-r-noteform2="${entry.id}"]`);
+  if (form) {
+    form.hidden = false;
+    const ta = form.querySelector("[data-r-notetext2]");
+    if (ta) {
+      fitTextarea(ta);
+      ta.focus();
+    }
+  }
+}
+
+// First save of a fresh standalone note goes through the same edit path;
+// empty bodies are refused there ("delete it instead"). Cloud insert happens
+// on first non-empty save:
+async function saveStandaloneNoteCloud(entry) {
+  if (!R || !backendConfigured || !state.user) return;
+  try {
+    if (String(entry.id).startsWith("lh_")) return;
+    // Already cloud-backed (has a uuid)? update, else insert.
+    const isUuid = /^[0-9a-f]{8}-/i.test(String(entry.id));
+    if (isUuid) {
+      await updateBookNote(entry.id, { body: entry.body, label: entry.label, locator: entry.locator });
+      return;
+    }
+    const { data, error } = await addBookNote(R.id, {
+      kind: "page", label: entry.label, locator: entry.locator, body: entry.body,
+    });
+    if (!error && data && data.id) {
+      entry.id = data.id;
+      persist();
+    }
+  } catch {
+    /* local copy stands */
+  }
 }
 function renderNotesPanelIfOpen() {
   const side = document.querySelector("[data-r-side]");
@@ -885,7 +1564,7 @@ function renderNotesPanelIfOpen() {
 function scrollHlIntoView(id) {
   const m = document.querySelector(`mark[data-hl="${id}"]`);
   if (!m) {
-    notify("That passage is not on screen — it may be in another section");
+    toast("That passage is not on screen — it may be in another section");
     return;
   }
   try {
@@ -898,7 +1577,7 @@ function scrollHlIntoView(id) {
 }
 function renderMarksPanel(side) {
   const store = localStore(R.id);
-  side.innerHTML = `${sideHead("Bookmarks")}<button class="primary" data-r-addmark style="margin-bottom:12px">Bookmark this spot</button>${store.bookmarks.length ? `<div class="reader-list">${store.bookmarks.map((b) => `<div class="reader-row"><button class="reader-row-main" data-r-jumpmark="${b.id}"><span>${esc(b.label)}</span></button><button class="ghost" data-r-delmark="${b.id}">Remove</button></div>`).join("")}</div>` : '<p class="muted">No bookmarks yet. Use the button above — reopening the book offers them instantly.</p>'}`;
+  side.innerHTML = `${sideHead("Bookmarks")}<button type="button" class="primary" data-r-addmark style="margin-bottom:12px">Bookmark this spot</button>${store.bookmarks.length ? `<div class="reader-list">${store.bookmarks.map((b) => `<div class="reader-row"><button type="button" class="reader-row-main" data-r-jumpmark="${b.id}"><span>${esc(b.label)}</span></button><button type="button" class="ghost" data-r-delmark="${b.id}">Remove</button></div>`).join("")}</div>` : '<p class="muted">No bookmarks yet. Use the button above — reopening the book offers them instantly.</p>'}`;
   bindPanelClose(side);
   side.querySelector("[data-r-addmark]").onclick = async () => {
     const loc = currentLocator();
@@ -906,6 +1585,7 @@ function renderMarksPanel(side) {
     const entry = { id: uid(), label: `Page ${pct}% · §${loc.sec + 1}`, sec: loc.sec, frac: loc.frac, ts: Date.now() };
     store.bookmarks = [...store.bookmarks, entry];
     persist();
+    markAnnotationsDirty();
     if (backendConfigured && state.user) {
       try {
         const { data, error } = await addBookBookmark(R.id, entry.label, `sec=${loc.sec} frac=${loc.frac.toFixed(3)}`);
@@ -917,7 +1597,7 @@ function renderMarksPanel(side) {
         /* local copy stands */
       }
     }
-    notify("Bookmarked");
+    toast("Bookmarked");
     renderMarksPanel(side);
   };
   side.querySelectorAll("[data-r-jumpmark]").forEach((b) => (b.onclick = () => {
@@ -927,7 +1607,9 @@ function renderMarksPanel(side) {
   side.querySelectorAll("[data-r-delmark]").forEach((b) => (b.onclick = async () => {
     const id = b.dataset.rDelmark;
     store.bookmarks = store.bookmarks.filter((x) => x.id !== id);
+    queueAnnDelete("bookmarks", id);
     persist();
+    markAnnotationsDirty();
     if (backendConfigured && state.user) {
       try {
         await removeBookBookmark(id);
@@ -940,9 +1622,82 @@ function renderMarksPanel(side) {
 }
 function renderNotesPanel(side) {
   const store = localStore(R.id);
+  const notes = [...(store.notes || [])].reverse();
   const items = [...store.highlights].reverse();
-  side.innerHTML = `${sideHead("Notes & highlights")}${items.length ? `<div class="reader-list">${items.map((h) => `<div class="reader-note"><button class="reader-note-excerpt ink-${h.style || "marker"} ink-${h.color || "yellow"}" data-r-jumphl="${h.id}">${esc(h.excerpt.slice(0, 140))}${h.excerpt.length > 140 ? "…" : ""}</button>${h.note ? `<p>${esc(h.note)}</p>` : '<p class="muted">No note attached.</p>'}<div class="reader-note-actions"><button class="ghost" data-r-editnote="${h.id}">${h.note ? "Edit note" : "Add note"}</button><button class="ghost" data-r-restyle="${h.id}">Ink</button><button class="ghost" data-r-delhl="${h.id}">Delete</button></div><div data-r-noteform="${h.id}" hidden><textarea class="textarea autogrow" data-r-notetext rows="2">${esc(h.note || "")}</textarea><div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px"><button class="ghost" data-r-notecancel="${h.id}">Cancel</button><button class="primary" data-r-notesave="${h.id}">Save</button></div></div></div>`).join("")}</div>` : '<p class="muted">Select any passage to highlight it — pick a color and a style in the ink tray, or tap a highlight in the text to change it later.</p>'}`;
+  side.innerHTML = `${sideHead("Notes & highlights")}`
+    + `<button type="button" class="primary" data-r-newnote style="margin-bottom:12px">New note here</button>`
+    + (notes.length
+      ? `<div class="eyebrow">My notes (${notes.length})</div><div class="reader-list">` + notes.map((n) => {
+        const loc = parseLocator(n.locator);
+        const where = R.kind === "pdf" ? `Page ${Math.max(1, loc.sec)}` : `§${(loc.sec || 0) + 1}`;
+        return `<div class="reader-note"><button type="button" class="reader-note-excerpt" data-r-jumpnote="${n.id}"><strong>${esc(n.label || "Note")}</strong> <span class="muted">· ${where}</span></button>`
+          + `<p>${esc(n.body)}</p><small class="muted">${new Date(n.ts || Date.now()).toLocaleDateString()}</small>`
+          + `<div class="reader-note-actions"><button type="button" class="ghost" data-r-editnote2="${n.id}">Edit</button><button type="button" class="ghost" data-r-delnote="${n.id}">Delete</button></div>`
+          + `<div data-r-noteform2="${n.id}" hidden><textarea class="textarea autogrow" data-r-notetext2 rows="2">${esc(n.body || "")}</textarea><div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px"><button type="button" class="ghost" data-r-notecancel2="${n.id}">Cancel</button><button type="button" class="primary" data-r-notesave2="${n.id}">Save</button></div></div></div>`;
+      }).join("") + `</div>`
+      : "")
+    + (items.length
+      ? `<div class="eyebrow" style="margin-top:12px">From highlights (${items.length})</div><div class="reader-list">${items.map((h) => `<div class="reader-note"><button type="button" class="reader-note-excerpt ink-${h.style || "marker"} ink-${h.color || "yellow"}" data-r-jumphl="${h.id}">${esc(h.excerpt.slice(0, 140))}${h.excerpt.length > 140 ? "…" : ""}</button>${h.note ? `<p>${esc(h.note)}</p>` : '<p class="muted">No note attached.</p>'}<div class="reader-note-actions"><button type="button" class="ghost" data-r-editnote="${h.id}">${h.note ? "Edit note" : "Add note"}</button><button type="button" class="ghost" data-r-restyle="${h.id}">Ink</button><button type="button" class="ghost" data-r-delhl="${h.id}">Delete</button></div><div data-r-noteform="${h.id}" hidden><textarea class="textarea autogrow" data-r-notetext rows="2">${esc(h.note || "")}</textarea><div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px"><button type="button" class="ghost" data-r-notecancel="${h.id}">Cancel</button><button type="button" class="primary" data-r-notesave="${h.id}">Save</button></div></div></div>`).join("")}</div>`
+      : (!notes.length ? '<p class="muted">Select any passage to highlight it — pick a color and a style in the ink tray, or tap a highlight in the text to change it later.</p>' : ""));
   bindPanelClose(side);
+  side.querySelector("[data-r-newnote]").onclick = () => newStandaloneNote(side);
+  side.querySelectorAll("[data-r-jumpnote]").forEach((b) => (b.onclick = () => {
+    const n = (localStore(R.id).notes || []).find((x) => x.id === b.dataset.rJumpnote);
+    if (!n) return;
+    const loc = parseLocator(n.locator);
+    if (R.kind === "pdf") jumpToLocator(Math.max(1, loc.sec), 0);
+    else jumpToLocator(loc.sec || 0, loc.frac || 0);
+  }));
+  side.querySelectorAll("[data-r-editnote2]").forEach((b) => (b.onclick = () => {
+    const form = side.querySelector(`[data-r-noteform2="${b.dataset.rEditnote2}"]`);
+    if (form) {
+      form.hidden = !form.hidden;
+      if (!form.hidden) fitTextarea(form.querySelector("[data-r-notetext2]"));
+    }
+  }));
+  side.querySelectorAll("[data-r-notecancel2]").forEach((b) => (b.onclick = () => {
+    const id = b.dataset.rNotecancel2;
+    const store2 = localStore(R.id);
+    // Cancel means cancel: a never-saved draft vanishes entirely (persist +
+    // repaint); an existing note just hides its editor, body untouched.
+    if (cancelNoteDraft(store2, id)) {
+      persist();
+      renderNotesPanel(side);
+      return;
+    }
+    side.querySelector(`[data-r-noteform2="${id}"]`).hidden = true;
+  }));
+  side.querySelectorAll("[data-r-notesave2]").forEach((b) => (b.onclick = async () => {
+    const id = b.dataset.rNotesave2;
+    const store2 = localStore(R.id);
+    const n = (store2.notes || []).find((x) => x.id === id);
+    if (!n) return;
+    const body = side.querySelector(`[data-r-noteform2="${id}"] [data-r-notetext2]`).value.trim().slice(0, 4000);
+    if (!body) return toast("Note is empty — delete it instead");
+    n.body = body;
+    persist();
+    markAnnotationsDirty();
+    await saveStandaloneNoteCloud(n);
+    toast("Note saved");
+    renderNotesPanel(side);
+  }));
+  side.querySelectorAll("[data-r-delnote]").forEach((b) => (b.onclick = async () => {
+    const id = b.dataset.rDelnote;
+    const store2 = localStore(R.id);
+    store2.notes = (store2.notes || []).filter((x) => x.id !== id);
+    queueAnnDelete("notes", id);
+    persist();
+    markAnnotationsDirty();
+    if (backendConfigured && state.user && !String(id).startsWith("lh_")) {
+      try {
+        await removeBookNote(id);
+      } catch {
+        /* ignore */
+      }
+    }
+    toast("Note deleted");
+    renderNotesPanel(side);
+  }));
   side.querySelectorAll("[data-r-jumphl]").forEach((b) => (b.onclick = () => scrollHlIntoView(b.dataset.rJumphl)));
   side.querySelectorAll("[data-r-restyle]").forEach((b) => (b.onclick = () => {
     const h = store.highlights.find((x) => x.id === b.dataset.rRestyle);
@@ -966,6 +1721,7 @@ function renderNotesPanel(side) {
     if (!h) return;
     h.note = side.querySelector(`[data-r-noteform="${id}"] [data-r-notetext]`).value.trim().slice(0, 4000);
     persist();
+    markAnnotationsDirty();
     if (backendConfigured && state.user) {
       try {
         await updateBookHighlight(id, { note: h.note });
@@ -973,7 +1729,7 @@ function renderNotesPanel(side) {
         /* local copy stands */
       }
     }
-    notify("Note saved");
+    toast("Note saved");
     renderNotesPanel(side);
     applyHighlights();
   }));
@@ -981,6 +1737,7 @@ function renderNotesPanel(side) {
     const id = b.dataset.rDelhl;
     store.highlights = store.highlights.filter((x) => x.id !== id);
     persist();
+    markAnnotationsDirty();
     if (backendConfigured && state.user) {
       try {
         await removeBookHighlight(id);
@@ -992,6 +1749,16 @@ function renderNotesPanel(side) {
     renderNotesPanel(side);
   }));
 }
+
+// Pure draft-vs-edit decision, exported for tests: true = draft discarded.
+export function cancelNoteDraft(store, id) {
+  const n = (store.notes || []).find((x) => x.id === id);
+  if (n && !n.body) {
+    store.notes = (store.notes || []).filter((x) => x.id !== id);
+    return true;
+  }
+  return false;
+}
 function renderSettingsPanel(side) {
   const s = R.settings;
   side.innerHTML = `${sideHead("Reading settings")}
@@ -999,6 +1766,7 @@ function renderSettingsPanel(side) {
   <label class="field-label">Line spacing<input type="range" min="1.4" max="2.2" step="0.1" value="${s.lineHeight}" data-r-set-lh aria-label="Line spacing"></label>
   <label class="field-label">Reading width<select class="select" data-r-set-width><option value="narrow"${s.width === "narrow" ? " selected" : ""}>Narrow</option><option value="medium"${s.width === "medium" ? " selected" : ""}>Medium</option><option value="wide"${s.width === "wide" ? " selected" : ""}>Wide</option></select></label>
   <label class="field-label">Theme<select class="select" data-r-set-theme><option value="auto"${s.theme === "auto" ? " selected" : ""}>Match app theme</option><option value="light"${s.theme === "light" ? " selected" : ""}>Light</option><option value="dark"${s.theme === "dark" ? " selected" : ""}>Dark</option><option value="sepia"${s.theme === "sepia" ? " selected" : ""}>Sepia</option></select></label>
+  <label class="field-label">Font<select class="select" data-r-set-fontface><option value="serif"${s.font !== "sans" && s.font !== "system" ? " selected" : ""}>Book serif</option><option value="sans"${s.font === "sans" ? " selected" : ""}>Clean sans</option><option value="system"${s.font === "system" ? " selected" : ""}>System</option></select></label>
   <label class="field-label">Alignment<select class="select" data-r-set-align><option value="left"${s.align !== "justify" ? " selected" : ""}>Left</option><option value="justify"${s.align === "justify" ? " selected" : ""}>Justified</option></select></label>
   <label class="toggle-row"><span><strong>Ruler reading</strong><small>Dim all lines except the one under your cursor</small></span><input type="checkbox" data-r-set-ruler ${s.ruler ? "checked" : ""}></label>`;
   bindPanelClose(side);
@@ -1029,6 +1797,10 @@ function renderSettingsPanel(side) {
   };
   side.querySelector("[data-r-set-theme]").onchange = (e) => {
     R.settings.theme = e.target.value;
+    restyle();
+  };
+  side.querySelector("[data-r-set-fontface]").onchange = (e) => {
+    R.settings.font = e.target.value;
     restyle();
   };
   side.querySelector("[data-r-set-align]").onchange = (e) => {

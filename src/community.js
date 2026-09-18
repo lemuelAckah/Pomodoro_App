@@ -9,34 +9,182 @@ import {
   createWebRtcPeer, recordCall, updateCall, upsertCallParticipant,
   uploadUserFile, getUserFileUrl, backendConfigured, reportUser, listPublicGroups,
   createCloudGroup, joinCloudGroup, leaveCloudGroup, deleteCloudGroup,
+  groupCreate, groupAddMember, groupSetMember, groupLeave, groupTransfer,
+  groupDelete, groupUpdate, getMyGroups, getGroupMembers,
+  loadConversation, deleteCloudMessage,
+  listFriendships, sendFriendRequest, respondFriendRequest, removeFriend,
+  listBlocks, blockUser, unblockUser as serverUnblock,
+  createStory, listStories, viewStory, deleteStory, listStoryViews,
+  listNotifications, markNotificationRead, markAllNotificationsRead,
+  getPublicProfiles, searchUsers, editCloudMessage,
+  uploadGroupAvatar, removeGroupAvatar, getGroupAvatarUrl,
+  uploadStoryPhoto, deleteStoryMedia, getStoryMediaUrl,
+  setCloudMute, MUTE_FOREVER_AT, validateImageFile, IMAGE_FORMAT_ERROR,
 } from "./services/backend.js";
 import { playChime } from "./audio.js";
 import { matchTech } from "./techniques.js";
 import { renderMiniTimer, sessionInProgress, startTimer, updateTimerDom, applyDurations } from "./timer.js";
 import { shell } from "./app.js";
+import { secureEarn } from "./services/rewards-sync.js";
 // Groups exist only when a user creates them — there is no built-in catalog.
-// Every user-created group is public so other users can discover and join it.
+// Cloud groups arrive from two reads: the public directory (discoverable by
+// everyone) and my own memberships (which also carry private groups plus my
+// role). Both merge into cloudGroups; membership rows auto-join sf-joined so
+// every downstream flow (Messages, chat, menus) keeps working unchanged.
 let cloudGroups = [];
 let cloudGroupsAt = 0;
+let cloudGroupsSig = "";
+// Cloud identity caches (in-memory only — never persisted; handles refresh).
+let cloudFriends = []; // accepted connections: { id, handle, name, avatar, bio }
+let cloudFriendReqs = []; // { id, incoming, handle, name, otherId, ts }
+let cloudFriendsAt = 0;
+let cloudBlocked = new Set();
+let cloudStories = [];
+let cloudStoriesAt = 0;
+let cloudNotifCount = 0;
+let cloudNotifAt = 0;
+function isPhase7Missing(error) {
+  return /Phase 7 database update/i.test(error?.message || "");
+}
+// User-facing upload errors, one accurate message per failure class. Only a
+// genuine validator verdict (exact IMAGE_FORMAT_ERROR) may surface as the
+// format message — storage/auth/network failures get their own message and
+// are never relabeled as format errors. (Original errors stay visible in the
+// [sf-story-upload] DevTools trace.)
+function friendlyUploadError(err) {
+  const msg = String(err?.message || err || "");
+  if (msg === IMAGE_FORMAT_ERROR) return msg;
+  if (/phase 7 database update/i.test(msg)) return "Cloud photos need the latest database update.";
+  if (!navigator.onLine || /network|fetch|failed to/i.test(msg))
+    return "Couldn't upload the photo because the connection is unavailable.";
+  if (/too large|too big|maximum size|exceeded|payload|under \d/i.test(msg))
+    return msg.length < 120 ? msg : "Image is too large. Maximum size is 2 MB.";
+  if (/not signed in|sign in|session|permission|policy|not allowed|unauthorized|forbidden|owner or an admin|GROUP_FORBIDDEN|NOT_SIGNED_IN/i.test(msg))
+    return "You are not signed in or you do not have permission to upload this photo.";
+  return "Couldn't upload that photo. Please try again.";
+}
+function cloudSocialSig() {
+  return JSON.stringify([cloudFriends.map((f) => f.id), cloudFriendReqs.map((r) => r.id + r.incoming), [...cloudBlocked].sort()]);
+}
+function signedIn() {
+  return Boolean(backendConfigured && state.user);
+}
+function toCloudGroup(r, mine) {
+  return {
+    id: r.id,
+    name: r.name,
+    emoji: sicon(r.logo || "book"),
+    logoName: r.logo || "book",
+    ownerId: r.owner_id,
+    description: r.description || "",
+    tags: r.focus_topics || [],
+    members: r.member_count ?? 1,
+    color: "#47765a",
+    source: "cloud",
+    visibility: r.visibility || "public",
+    myRole: mine?.myRole || null,
+    avatarPath: r.avatar_path || null,
+    mutedAt: mine?.mutedAt || null,
+  };
+}
+function myGroupRole(id) {
+  return (cloudGroups.find((g) => g.id === id) || {}).myRole || null;
+}
+function isCloudGroup(id) {
+  return cloudGroups.some((g) => g.id === id);
+}
+// Group avatars live in the private studyflow-groups bucket, so <img> tags
+// start as the emoji logo and are swapped to signed URLs asynchronously.
+// No object URLs (nothing to revoke), no repeated downloads: the backend
+// caches signed URLs in memory and each wrap element fetches at most once
+// per rendered path (data-av-ok claim).
+function groupAvatarMarkup(g) {
+  const path = g?.avatarPath || null;
+  if (!path || !signedIn()) return `<div class="group-logo">${g?.emoji || "●"}</div>`;
+  return `<div class="group-logo" data-av-wrap="${esc(path)}">${g?.emoji || "●"}</div>`;
+}
+function paintGroupAvatars(root) {
+  const scope = root || document;
+  if (!signedIn()) return;
+  $$("[data-av-wrap]", scope).forEach((el) => {
+    const path = el.getAttribute("data-av-wrap");
+    if (!path || el.dataset.avOk === path) return;
+    el.dataset.avOk = path; // claim first: re-renders replace the node anyway
+    getGroupAvatarUrl(path).then(({ data, error } = {}) => {
+      if (error || !data?.signedUrl || !el.isConnected) {
+        delete el.dataset.avOk;
+        return;
+      }
+      el.innerHTML = `<img src="${esc(data.signedUrl)}" alt="Group avatar">`;
+    }).catch(() => { delete el.dataset.avOk; });
+  });
+}
+// Mute sync: local state.mutedChats is the offline-first source of truth for
+// the UI; the server (group_memberships.muted_at via sf_mute_set, 017) is the
+// cross-device copy. "forever" maps to the MUTE_FOREVER_AT sentinel so expiry
+// comparisons keep working everywhere. Mute NEVER blocks delivery — it only
+// gates the notification path; realtime + history are untouched.
+function muteToCloudValue(rec) {
+  if (rec == null) return null;
+  if (rec === "forever") return MUTE_FOREVER_AT;
+  const n = Number(rec);
+  return Number.isFinite(n) ? new Date(n).toISOString() : null;
+}
+function cloudValueToMute(mutedAt) {
+  if (!mutedAt) return undefined;
+  if (String(mutedAt) >= "9999") return "forever";
+  const t = new Date(mutedAt).getTime();
+  return Number.isFinite(t) ? t : undefined;
+}
+const mutePushInFlight = new Set();
+function pushMuteToCloud(id) {
+  if (!signedIn() || !isCloudGroup(id) || mutePushInFlight.has(id)) return;
+  mutePushInFlight.add(id);
+  setCloudMute(id, muteToCloudValue((state.mutedChats || {})[id]))
+    .catch(() => {}) // silent: local state stands, retried on next change/load
+    .finally(() => mutePushInFlight.delete(id));
+}
+function adoptServerMutes(groups) {
+  // One-way adopt on load: a server mute fills gaps where local has none.
+  // Never clobbers a local choice (local wins conflicts; pushes happen on
+  // every local change, so divergence self-heals).
+  if (!signedIn()) return;
+  let changed = false;
+  for (const g of groups || []) {
+    if (!g?.id || !g.mutedAt) continue;
+    if ((state.mutedChats || {})[g.id] != null) continue;
+    const v = cloudValueToMute(g.mutedAt);
+    if (v == null) continue;
+    if (v !== "forever" && v <= Date.now()) continue; // expired server mute
+    state.mutedChats = { ...(state.mutedChats || {}), [g.id]: v };
+    changed = true;
+  }
+  if (changed) persist();
+}
 async function refreshCloudGroups(force) {
   if (!backendConfigured) return cloudGroups;
   if (!force && Date.now() - cloudGroupsAt < 60000 && cloudGroups.length) return cloudGroups;
   try {
     const { data, error } = await listPublicGroups(200);
     if (!error && Array.isArray(data)) {
-      cloudGroups = data.map((r) => ({
-        id: r.id,
-        name: r.name,
-        emoji: sicon(r.logo || "book"),
-        logoName: r.logo || "book",
-        ownerId: r.owner_id,
-        description: r.description || "",
-        tags: r.focus_topics || [],
-        members: r.member_count ?? 1,
-        color: "#47765a",
-        source: "cloud",
-      }));
-      cloudGroupsAt = Date.now();
+      const mine = signedIn() ? await getMyGroups().catch(() => ({ data: [] })) : { data: [] };
+      const byId = new Map();
+      for (const r of data) byId.set(r.id, toCloudGroup(r, null));
+      for (const m of mine.data || []) {
+        if (!m || !m.id) continue;
+        byId.set(m.id, toCloudGroup(m, m));
+        if (!(get("sf-joined", []).includes(m.id))) {
+          save("sf-joined", [...get("sf-joined", []), m.id]);
+        }
+      }
+      const next = [...byId.values()];
+      adoptServerMutes(next);
+      const sig = JSON.stringify(next.map((g) => [g.id, g.name, g.myRole, g.visibility, g.avatarPath || "", g.mutedAt || ""]));
+      if (sig !== cloudGroupsSig) {
+        cloudGroups = next;
+        cloudGroupsSig = sig;
+        cloudGroupsAt = Date.now();
+      }
     }
   } catch {
     /* offline — keep stale cache */
@@ -53,6 +201,56 @@ function allGroups() {
   });
 }
 setGroupLookup(() => allGroups());
+
+// Friendships / blocks / notification badge, refreshed at most once a minute.
+// Failures (offline, or a project without migration 016) keep the previous
+// cache — every caller falls back to local-only behavior.
+async function refreshCloudSocial(force) {
+  if (!signedIn()) return;
+  if (!force && Date.now() - cloudFriendsAt < 60000 && cloudFriendsAt) return;
+  try {
+    const [{ data: ships }, { data: blocks }] = await Promise.all([
+      listFriendships().catch(() => ({ data: [] })),
+      listBlocks().catch(() => ({ data: [] })),
+    ]);
+    const rows = Array.isArray(ships) ? ships : [];
+    const me = state.user.id;
+    const others = [...new Set(rows.map((r) => (r.user_id === me ? r.friend_id : r.user_id)).filter(Boolean))];
+    const { data: profiles } = await getPublicProfiles(others).catch(() => ({ data: [] }));
+    const byId = new Map((profiles || []).map((p) => [p.id, p]));
+    cloudFriends = rows
+      .filter((r) => r.status === "accepted")
+      .map((r) => {
+        const oid = r.user_id === me ? r.friend_id : r.user_id;
+        const p = byId.get(oid) || {};
+        return { id: oid, handle: p.handle || "member", name: p.name || p.handle || "Member", avatar: p.avatar || "•", bio: p.bio || "" };
+      });
+    cloudFriendReqs = rows
+      .filter((r) => r.status === "pending")
+      .map((r) => {
+        const incoming = r.friend_id === me;
+        const oid = incoming ? r.user_id : r.friend_id;
+        const p = byId.get(oid) || {};
+        return { id: r.id, incoming, otherId: oid, handle: p.handle || "member", name: p.name || p.handle || "Member", ts: r.created_at };
+      });
+    cloudBlocked = new Set((Array.isArray(blocks) ? blocks : []).map((b) => b.blocked_id).filter(Boolean));
+    cloudFriendsAt = Date.now();
+  } catch {
+    /* offline — keep stale cache */
+  }
+}
+async function refreshCloudNotifCount(force) {
+  if (!signedIn()) return 0;
+  if (!force && Date.now() - cloudNotifAt < 60000 && cloudNotifAt) return cloudNotifCount;
+  try {
+    const { data } = await listNotifications(50).catch(() => ({ data: [] }));
+    cloudNotifCount = (data || []).filter((n) => !n.read_at).length;
+    cloudNotifAt = Date.now();
+  } catch {
+    /* offline — keep stale count */
+  }
+  return cloudNotifCount;
+}
 
 let activePeer;
 
@@ -265,7 +463,7 @@ function leaveChallenge(id) {
 function challengeLockBanner() {
   const c = challengeLock();
   if (!c) return "";
-  return `<div class="challenge-lock"><span class="lock-ico">${sicon("lock")}</span><div><strong>Challenge lock · “${esc(c.title)}”</strong><br><small class="muted">Every focus session runs ${fmtPace(c)} — templates and custom durations are paused until you leave.</small></div><button class="ghost" data-challenge-leave="${c.id}">Leave</button></div>`;
+  return `<div class="challenge-lock"><span class="lock-ico">${sicon("lock")}</span><div><strong>Challenge lock · “${esc(c.title)}”</strong><br><small class="muted">Every focus session runs ${fmtPace(c)} — templates and custom durations are paused until you leave.</small></div><button type="button" class="ghost" data-challenge-leave="${c.id}">Leave</button></div>`;
 }
 
 function bumpChallengeMember(c, name, you, focusedMin) {
@@ -327,7 +525,12 @@ function finishChallenge(c, winnerName) {
     const award = c.unit === "minutes"
       ? Math.min(100, Math.round(c.target / 2))
       : Math.min(100, c.target * 5);
-    addCoins(award);
+    // Ledger-routed (idempotent per challenge) for members; local otherwise.
+    try {
+      secureEarn({ amount: award, reason: "Challenge complete", refKey: `challenge:${c.id}` }).catch(() => {});
+    } catch {
+      addCoins(award);
+    }
     addNotification("Challenge complete", `${c.title} — +${award} coins showered.`, "trophy");
     postGroupMessage(c.groupId, `“${c.title}” complete — @${c.winner} takes the crown with ${c.target} ${c.unit}. +${award} coins showered. 👑`, "crown");
     notify(`${sicon("trophy")} Challenge complete · +${award} coins`);
@@ -506,19 +709,23 @@ function renderCommunity() {
   const t = $("#tab-community");
   t.innerHTML = `${viewHead("Community", "Find people who are learning what you are learning, make a group, and keep the conversation moving.")}<div class="subnav">${[
     ["discover", "Discover"],
+    ["status", "Status"],
     ["mygroups", "My groups"],
     ["friends", "Friends"],
     ["messages", "Messages"],
+    ["notifications", `Notifications${cloudNotifCount ? ` (${cloudNotifCount})` : ""}`],
     ["sprints", "Sprints"],
   ]
     .map(
       (x) =>
-        `<button data-subtab="${x[0]}" class="${state.subtab === x[0] ? "active" : ""}">${x[1]}</button>`,
+        `<button type="button" data-subtab="${x[0]}" class="${state.subtab === x[0] ? "active" : ""}">${x[1]}</button>`,
     )
     .join("")}</div><div id="community-body"></div>`;
   $$("[data-subtab]", t).forEach(
     (b) =>
       (b.onclick = () => {
+        const leaving = state.subtab === "discover" || state.subtab === "status";
+        if (leaving && b.dataset.subtab !== "discover" && b.dataset.subtab !== "status") clearCloudStoryPhoto();
         state.subtab = b.dataset.subtab;
         state.activeChat = null;
         renderCommunity();
@@ -527,13 +734,17 @@ function renderCommunity() {
   const body = $("#community-body", t);
   const panels = {
     discover: renderDiscover,
+    status: renderStatus,
     mygroups: renderMyGroups,
     friends: renderFriends,
     messages: renderMessages,
+    notifications: renderNotifications,
     sprints: renderSprints,
   };
   if (!panels[state.subtab]) state.subtab = "discover";
   panels[state.subtab](body);
+  paintGroupAvatars(body);
+  paintStoryThumbs(body);
   if (state.subtab === "sprints") ensureSprintTicker();
   // Refresh the shared public group list in the background; repaint only when
   // it actually changed (same token-guard pattern as the book library).
@@ -542,6 +753,15 @@ function renderCommunity() {
     if (cloudGroupsAt === seenCloudAt || !cloudGroups.length) return;
     if (state.tab === "community") renderCommunity();
   }).catch(() => {});
+  // Social caches + notification badge refresh silently; repaint only the badge.
+  if (signedIn()) {
+    refreshCloudSocial(false).catch(() => {});
+    refreshCloudNotifCount(false).then((n) => {
+      if (!n) return;
+      const btn = t.querySelector('[data-subtab="notifications"]');
+      if (btn && !btn.textContent.includes("(")) btn.textContent = `Notifications (${n})`;
+    }).catch(() => {});
+  }
 }
 
 function groupMatches(group) {
@@ -592,7 +812,7 @@ function leaderboardMarkup() {
   const prevWk = weekKey(new Date(Date.now() - 7 * 86400000));
   const delta = total - weekMinutes(prevWk);
   const max = Math.max(best, 1);
-  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>This week's focus</h2><span class="tag">${total} min</span></div><div class="week-bars">${days.map((d) => `<div class="week-bar${d.today ? " today" : ""}" title="${d.min} min"><span style="height:${Math.round((d.min / max) * 100)}%"></span><small>${d.label}</small></div>`).join("")}</div><p class="muted" style="margin-top:10px">Best day ${best} min · ${delta >= 0 ? `+${delta}` : delta} min vs last week</p><div class="section-row" style="margin-top:12px"><h3>Global board</h3></div><p class="muted">${backendConfigured && state.user ? "Season board syncs with cloud accounts — invite friends from the Friends tab to race you." : sicon("globe") + " The global board unlocks with cloud accounts. Your week already counts — invite friends to race you."}</p><button class="ghost" data-invite-race>Copy race invite</button></div>`;
+  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>This week's focus</h2><span class="tag">${total} min</span></div><div class="week-bars">${days.map((d) => `<div class="week-bar${d.today ? " today" : ""}" title="${d.min} min"><span style="height:${Math.round((d.min / max) * 100)}%"></span><small>${d.label}</small></div>`).join("")}</div><p class="muted" style="margin-top:10px">Best day ${best} min · ${delta >= 0 ? `+${delta}` : delta} min vs last week</p><div class="section-row" style="margin-top:12px"><h3>Global board</h3></div><p class="muted">${backendConfigured && state.user ? "Season board syncs with cloud accounts — invite friends from the Friends tab to race you." : sicon("globe") + " The global board unlocks with cloud accounts. Your week already counts — invite friends to race you."}</p><button type="button" class="ghost" data-invite-race>Copy race invite</button></div>`;
 }
 
 function sprintGroupName(sp) {
@@ -690,7 +910,7 @@ function inviteInboxMarkup() {
   const pending = state.sprintInvites.filter((i) => i.status === "pending");
   const decided = state.sprintInvites.filter((i) => i.status !== "pending").slice(-3).reverse();
   if (!pending.length && !decided.length) return "";
-  return `<div class="card invite-inbox"><div class="section-row"><h2>${sicon("gift")} Sprint invites</h2><span class="tag">${pending.length} pending</span></div>${pending.map((inv) => `<div class="invite-card"><div class="invite-glow"></div><div><strong>${esc(inv.title)}</strong><br><small class="muted">from <b>@${esc(inv.from || "a friend")}</b> · ${inv.durationMin || 25} min · starts ${new Date(inv.startsAt || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small>${inv.purpose ? `<p class="purpose">“${esc(inv.purpose)}”</p>` : ""}</div><div class="invite-actions"><button class="primary" data-inv-accept="${inv.id}">Join sprint</button><button class="ghost" data-inv-decline="${inv.id}">Decline</button></div></div>`).join("")}${decided.map((inv) => `<div class="board-row"><span>${esc(inv.title)} · @${esc(inv.from || "?")}</span><span class="tag">${inv.status === "accepted" ? sicon("check") + " joined" : "declined"}</span></div>`).join("")}</div>`;
+  return `<div class="card invite-inbox"><div class="section-row"><h2>${sicon("gift")} Sprint invites</h2><span class="tag">${pending.length} pending</span></div>${pending.map((inv) => `<div class="invite-card"><div class="invite-glow"></div><div><strong>${esc(inv.title)}</strong><br><small class="muted">from <b>@${esc(inv.from || "a friend")}</b> · ${inv.durationMin || 25} min · starts ${new Date(inv.startsAt || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small>${inv.purpose ? `<p class="purpose">“${esc(inv.purpose)}”</p>` : ""}</div><div class="invite-actions"><button type="button" class="primary" data-inv-accept="${inv.id}">Join sprint</button><button type="button" class="ghost" data-inv-decline="${inv.id}">Decline</button></div></div>`).join("")}${decided.map((inv) => `<div class="board-row"><span>${esc(inv.title)} · @${esc(inv.from || "?")}</span><span class="tag">${inv.status === "accepted" ? sicon("check") + " joined" : "declined"}</span></div>`).join("")}</div>`;
 }
 
 function sprintBoardMarkup() {
@@ -718,8 +938,8 @@ function sprintBoardMarkup() {
     const inviteLine = sp.visibility === "friends"
       ? `<span class="tag lock">${sicon("lock")} friends-only${pend ? ` · ${pend} pending` : ""}${acc ? ` · ${acc} in` : ""}${dec ? ` · ${dec} out` : ""}</span>`
       : `<span class="tag">${sicon("globe")} open room${(sp.roster || []).length ? ` · ${(sp.roster || []).length + 1} racing` : ""}</span>`;
-    return `<div class="sprint-room pro${live ? " live" : ""}"><div class="sprint-beam"></div><div class="section-row"><strong>${esc(sp.title)}</strong><span style="display:flex;gap:6px;flex-wrap:wrap"><span class="tag ${live ? "live" : ""}" data-sprint-cd="${sp.id}">${live ? "● LIVE" : "scheduled"}</span>${inviteLine}</span></div><p class="muted">${esc(sprintGroupName(sp))} · ${Math.round(sp.durationSec / 60)} min${sp.joined ? " · you're in" : ""}</p>${sp.purpose ? `<p class="purpose">“${esc(sp.purpose)}”</p>` : ""}${sp.joined || sp.visibility === "open" ? crewPaceMarkup(sp) : '<p class="muted">Join to see the crew pace board.</p>'}${(sp.invites || []).length ? `<div class="invite-chips">${sp.invites.map((i) => `<span class="invite-chip ${i.status}">@${esc(i.username)} · ${i.status === "accepted" ? "joined " + sicon("check") : i.status === "declined" ? "passed" : "invited…"}</span>`).join("")}</div>` : ""}<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">${sp.joined ? `${live && !inSession ? `<button class="primary" data-sprint-late="${sp.id}">Join late</button><button class="ghost" data-sprint-leave="${sp.id}">Leave</button>` : ""}${live && inSession ? '<span class="tag live">you\'re focusing ' + sicon("fire") + '</span>' : ""}${!live ? `<button class="primary" data-sprint-now="${sp.id}">Start now</button><button class="ghost" data-sprint-leave="${sp.id}">Leave</button>` : ""}` : `<button class="primary" data-sprint-join="${sp.id}">Join sprint</button>`}${owner ? `<button class="ghost" data-sprint-edit="${sp.id}">Rename / purpose</button><button class="ghost" data-sprint-nudge="${sp.id}" title="Simulate a friend replying right now">Nudge replies</button><button class="delete" data-sprint-del="${sp.id}" title="Delete room">Delete</button>` : ""}</div></div>`;
-  }).join("") : '<p class="muted">No live rooms. Start one below — shared suffering bonds people.</p>'}${past.length ? `<div class="section-row" style="margin-top:14px"><h3>Finish board</h3></div>${past.map((sp) => `<div class="board-row"><span>${esc(sp.title)}</span><span class="tag">${sp.result?.status === "done" ? `${sicon("check")} ${sp.result.focusedMin}m focused` : sp.result?.status === "dnf" ? "DNF" : "missed"}</span></div>`).join("")}` : ""}<div class="section-row" style="margin-top:16px"><h3>New sprint</h3><span class="tag">pro</span></div><div class="grid two"><input class="input" id="sprint-title" placeholder="Sprint title, e.g. Morning grind"><select class="select" id="sprint-group"><option value="">No group</option>${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("")}</select><select class="select" id="sprint-dur"><option value="15">15 minutes</option><option value="25" selected>25 minutes</option><option value="30">30 minutes</option><option value="50">50 minutes</option></select><select class="select" id="sprint-in"><option value="2">Starts in 2 min</option><option value="5" selected>Starts in 5 min</option><option value="10">Starts in 10 min</option><option value="15">Starts in 15 min</option><option value="30">Starts in 30 min</option></select></div><textarea class="textarea autogrow" id="sprint-purpose" rows="2" placeholder="Purpose — why does this room exist? (shown to everyone)" style="margin-top:10px"></textarea><div style="margin-top:10px;position:relative"><select class="select" id="sprint-vis" style="width:100%" aria-label="Room visibility"><option value="open">Open — anyone can join</option><option value="friends">Friends — only people I pick</option></select><div class="friend-pick drop" id="sprint-friends" hidden><div class="eyebrow" style="margin-bottom:6px">Pick friends</div>${friends.map((f) => `<label class="pick-row"><input type="checkbox" value="${f.id}"> <span class="crew-avatar sm">${esc((f.username || "?")[0].toUpperCase())}</span> @${esc(f.username)}</label>`).join("") || '<p class="muted">No friends yet — add some in the Friends tab first.</p>'}</div></div><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button class="primary" id="sprint-create">Create sprint room</button><button class="ghost" id="sprint-friends-go" type="button">To friends → pick crew</button></div></div>`;
+    return `<div class="sprint-room pro${live ? " live" : ""}"><div class="sprint-beam"></div><div class="section-row"><strong>${esc(sp.title)}</strong><span style="display:flex;gap:6px;flex-wrap:wrap"><span class="tag ${live ? "live" : ""}" data-sprint-cd="${sp.id}">${live ? "● LIVE" : "scheduled"}</span>${inviteLine}</span></div><p class="muted">${esc(sprintGroupName(sp))} · ${Math.round(sp.durationSec / 60)} min${sp.joined ? " · you're in" : ""}</p>${sp.purpose ? `<p class="purpose">“${esc(sp.purpose)}”</p>` : ""}${sp.joined || sp.visibility === "open" ? crewPaceMarkup(sp) : '<p class="muted">Join to see the crew pace board.</p>'}${(sp.invites || []).length ? `<div class="invite-chips">${sp.invites.map((i) => `<span class="invite-chip ${i.status}">@${esc(i.username)} · ${i.status === "accepted" ? "joined " + sicon("check") : i.status === "declined" ? "passed" : "invited…"}</span>`).join("")}</div>` : ""}<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">${sp.joined ? `${live && !inSession ? `<button type="button" class="primary" data-sprint-late="${sp.id}">Join late</button><button type="button" class="ghost" data-sprint-leave="${sp.id}">Leave</button>` : ""}${live && inSession ? '<span class="tag live">you\'re focusing ' + sicon("fire") + '</span>' : ""}${!live ? `<button type="button" class="primary" data-sprint-now="${sp.id}">Start now</button><button type="button" class="ghost" data-sprint-leave="${sp.id}">Leave</button>` : ""}` : `<button type="button" class="primary" data-sprint-join="${sp.id}">Join sprint</button>`}${owner ? `<button type="button" class="ghost" data-sprint-edit="${sp.id}">Rename / purpose</button><button type="button" class="ghost" data-sprint-nudge="${sp.id}" title="Simulate a friend replying right now">Nudge replies</button><button type="button" class="delete" data-sprint-del="${sp.id}" title="Delete room">Delete</button>` : ""}</div></div>`;
+  }).join("") : '<p class="muted">No live rooms. Start one below — shared suffering bonds people.</p>'}${past.length ? `<div class="section-row" style="margin-top:14px"><h3>Finish board</h3></div>${past.map((sp) => `<div class="board-row"><span>${esc(sp.title)}</span><span class="tag">${sp.result?.status === "done" ? `${sicon("check")} ${sp.result.focusedMin}m focused` : sp.result?.status === "dnf" ? "DNF" : "missed"}</span></div>`).join("")}` : ""}<div class="section-row" style="margin-top:16px"><h3>New sprint</h3><span class="tag">pro</span></div><div class="grid two"><input class="input" id="sprint-title" placeholder="Sprint title, e.g. Morning grind"><select class="select" id="sprint-group"><option value="">No group</option>${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("")}</select><select class="select" id="sprint-dur"><option value="15">15 minutes</option><option value="25" selected>25 minutes</option><option value="30">30 minutes</option><option value="50">50 minutes</option></select><select class="select" id="sprint-in"><option value="2">Starts in 2 min</option><option value="5" selected>Starts in 5 min</option><option value="10">Starts in 10 min</option><option value="15">Starts in 15 min</option><option value="30">Starts in 30 min</option></select></div><textarea class="textarea autogrow" id="sprint-purpose" rows="2" placeholder="Purpose — why does this room exist? (shown to everyone)" style="margin-top:10px"></textarea><div style="margin-top:10px;position:relative"><select class="select" id="sprint-vis" style="width:100%" aria-label="Room visibility"><option value="open">Open — anyone can join</option><option value="friends">Friends — only people I pick</option></select><div class="friend-pick drop" id="sprint-friends" hidden><div class="eyebrow" style="margin-bottom:6px">Pick friends</div>${friends.map((f) => `<label class="pick-row"><input type="checkbox" value="${f.id}"> <span class="crew-avatar sm">${esc((f.username || "?")[0].toUpperCase())}</span> @${esc(f.username)}</label>`).join("") || '<p class="muted">No friends yet — add some in the Friends tab first.</p>'}</div></div><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button type="button" class="primary" id="sprint-create">Create sprint room</button><button class="ghost" id="sprint-friends-go" type="button">To friends → pick crew</button></div></div>`;
 }
 
 function challengeRow(c) {
@@ -736,7 +956,7 @@ function challengeRow(c) {
   return `<div class="challenge pro"><div class="section-row"><strong>${esc(c.title)}</strong><span style="display:flex;gap:6px;flex-wrap:wrap"><span class="tag pace-tag">⚡ ${fmtPace(c)}/session</span>${c.done ? `<span class="tag">done ${sicon("party")}</span>` : locked ? `<span class="tag live">🔒 locked in</span>` : `<span class="tag">${c.progress}/${c.target} ${c.unit}</span>`}</span></div><div class="complete-track"><span class="complete-fill" style="width:${pct}%"></span></div><small class="muted">${esc(g?.name || "Open challenge")}${c.ownerId && c.ownerId === chatKey() ? " · you host" : ""}</small>${c.done && c.winner ? `<p class="crown-line">👑 <b>@${esc(c.winner)}</b> takes the crown</p>` : ""}<div class="board-lead"><div class="crew-head"><span>${sicon("trophy")} Leaderboard</span><span class="muted">${board.length} racing</span></div>${board.slice(0, 5).map((m, i) => {
     const sc = challengeScore(c, m);
     return `<div class="lead-row${i === 0 ? " top" : ""}${m.you ? " me" : ""}"><span class="lead-rank">${medals[i] || `#${i + 1}`}</span><span class="crew-avatar sm">${esc((m.name || "?")[0].toUpperCase())}</span><div class="crew-meta"><div class="crew-line"><strong>${esc(m.name)}${m.you ? " · you" : ""}</strong><span class="muted">${m.sessions || 0} sess · ${m.minutes || 0}m</span></div><div class="crew-track"><span class="crew-fill${i === 0 && !c.done ? " live" : ""}" style="width:${Math.min(100, Math.max(3, Math.round((sc / top) * 100)))}%"></span></div></div></div>`;
-  }).join("")}</div>${!c.done ? `<div class="ch-actions">${c.joined ? `<button class="ghost" data-ch-leave="${c.id}">Leave challenge</button>` : `<button class="primary" data-ch-join="${c.id}"${otherLock ? " disabled title=\"Finish or leave your current challenge first\"" : ""} style="padding:8px 14px;font-size:12px">Join · locks timer to ${fmtPace(c)}</button>`}${!c.ownerId || c.ownerId === chatKey() ? `<button class="delete" data-ch-del="${c.id}" title="Delete challenge">Delete</button>` : ""}</div>` : `${!c.ownerId || c.ownerId === chatKey() ? `<div class="ch-actions"><button class="ghost" data-ch-del="${c.id}">Clear from board</button></div>` : ""}`}</div>`;
+  }).join("")}</div>${!c.done ? `<div class="ch-actions">${c.joined ? `<button type="button" class="ghost" data-ch-leave="${c.id}">Leave challenge</button>` : `<button type="button" class="primary" data-ch-join="${c.id}"${otherLock ? " disabled title=\"Finish or leave your current challenge first\"" : ""} style="padding:8px 14px;font-size:12px">Join · locks timer to ${fmtPace(c)}</button>`}${!c.ownerId || c.ownerId === chatKey() ? `<button type="button" class="delete" data-ch-del="${c.id}" title="Delete challenge">Delete</button>` : ""}</div>` : `${!c.ownerId || c.ownerId === chatKey() ? `<div class="ch-actions"><button type="button" class="ghost" data-ch-del="${c.id}">Clear from board</button></div>` : ""}`}</div>`;
 }
 
 function challengeMarkup() {
@@ -746,7 +966,7 @@ function challengeMarkup() {
   const groups = allGroups().filter((g) =>
     get("sf-joined", []).includes(g.id),
   );
-  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Group challenges</h2><span class="tag">this week</span></div>${list.map(challengeRow).join("") || '<p class="muted">No active challenges — launch the first one.</p>'}<div class="section-row" style="margin-top:14px"><h3>New challenge</h3><span class="tag">you host</span></div><div class="grid two"><input class="input" id="ch-title" placeholder="e.g. 10 focus sessions"><select class="select" id="ch-group">${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("") || '<option value="">No joined groups yet</option>'}</select><div class="input-row" style="margin:0"><input class="input" id="ch-target" type="number" min="1" max="500" value="10" aria-label="Target"><select class="select" id="ch-unit" aria-label="Unit"><option value="sessions">sessions</option><option value="minutes">minutes</option></select></div><div class="input-row" style="margin:0" title="Every session in this challenge runs this long"><input class="input" id="ch-min" type="number" min="0" max="180" value="25" aria-label="Minutes per session"><span class="muted">min</span><input class="input" id="ch-sec" type="number" min="0" max="59" value="0" aria-label="Seconds per session"><span class="muted">sec</span></div></div><p class="muted" style="margin:8px 0 0">⚡ Pace setter — every session runs this long, and joiners' timers lock to it until they leave.</p><div><button class="primary" id="ch-create">Launch</button></div></div>`;
+  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Group challenges</h2><span class="tag">this week</span></div>${list.map(challengeRow).join("") || '<p class="muted">No active challenges — launch the first one.</p>'}<div class="section-row" style="margin-top:14px"><h3>New challenge</h3><span class="tag">you host</span></div><div class="grid two"><input class="input" id="ch-title" placeholder="e.g. 10 focus sessions"><select class="select" id="ch-group">${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("") || '<option value="">No joined groups yet</option>'}</select><div class="input-row" style="margin:0"><input class="input" id="ch-target" type="number" min="1" max="500" value="10" aria-label="Target"><select class="select" id="ch-unit" aria-label="Unit"><option value="sessions">sessions</option><option value="minutes">minutes</option></select></div><div class="input-row" style="margin:0" title="Every session in this challenge runs this long"><input class="input" id="ch-min" type="number" min="0" max="180" value="25" aria-label="Minutes per session"><span class="muted">min</span><input class="input" id="ch-sec" type="number" min="0" max="59" value="0" aria-label="Seconds per session"><span class="muted">sec</span></div></div><p class="muted" style="margin:8px 0 0">⚡ Pace setter — every session runs this long, and joiners' timers lock to it until they leave.</p><div><button type="button" class="primary" id="ch-create">Launch</button></div></div>`;
 }
 
 function eventWhen(e) {
@@ -775,8 +995,8 @@ function eventMarkup() {
     const owner = isEventOwner(e);
     const pend = (e.invites || []).filter((i) => i.status === "pending").length;
     const going = (e.invites || []).filter((i) => i.status === "accepted").length + (e.mine ? 1 : 0);
-    return `<div class="event-row pro"><div><strong>${sicon("calendar")} ${esc(e.title)}</strong><br><small class="muted">${eventWhen(e)} · ${e.durationMin} min${g ? ` · ${esc(g.name)}` : ""}${e.visibility === "friends" ? ` · ${sicon("lock")} friends` : ""} · ${going} going</small>${(e.invites || []).length ? `<div class="invite-chips">${e.invites.map((i) => `<span class="invite-chip ${i.status}">@${esc(i.username)} · ${i.status === "accepted" ? "in " + sicon("check") : i.status === "declined" ? "out" : "invited…"}</span>`).join("")}</div>` : ""}</div><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${live ? `<span class="tag">● LIVE</span><button class="primary" data-event-start="${e.id}" style="padding:8px 12px;font-size:12px">Start</button>` : ""}<button class="${e.mine ? "ghost" : "primary"}" data-event-rsvp="${e.id}" style="padding:8px 12px;font-size:12px">${e.mine ? "Going " + sicon("check") : "RSVP"}</button>${owner ? `${pend ? `<button class="ghost" data-event-nudge="${e.id}" style="padding:8px 12px;font-size:12px" title="Simulate a friend replying now">Nudge</button>` : ""}<button class="delete" data-event-del="${e.id}" title="Remove">×</button>` : ""}</div></div>`;
-  }).join("") : '<p class="muted">Nothing scheduled. Put study on the calendar and show up.</p>'}<div class="section-row" style="margin-top:14px"><h3>New session</h3><span class="tag">you host</span></div><div class="grid two"><input class="input" id="ev-title" placeholder="e.g. Calc sprint"><select class="select" id="ev-aud" aria-label="Who is this for"><option value="self">Just me</option><option value="group">A group</option><option value="friends">Specific friends</option></select><select class="select" id="ev-group" aria-label="Which group"><option value="">No group</option>${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("")}</select><label class="field-label ev-datetime-label">${sicon("calendar")} Date & time<input class="input" id="ev-at" type="datetime-local" aria-label="Date and time"></label><select class="select" id="ev-dur"><option value="15">15 min</option><option value="25" selected>25 min</option><option value="30">30 min</option><option value="50">50 min</option><option value="60">60 min</option><option value="90">90 min</option></select></div><p class="muted" style="margin:8px 0 0">Friends get an invite they can accept or decline — replies land here and on your Focus desk.</p><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center;position:relative"><button class="primary" id="ev-create">Schedule</button><button class="ghost" id="ev-crew-toggle" type="button" hidden></button><div class="friend-pick drop" id="ev-friends" hidden><div class="eyebrow" style="margin-bottom:6px">Pick friends</div>${(state.friends || []).map((f) => `<label class="pick-row"><input type="checkbox" value="${f.id}"> <span class="crew-avatar sm">${esc((f.username || "?")[0].toUpperCase())}</span> @${esc(f.username)}</label>`).join("") || '<p class="muted">No friends yet — add some in the Friends tab first.</p>'}</div></div></div>`;
+    return `<div class="event-row pro"><div><strong>${sicon("calendar")} ${esc(e.title)}</strong><br><small class="muted">${eventWhen(e)} · ${e.durationMin} min${g ? ` · ${esc(g.name)}` : ""}${e.visibility === "friends" ? ` · ${sicon("lock")} friends` : ""} · ${going} going</small>${(e.invites || []).length ? `<div class="invite-chips">${e.invites.map((i) => `<span class="invite-chip ${i.status}">@${esc(i.username)} · ${i.status === "accepted" ? "in " + sicon("check") : i.status === "declined" ? "out" : "invited…"}</span>`).join("")}</div>` : ""}</div><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${live ? `<span class="tag">● LIVE</span><button type="button" class="primary" data-event-start="${e.id}" style="padding:8px 12px;font-size:12px">Start</button>` : ""}<button type="button" class="${e.mine ? "ghost" : "primary"}" data-event-rsvp="${e.id}" style="padding:8px 12px;font-size:12px">${e.mine ? "Going " + sicon("check") : "RSVP"}</button>${owner ? `${pend ? `<button type="button" class="ghost" data-event-nudge="${e.id}" style="padding:8px 12px;font-size:12px" title="Simulate a friend replying now">Nudge</button>` : ""}<button type="button" class="delete" data-event-del="${e.id}" title="Remove">×</button>` : ""}</div></div>`;
+  }).join("") : '<p class="muted">Nothing scheduled. Put study on the calendar and show up.</p>'}<div class="section-row" style="margin-top:14px"><h3>New session</h3><span class="tag">you host</span></div><div class="grid two"><input class="input" id="ev-title" placeholder="e.g. Calc sprint"><select class="select" id="ev-aud" aria-label="Who is this for"><option value="self">Just me</option><option value="group">A group</option><option value="friends">Specific friends</option></select><select class="select" id="ev-group" aria-label="Which group"><option value="">No group</option>${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("")}</select><label class="field-label ev-datetime-label">${sicon("calendar")} Date & time<input class="input" id="ev-at" type="datetime-local" aria-label="Date and time"></label><select class="select" id="ev-dur"><option value="15">15 min</option><option value="25" selected>25 min</option><option value="30">30 min</option><option value="50">50 min</option><option value="60">60 min</option><option value="90">90 min</option></select></div><p class="muted" style="margin:8px 0 0">Friends get an invite they can accept or decline — replies land here and on your Focus desk.</p><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center;position:relative"><button type="button" class="primary" id="ev-create">Schedule</button><button class="ghost" id="ev-crew-toggle" type="button" hidden></button><div class="friend-pick drop" id="ev-friends" hidden><div class="eyebrow" style="margin-bottom:6px">Pick friends</div>${(state.friends || []).map((f) => `<label class="pick-row"><input type="checkbox" value="${f.id}"> <span class="crew-avatar sm">${esc((f.username || "?")[0].toUpperCase())}</span> @${esc(f.username)}</label>`).join("") || '<p class="muted">No friends yet — add some in the Friends tab first.</p>'}</div></div></div>`;
 }
 
 /* ---------- scheduled sessions pro: friends invites, host controls ---------- */
@@ -813,7 +1033,7 @@ function eventInboxMarkup() {
   const pending = (state.eventInvites || []).filter((i) => i.status === "pending");
   const decided = (state.eventInvites || []).filter((i) => i.status !== "pending").slice(-3).reverse();
   if (!pending.length && !decided.length) return "";
-  return `<div class="card invite-inbox"><div class="section-row"><h2>${sicon("calendar")} Session invites</h2><span class="tag">${pending.length} pending</span></div>${pending.map((inv) => `<div class="invite-card"><div class="invite-glow"></div><div><strong>${esc(inv.title)}</strong><br><small class="muted">from <b>@${esc(inv.from || "a friend")}</b> · ${new Date(inv.at || Date.now()).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })} · ${inv.durationMin || 25} min</small>${inv.purpose ? `<p class="purpose">“${esc(inv.purpose)}”</p>` : ""}</div><div class="invite-actions"><button class="primary" data-ev-inv-accept="${inv.id}">RSVP yes</button><button class="ghost" data-ev-inv-decline="${inv.id}">Decline</button></div></div>`).join("")}${decided.map((inv) => `<div class="board-row"><span>${esc(inv.title)} · @${esc(inv.from || "?")}</span><span class="tag">${inv.status === "accepted" ? sicon("check") + " going" : "declined"}</span></div>`).join("")}</div>`;
+  return `<div class="card invite-inbox"><div class="section-row"><h2>${sicon("calendar")} Session invites</h2><span class="tag">${pending.length} pending</span></div>${pending.map((inv) => `<div class="invite-card"><div class="invite-glow"></div><div><strong>${esc(inv.title)}</strong><br><small class="muted">from <b>@${esc(inv.from || "a friend")}</b> · ${new Date(inv.at || Date.now()).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })} · ${inv.durationMin || 25} min</small>${inv.purpose ? `<p class="purpose">“${esc(inv.purpose)}”</p>` : ""}</div><div class="invite-actions"><button type="button" class="primary" data-ev-inv-accept="${inv.id}">RSVP yes</button><button type="button" class="ghost" data-ev-inv-decline="${inv.id}">Decline</button></div></div>`).join("")}${decided.map((inv) => `<div class="board-row"><span>${esc(inv.title)} · @${esc(inv.from || "?")}</span><span class="tag">${inv.status === "accepted" ? sicon("check") + " going" : "declined"}</span></div>`).join("")}</div>`;
 }
 
 function resolveOneEventInvite(e, force) {
@@ -861,7 +1081,7 @@ function openSprintEditor(id) {
   if (!isSprintOwner(sp)) return notify("Only the room creator can rename it");
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
-  modal.innerHTML = `<div class="modal"><div class="eyebrow">Sprint room · edit</div><h2>Shape the room</h2><label class="field-label">Room name<input class="input" data-sp-title maxlength="60" value="${esc(sp.title)}"></label><label class="field-label">Purpose — why was this room created?<textarea class="textarea autogrow" data-sp-purpose rows="3" maxlength="280" placeholder="e.g. Finish chapter 4 together before Friday">${esc(sp.purpose || "")}</textarea></label><p class="muted">The purpose shows under the title so everyone knows what they are signing up for.</p><div class="modal-actions"><button class="ghost" data-sp-cancel>Cancel</button><button class="primary" data-sp-save>Save room</button></div></div>`;
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Sprint room · edit</div><h2>Shape the room</h2><label class="field-label">Room name<input class="input" data-sp-title maxlength="60" value="${esc(sp.title)}"></label><label class="field-label">Purpose — why was this room created?<textarea class="textarea autogrow" data-sp-purpose rows="3" maxlength="280" placeholder="e.g. Finish chapter 4 together before Friday">${esc(sp.purpose || "")}</textarea></label><p class="muted">The purpose shows under the title so everyone knows what they are signing up for.</p><div class="modal-actions"><button type="button" class="ghost" data-sp-cancel>Cancel</button><button type="button" class="primary" data-sp-save>Save room</button></div></div>`;
   $("#modal-root").append(modal);
   const titleInput = modal.querySelector("[data-sp-title]");
   setTimeout(() => { try { titleInput.focus(); titleInput.select(); } catch { /* ignore */ } }, 0);
@@ -895,14 +1115,14 @@ function missionDeskMarkup() {
     .filter((e) => e.mine && e.at + e.durationMin * 60000 > now)
     .sort((a, b) => a.at - b.at)[0];
   if (!focus && !challenges.length && !upcomingEv) {
-    return `<div class="card mission-desk idle"><div class="mission-top"><span class="mission-eyebrow">${sicon("bolt")} Live mission</span><button class="ghost" data-mission-goto>Open Sprints</button></div><p class="muted">Nothing racing right now. Launch a sprint room and it will dock here so you never have to hunt for it.</p></div>`;
+    return `<div class="card mission-desk idle"><div class="mission-top"><span class="mission-eyebrow">${sicon("bolt")} Live mission</span><button type="button" class="ghost" data-mission-goto>Open Sprints</button></div><p class="muted">Nothing racing right now. Launch a sprint room and it will dock here so you never have to hunt for it.</p></div>`;
   }
   const inSession = focus && (state.sprintSession === focus.id || (state.running && state.mode === "focus"));
-  return `<div class="card mission-desk${live ? " live" : ""}"><div class="mission-glow"></div><div class="mission-top"><span class="mission-eyebrow"><span class="mission-dot"></span> Live mission · Focus desk</span><button class="ghost" data-mission-goto>Open Sprints</button></div>${focus ? `<div class="mission-sprint"><div><strong>${esc(focus.title)}</strong><br><small class="muted">${live ? "happening now" : "starts " + new Date(focus.startsAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${Math.round(focus.durationSec / 60)} min${focus.purpose ? ` · ${esc(focus.purpose.slice(0, 80))}${focus.purpose.length > 80 ? "…" : ""}` : ""}</small></div><span class="tag ${live ? "live" : ""}" data-mission-cd="${focus.id}">${live ? "● LIVE" : "scheduled"}</span></div>${focus && live && !inSession ? `<button class="primary" data-mission-join="${focus.id}">Jump in — start focus</button>` : ""}${focus && live && inSession ? `<span class="tag live">${sicon("fire")} you're racing this one</span>` : ""}` : ""}${challenges.map((c) => {
+  return `<div class="card mission-desk${live ? " live" : ""}"><div class="mission-glow"></div><div class="mission-top"><span class="mission-eyebrow"><span class="mission-dot"></span> Live mission · Focus desk</span><button type="button" class="ghost" data-mission-goto>Open Sprints</button></div>${focus ? `<div class="mission-sprint"><div><strong>${esc(focus.title)}</strong><br><small class="muted">${live ? "happening now" : "starts " + new Date(focus.startsAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${Math.round(focus.durationSec / 60)} min${focus.purpose ? ` · ${esc(focus.purpose.slice(0, 80))}${focus.purpose.length > 80 ? "…" : ""}` : ""}</small></div><span class="tag ${live ? "live" : ""}" data-mission-cd="${focus.id}">${live ? "● LIVE" : "scheduled"}</span></div>${focus && live && !inSession ? `<button type="button" class="primary" data-mission-join="${focus.id}">Jump in — start focus</button>` : ""}${focus && live && inSession ? `<span class="tag live">${sicon("fire")} you're racing this one</span>` : ""}` : ""}${challenges.map((c) => {
     const pct = Math.min(100, Math.round((c.progress / Math.max(1, c.target)) * 100));
     const locked = state.activeChallengeId === c.id && !c.done;
     return `<div class="mission-row"><span>${sicon("trophy")} ${locked ? "🔒 " : ""}${esc(c.title)}</span><span class="tag">${c.progress}/${c.target}</span></div><div class="crew-track slim"><span class="crew-fill" style="width:${pct}%"></span></div>`;
-  }).join("")}${upcomingEv ? `<div class="mission-row"><span>${sicon("calendar")} ${esc(upcomingEv.title)} · ${new Date(upcomingEv.at).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}</span>${Date.now() >= upcomingEv.at ? `<button class="primary" data-mission-event="${upcomingEv.id}" style="padding:7px 12px;font-size:12px">Start</button>` : '<span class="tag">committed</span>'}</div>` : ""}</div>`;
+  }).join("")}${upcomingEv ? `<div class="mission-row"><span>${sicon("calendar")} ${esc(upcomingEv.title)} · ${new Date(upcomingEv.at).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}</span>${Date.now() >= upcomingEv.at ? `<button type="button" class="primary" data-mission-event="${upcomingEv.id}" style="padding:7px 12px;font-size:12px">Start</button>` : '<span class="tag">committed</span>'}</div>` : ""}</div>`;
 }
 
 function bindMissionDesk(root) {
@@ -1581,6 +1801,38 @@ function deleteStatus(id) {
   return { ok: true };
 }
 
+// Cloud story photo staging: file + one object URL, revoked on clear, post,
+// replace, or leaving Discover. Never persisted, never in the database.
+let cloudStoryPhoto = null;
+function clearCloudStoryPhoto() {
+  try {
+    if (cloudStoryPhoto?.url) URL.revokeObjectURL(cloudStoryPhoto.url);
+  } catch { /* ignore */ }
+  cloudStoryPhoto = null;
+}
+// Signed-URL paint for photo-story thumbnails (backend caches the URLs, so
+// re-renders don't re-download).
+function paintStoryThumbs(root) {
+  const scope = root || document;
+  if (!signedIn()) return;
+  $$("[data-story-thumb]", scope).forEach((img) => {
+    const path = img.getAttribute("data-story-thumb");
+    if (!path || img.dataset.thOk === path) return;
+    img.dataset.thOk = path;
+    getStoryMediaUrl(path).then(({ data, error } = {}) => {
+      if (error || !data?.signedUrl || !img.isConnected) {
+        delete img.dataset.thOk;
+        return;
+      }
+      img.src = data.signedUrl;
+    }).catch(() => { delete img.dataset.thOk; });
+  });
+}
+// Device-local story rings (shared by the Discover strip and Status home;
+// they open the local status loop, not the cloud viewer).
+function localStoryRings(live) {
+  return live.map((s) => `<button type="button" class="story-ring${isSeen("story:" + s.id) ? " seen" : ""}" data-story-view="${s.id}" title="${ownStory(s.id) ? "View in status loop — right-click to delete" : "View in status loop"}"><span>${s.photo ? `<img src="${s.photo}" alt="Story">` : s.kind === "video" ? sicon("film") : sicon("fire")}</span><small>${esc(s.author.length > 8 ? s.author.slice(0, 7) + "…" : s.author)}</small></button>`).join("");
+}
 function liveStories() {
   const now = Date.now();
   return (state.stories || []).filter((s) => now - s.ts < 86400000);
@@ -1589,11 +1841,144 @@ function liveStories() {
 function storiesMarkup() {
   const live = liveStories();
   const unseen = live.filter((s) => !isSeen("story:" + s.id)).length;
-  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Stories</h2><span class="tag">24h${unseen ? ` · ${unseen} new` : ""}</span></div><div class="story-strip"><button class="story-add" data-status-play title="Play the full status loop">${sicon("play")}<small>Status</small></button><button class="story-add" data-story-flex title="Flex your streak">${sicon("fire")}<small>Flex</small></button><button class="story-add" data-story-photo title="Post a photo or video">${sicon("camera")}<small>Photo</small></button><input type="file" id="story-file" accept="image/*,video/*" hidden>${live.map((s) => `<button class="story-ring${isSeen("story:" + s.id) ? " seen" : ""}" data-story-view="${s.id}" title="${ownStory(s.id) ? "View in status loop — right-click to delete" : "View in status loop"}"><span>${s.photo ? `<img src="${s.photo}" alt="Story">` : s.kind === "video" ? sicon("film") : sicon("fire")}</span><small>${esc(s.author.length > 8 ? s.author.slice(0, 7) + "…" : s.author)}</small></button>`).join("")}</div></div>`;
+  const unseenCloud = cloudStories.filter((s) => !isSeen("cstory:" + s.id)).length;
+  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Stories</h2><span class="tag">24h${unseen + unseenCloud ? ` · ${unseen + unseenCloud} new` : ""}</span></div><div class="story-strip"><button type="button" class="story-add" data-status-play title="Play the full status loop">${sicon("play")}<small>Status</small></button><button type="button" class="story-add" data-story-flex title="Flex your streak">${sicon("fire")}<small>Flex</small></button><button type="button" class="story-add" data-story-photo title="Post a photo or video">${sicon("camera")}<small>Photo</small></button><input type="file" id="story-file" accept="image/*,video/*" hidden>${localStoryRings(live)}${cloudStories.map((s) => `<button type="button" class="story-ring${isSeen("cstory:" + s.id) ? " seen" : ""}" data-cloud-story="${s.id}" title="Shared story by @${esc(s.handle)}"><span>${s.kind === "image" && s.mediaPath ? `<img data-story-thumb="${esc(s.mediaPath)}" alt="Photo story">` : sicon("chat")}</span><small>${esc(s.handle.length > 8 ? s.handle.slice(0, 7) + "…" : s.handle)}</small></button>`).join("")}</div>${signedIn() ? `<div class="input-row" style="margin-top:10px;flex-wrap:wrap"><input class="input" id="cloud-story-text" maxlength="500" placeholder="Share a text story with your circle…" aria-label="Share a text story" value="${esc(state.storyDraft?.text || "")}" style="flex:1 1 160px;min-width:0"><select class="select" id="cloud-story-vis" aria-label="Story visibility" style="max-width:150px"><option value="connections">Connections</option><option value="public">Public</option><option value="private">Only me</option></select><button type="button" class="ghost" id="cloud-story-photo" title="Attach a photo" aria-label="Attach a photo">${sicon("camera")}</button><button type="button" class="primary" id="cloud-story-post">Post</button></div><input type="file" id="cloud-story-file" accept="image/jpeg,image/png,image/webp,image/gif" hidden aria-label="Choose a story photo"><div data-cloud-story-preview style="margin-top:8px">${cloudStoryPhoto?.url ? `<img src="${cloudStoryPhoto.url}" class="story-photo-preview" alt="Story photo preview"><div style="margin-top:6px"><button type="button" class="ghost" id="cloud-story-photo-remove">Remove photo</button></div>` : ""}</div><p class="muted" style="margin:6px 0 0">${state.storyDraft?.text ? "Draft restored — post when you're back online. " : ""}Photo stories upload to your private library and follow the same 24h + visibility rules as text.</p>` : ""}</div>`;
 }
 
+// Shared cloud-story post path (Discover composer + Status home composer).
+// Offline never fabricates a story: text is kept as a local draft, an
+// attached photo stays staged in memory, and the user is told plainly.
+async function postCloudStory({ text, vis = "connections", file = null, btn = null } = {}) {
+  const clean = String(text || "").trim().slice(0, 500);
+  const visibility = ["public", "connections", "private"].includes(vis) ? vis : "connections";
+  if (!clean && !file) {
+    notify("Write your story first");
+    return false;
+  }
+  if (!navigator.onLine) {
+    if (clean) {
+      state.storyDraft = { text: clean, vis: visibility, ts: Date.now() };
+      persist();
+    }
+    notify(file
+      ? "You're offline — photo stories need a connection. Your photo is still attached for when you're back."
+      : "You're offline — text saved as a draft.");
+    return false;
+  }
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Posting…";
+  }
+  // Pipeline trace (DevTools only): each stage records its outcome so a
+  // failure can be attributed to validation vs storage vs database.
+  const trace = { at: new Date().toISOString(), kind: file ? "image" : "text", visibility };
+  const traceLog = (stage, extra = {}) => {
+    try {
+      Object.assign(trace, extra);
+      if (typeof window !== "undefined") {
+        window.__sfLastStoryUpload = { ...trace };
+        console.debug(`[sf-story-upload] ${stage}`, { ...trace });
+      }
+    } catch { /* diagnostics must never break posting */ }
+  };
+  try {
+    let mediaPath = null;
+    let kind = "text";
+    if (file) {
+      traceLog("before-upload", {
+        name: file.name, type: file.type, size: file.size,
+        validation: window.__sfLastImageDiag?.verdict ?? null,
+      });
+      const { data: up, error: upErr } = await uploadStoryPhoto(file);
+      if (upErr) throw upErr;
+      mediaPath = up.path;
+      kind = "image";
+      traceLog("storage-ok", { mediaPath });
+    }
+    const { data: row, error } = await createStory({ text: clean, mediaPath, kind, visibility });
+    if (error) {
+      if (mediaPath) await deleteStoryMedia(mediaPath).catch(() => {});
+      throw error;
+    }
+    traceLog("story-result", { ok: true, storyId: row?.id ?? null });
+    clearCloudStoryPhoto();
+    if (state.storyDraft) {
+      state.storyDraft = null;
+      persist();
+    }
+    notify(kind === "image" ? "Photo story shared for 24h" : "Story shared for 24h");
+    await refreshCloudStories(true).catch(() => {});
+    renderCommunity();
+    return true;
+  } catch (err) {
+    const raw = String(err?.message || err || "");
+    const userMsg = file ? friendlyUploadError(err) : "Couldn't share your story — try again.";
+    traceLog("error-mapping", {
+      ok: false,
+      originalError: raw.slice(0, 300),
+      errorName: err?.name || null,
+      classifiedFormatError: userMsg === IMAGE_FORMAT_ERROR,
+      userMessage: userMsg,
+    });
+    notify(userMsg);
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Post";
+    }
+    return false;
+  }
+}
+function bindStoryComposerPost(body) {
+  const post = $("#cloud-story-post", body);
+  if (post) post.onclick = () => postCloudStory({
+    text: $("#cloud-story-text", body)?.value,
+    vis: $("#cloud-story-vis", body)?.value || "connections",
+    file: cloudStoryPhoto?.file || null,
+    btn: post,
+  });
+}
+function bindStoryComposerPhoto(body) {
+  const photoBtn = $("#cloud-story-photo", body);
+  const photoInput = $("#cloud-story-file", body);
+  if (!photoBtn || !photoInput) return;
+  photoBtn.onclick = () => photoInput.click();
+  photoInput.onchange = async () => {
+    const file = photoInput.files?.[0];
+    photoInput.value = "";
+    if (!file) return;
+    // Shared validator: MIME aliases + extension + magic bytes, so a
+    // genuine PNG is never rejected for its reported MIME type.
+    const bad = await validateImageFile(file, 2 * 1024 * 1024, "discover-composer");
+    if (bad) return notify(bad);
+    clearCloudStoryPhoto();
+    cloudStoryPhoto = { file, url: URL.createObjectURL(file) };
+    renderCommunity();
+  };
+  $("#cloud-story-photo-remove", body)?.addEventListener("click", () => {
+    clearCloudStoryPhoto();
+    renderCommunity();
+  });
+}
 function bindStories(body) {
-  $("[data-story-flex]", body).onclick = () => {
+  if (signedIn()) {
+    const before = JSON.stringify(cloudStories.map((s) => s.id));
+    refreshCloudStories(false).then(() => {
+      if (state.tab === "community" && state.subtab === "discover"
+        && JSON.stringify(cloudStories.map((s) => s.id)) !== before) renderCommunity();
+    }).catch(() => {});
+    bindStoryComposerPost(body);
+    bindStoryComposerPhoto(body);
+  }
+  $$("[data-cloud-story]", body).forEach(
+    (b) => (b.onclick = () => {
+      const hit = cloudStories.find((s) => s.id === b.dataset.cloudStory);
+      if (!hit) return;
+      const items = cloudStories
+        .filter((s) => s.userId === hit.userId)
+        .sort((a, b2) => new Date(a.createdAt) - new Date(b2.createdAt));
+      openStoryViewer(items, Math.max(0, items.findIndex((s) => s.id === hit.id)));
+    }),
+  );  $("[data-story-flex]", body).onclick = () => {
     state.stories.unshift({
       id: uid(),
       kind: "flex",
@@ -1608,16 +1993,30 @@ function bindStories(body) {
   };
   $("[data-story-photo]", body).onclick = () =>
     $("#story-file", body)?.click();
-  $("#story-file", body).onchange = (e) => {
+  $("#story-file", body).onchange = async (e) => {
     const file = e.target.files[0];
+    e.target.value = "";
     if (!file) return;
-    const isVideo = file.type.startsWith("video/");
-    if (!file.type.startsWith("image/") && !isVideo)
-      return notify("Choose an image or video");
-    if (!isVideo && file.size > 1.5 * 1024 * 1024)
-      return notify("Photos must be under 1.5 MB");
-    if (isVideo && file.size > 8 * 1024 * 1024)
-      return notify("Videos must be under 8 MB");
+    const isVideo = String(file.type || "").startsWith("video/");
+    if (isVideo) {
+      if (file.size > 8 * 1024 * 1024)
+        return notify("Videos must be under 8 MB");
+    } else {
+      // Device-local photos stay small on purpose (base64 localStorage);
+      // the 2 MB cloud path is validated separately above.
+      const bad = await validateImageFile(file, 1.5 * 1024 * 1024, "device-photo");
+      if (bad) return notify(bad);
+    }
+    // Signed-in photo picks go to the cloud composer (storage upload, 24h,
+    // visibility rules) instead of base64 localStorage. Video + signed-out
+    // flows keep the existing device-local behavior.
+    if (signedIn() && !isVideo) {
+      clearCloudStoryPhoto();
+      cloudStoryPhoto = { file, url: URL.createObjectURL(file) };
+      renderCommunity();
+      notify("Photo attached — add a caption and Post");
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
       state.stories.unshift({
@@ -1640,6 +2039,369 @@ function bindStories(body) {
   $$("[data-story-view]", body).forEach(
     (b) => (b.onclick = () => openStatus("story:" + b.dataset.storyView)),
   );
+}
+
+// Cloud stories: 24h text updates from connections/public, with idempotent
+// server-side views. Local photo/video stories above are untouched.
+async function refreshCloudStories(force) {
+  if (!signedIn()) return;
+  if (!force && Date.now() - cloudStoriesAt < 60000 && cloudStoriesAt) return;
+  try {
+    const { data, error } = await listStories(60);
+    if (error) throw error;
+    const rows = Array.isArray(data) ? data : [];
+    const { data: profiles } = await getPublicProfiles(rows.map((r) => r.user_id)).catch(() => ({ data: [] }));
+    const byId = new Map((profiles || []).map((p) => [p.id, p]));
+    cloudStories = rows.map((r) => ({
+      id: r.id,
+      userId: r.user_id,
+      handle: byId.get(r.user_id)?.handle || "member",
+      name: byId.get(r.user_id)?.name || "",
+      mine: state.user && r.user_id === state.user.id,
+      text: r.text || "",
+      kind: r.kind || (r.media_path ? "image" : "text"),
+      mediaPath: r.media_path || null,
+      visibility: r.visibility,
+      createdAt: r.created_at,
+    }));
+    cloudStoriesAt = Date.now();
+  } catch {
+    /* offline — keep stale cache */
+  }
+}
+function relTime(ts) {
+  const d = Date.now() - new Date(ts).getTime();
+  if (!Number.isFinite(d) || d < 0) return "now";
+  const m = Math.floor(d / 60000);
+  if (m < 1) return "now";
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  return `${Math.floor(h / 24)}d`;
+}
+// Deterministic per-key accent + text-card theme (token-driven, premium dark
+// cards that read well in both light and dark mode).
+const SV_ACCENTS = ["var(--lime)", "var(--coral)", "var(--gold)", "var(--sage)"];
+function svAccent(key) {
+  let h = 0;
+  for (const c of String(key || "?")) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return SV_ACCENTS[h % SV_ACCENTS.length];
+}
+const SV_THEMES = [
+  "linear-gradient(160deg, color-mix(in srgb, var(--sage) 58%, #0c120d), #0c120d 78%)",
+  "linear-gradient(160deg, color-mix(in srgb, var(--coral) 52%, #160e08), #160e08 78%)",
+  "linear-gradient(160deg, color-mix(in srgb, var(--gold) 48%, #161006), #161006 78%)",
+  "linear-gradient(160deg, color-mix(in srgb, var(--lime) 30%, #0e140b), #0e140b 78%)",
+];
+function svTheme(id) {
+  let h = 0;
+  for (const c of String(id || "?")) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return SV_THEMES[h % SV_THEMES.length];
+}
+function statusGroups() {
+  const mine = cloudStories
+    .filter((s) => s.mine)
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  const byUser = new Map();
+  for (const s of cloudStories) {
+    if (s.mine) continue;
+    if (!byUser.has(s.userId)) {
+      byUser.set(s.userId, { userId: s.userId, handle: s.handle, name: s.name, items: [] });
+    }
+    byUser.get(s.userId).items.push(s);
+  }
+  for (const u of byUser.values()) {
+    u.items.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    u.latest = u.items[u.items.length - 1].createdAt;
+    u.unseen = u.items.filter((s) => !isSeen("cstory:" + s.id)).length;
+  }
+  return { mine, others: [...byUser.values()].sort((a, b) => new Date(b.latest) - new Date(a.latest)) };
+}
+function statusAvatarInner(handle, name, photo) {
+  if (photo) return `<img src="${esc(photo)}" alt="">`;
+  return esc(((handle || name || "?")[0] || "?").toUpperCase());
+}
+// Status home: composer + My Status + grouped Recent updates + device-local.
+function renderStatus(body) {
+  if (signedIn()) {
+    const before = JSON.stringify(cloudStories.map((s) => s.id));
+    refreshCloudStories(false).then(() => {
+      if (state.tab === "community" && state.subtab === "status"
+        && JSON.stringify(cloudStories.map((s) => s.id)) !== before) renderCommunity();
+    }).catch(() => {});
+  }
+  const { mine, others } = signedIn() ? statusGroups() : { mine: [], others: [] };
+  const device = liveStories();
+  const unseenMine = mine.filter((s) => !isSeen("cstory:" + s.id)).length;
+  const latestMine = mine.length ? mine[mine.length - 1].createdAt : null;
+  body.innerHTML = `${signedIn() ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>New status</h2><span class="tag" data-st-mode>${cloudStoryPhoto ? "photo" : "text"}</span></div><textarea class="textarea" id="st-text" rows="3" maxlength="500" placeholder="What's on your mind?" aria-label="Write a status">${esc(state.storyDraft?.text || "")}</textarea><div class="st-composer-meta"><span><span data-st-count>0</span>/500 · 24h</span><span class="st-composer-actions"><select class="select" id="st-vis" aria-label="Status visibility"><option value="connections">Connections</option><option value="public">Public</option><option value="private">Only me</option></select><button type="button" class="ghost" id="st-photo" aria-label="Add photo">${sicon("camera")} Photo</button><button type="button" class="primary" id="st-post">Post</button></span></div><input type="file" id="st-file" accept="image/jpeg,image/png,image/webp,image/gif" hidden aria-label="Choose a status photo"><div data-st-preview>${cloudStoryPhoto?.url ? `<img src="${cloudStoryPhoto.url}" class="story-photo-preview" alt="Status photo preview"><div style="margin-top:6px"><button type="button" class="ghost" id="st-photo-remove">Remove</button></div>` : ""}</div>${state.storyDraft?.text ? `<p class="muted" style="margin:6px 0 0">Draft restored — post when you're back online.</p>` : ""}</div>` : `<div class="card" style="margin-bottom:18px"><h2>Status</h2><p class="muted">Sign in to post 24h statuses for your circle.</p></div>`}`
+    + `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>My Status</h2><span class="tag">${mine.length ? `${mine.length} update${mine.length === 1 ? "" : "s"}` : "none yet"}</span></div>${mine.length ? `<button type="button" class="status-row" data-status-mine><span class="status-avatar" style="--sv-accent:${svAccent(state.profile.handle)}">${avatarMarkup(state.profile.photo, state.profile.avatar)}</span><span class="status-meta"><strong>My Status</strong><small>${relTime(latestMine)}${unseenMine ? ` · ${unseenMine} new` : ""}</small></span>${unseenMine ? '<span class="status-dot" aria-label="Unseen updates"></span>' : `<span class="tag">${sicon("check")}</span>`}</button>` : `<p class="muted">Share your first update above — text or photo, live for 24h.</p>`}</div>`
+    + `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Recent updates</h2><span class="tag">${others.length}</span></div>${others.length ? others.map((u) => `<button type="button" class="status-row" data-status-user="${esc(u.userId)}"><span class="status-avatar" style="--sv-accent:${svAccent(u.handle)}">${esc(((u.handle || "?")[0] || "?").toUpperCase())}</span><span class="status-meta"><strong>@${esc(u.handle)}</strong><small>${u.items.length} update${u.items.length === 1 ? "" : "s"} · ${relTime(u.latest)}${u.unseen ? ` · ${u.unseen} new` : ""}</small></span>${u.unseen ? '<span class="status-dot" aria-label="Unseen updates"></span>' : ""}</button>`).join("") : `<p class="muted">${signedIn() ? "No updates from others yet." : "Sign in to see statuses from your circle."}</p>`}</div>`
+    + (device.length ? `<div class="card"><div class="section-row"><h2>On this device</h2><span class="tag">local</span></div><div class="story-strip">${localStoryRings(device)}</div></div>` : "");
+  bindStatusHome(body);
+}
+function bindStatusHome(body) {
+  $$("[data-status-mine]", body).forEach((b) => (b.onclick = () => {
+    const items = cloudStories.filter((s) => s.mine)
+      .sort((a, b2) => new Date(a.createdAt) - new Date(b2.createdAt));
+    if (!items.length) return;
+    openStoryViewer(items, Math.max(0, items.findIndex((s) => !isSeen("cstory:" + s.id))));
+  }));
+  $$("[data-status-user]", body).forEach((b) => (b.onclick = () => {
+    const items = cloudStories.filter((s) => s.userId === b.dataset.statusUser)
+      .sort((a, b2) => new Date(a.createdAt) - new Date(b2.createdAt));
+    if (!items.length) return;
+    openStoryViewer(items, Math.max(0, items.findIndex((s) => !isSeen("cstory:" + s.id))));
+  }));
+  $$("[data-story-view]", body).forEach(
+    (b2) => (b2.onclick = () => openStatus("story:" + b2.dataset.storyView)),
+  );
+  const text = $("#st-text", body);
+  if (text) {
+    const count = $("[data-st-count]", body);
+    const paint = () => { if (count) count.textContent = String(text.value.length); };
+    text.addEventListener("input", paint);
+    paint();
+  }
+  const file = $("#st-file", body);
+  $("#st-photo", body)?.addEventListener("click", () => file?.click());
+  file?.addEventListener("change", async () => {
+    const picked = file.files?.[0];
+    file.value = "";
+    if (!picked) return;
+    const bad = await validateImageFile(picked, 2 * 1024 * 1024, "status-composer");
+    if (bad) return notify(bad);
+    clearCloudStoryPhoto();
+    cloudStoryPhoto = { file: picked, url: URL.createObjectURL(picked) };
+    renderCommunity();
+  });
+  $("#st-photo-remove", body)?.addEventListener("click", () => {
+    clearCloudStoryPhoto();
+    renderCommunity();
+  });
+  $("#st-post", body)?.addEventListener("click", (e) => postCloudStory({
+    text: $("#st-text", body)?.value,
+    vis: $("#st-vis", body)?.value || "connections",
+    file: cloudStoryPhoto?.file || null,
+    btn: e.currentTarget,
+  }));
+}
+// Dedicated story viewer: progress bars, per-user text cards / photo stage,
+// tap + keyboard navigation off a single index, auto-advance with pause,
+// targeted DOM updates only (Community never re-renders underneath).
+function closeStoryViewer() {
+  const ov = $("#story-viewer");
+  if (!ov) return;
+  if (ov.__svKey) document.removeEventListener("keydown", ov.__svKey);
+  if (ov.__svClear) ov.__svClear();
+  ov.remove();
+}
+function openStoryViewer(items, startIdx) {
+  if (!Array.isArray(items) || !items.length) return;
+  closeStoryViewer();
+  const st = {
+    items: [...items],
+    idx: Math.min(Math.max(startIdx || 0, 0), items.length - 1),
+    timer: 0,
+    remaining: 0,
+    endsAt: 0,
+    paused: false,
+    dur: 0,
+  };
+  const ov = document.createElement("div");
+  ov.id = "story-viewer";
+  ov.innerHTML = `<div class="sv-frame" role="dialog" aria-label="Status viewer"><div class="sv-progress" data-sv-progress></div><div class="sv-top"><span class="status-avatar sm" data-sv-avatar></span><span class="sv-who"><strong data-sv-name></strong><small data-sv-time></small></span><button type="button" class="sv-close" data-sv-close aria-label="Close status viewer">×</button></div><div class="sv-stage" data-sv-stage></div><button type="button" class="sv-tap left" data-sv-prev aria-label="Previous status">‹</button><button type="button" class="sv-tap right" data-sv-next aria-label="Next status">›</button><div class="sv-foot"><span class="muted" data-sv-views></span><span class="sv-foot-actions"><button type="button" class="ghost" data-sv-prev-btn>Prev</button><button type="button" class="ghost" data-sv-next-btn>Next</button><button type="button" class="delete" data-sv-del hidden>Delete</button></span></div></div>`;
+  document.body.append(ov);
+  const bar = () => ov.querySelector("[data-sv-progress]");
+  const stage = () => ov.querySelector("[data-sv-stage]");
+  function paintBars() {
+    bar().innerHTML = st.items.map((_, i) => `<span class="sv-bar${i < st.idx ? " done" : i === st.idx ? " now" : ""}"><i></i></span>`).join("");
+  }
+  function armBar(ms) {
+    const fill = bar().children[st.idx]?.firstElementChild;
+    if (!fill) return;
+    fill.style.transition = "none";
+    fill.style.width = "0%";
+    void fill.offsetWidth;
+    fill.style.transition = `width ${ms}ms linear`;
+    fill.style.width = "100%";
+  }
+  function freezeBar() {
+    const fill = bar().children[st.idx]?.firstElementChild;
+    if (!fill) return;
+    const w = window.getComputedStyle(fill).width;
+    fill.style.transition = "none";
+    fill.style.width = w;
+  }
+  function clearTimer() {
+    if (st.timer) {
+      clearTimeout(st.timer);
+      st.timer = 0;
+    }
+  }
+  function schedule(ms) {
+    clearTimer();
+    st.dur = ms;
+    st.remaining = ms;
+    st.endsAt = Date.now() + ms;
+    st.paused = false;
+    armBar(ms);
+    st.timer = setTimeout(() => advance(1, true), ms);
+  }
+  function pause() {
+    if (st.paused || !st.timer) return;
+    st.paused = true;
+    st.remaining = Math.max(0, st.endsAt - Date.now());
+    clearTimer();
+    freezeBar();
+  }
+  function resume() {
+    if (!st.paused) return;
+    st.paused = false;
+    st.endsAt = Date.now() + st.remaining;
+    const fill = bar().children[st.idx]?.firstElementChild;
+    if (fill) {
+      fill.style.transition = `width ${st.remaining}ms linear`;
+      fill.style.width = "100%";
+    }
+    st.timer = setTimeout(() => advance(1, true), st.remaining);
+  }
+  function markSeen(item) {
+    state.statusSeen = state.statusSeen || {};
+    state.statusSeen["cstory:" + item.id] = Date.now();
+    persist();
+    if (signedIn()) viewStory(item.id).catch(() => {});
+  }
+  function show(i) {
+    // Single source of truth for the index: clamped, never out of range.
+    st.idx = Math.min(Math.max(i, 0), st.items.length - 1);
+    const item = st.items[st.idx];
+    if (!item) {
+      closeStoryViewer();
+      return;
+    }
+    paintBars();
+    ov.querySelector("[data-sv-avatar]").innerHTML = statusAvatarInner(item.handle, item.name, null);
+    ov.querySelector("[data-sv-avatar]").style.setProperty("--sv-accent", svAccent(item.handle));
+    ov.querySelector("[data-sv-name]").textContent = item.mine ? "My Status" : "@" + item.handle;
+    ov.querySelector("[data-sv-time]").textContent = `${relTime(item.createdAt)} · ${item.visibility}`;
+    const views = ov.querySelector("[data-sv-views]");
+    views.textContent = "";
+    const del = ov.querySelector("[data-sv-del]");
+    del.hidden = !item.mine;
+    if (item.mine && signedIn()) {
+      listStoryViews(item.id).then(({ data } = {}) => {
+        if (st.items[st.idx]?.id !== item.id) return;
+        const n = Array.isArray(data) ? data.length : 0;
+        views.textContent = `${n} view${n === 1 ? "" : "s"}`;
+      }).catch(() => {});
+    }
+    const box = stage();
+    if (item.kind === "image" && item.mediaPath) {
+      box.innerHTML = `<div class="sv-photo-wrap"><img class="sv-photo" alt="Status photo"></div>`;
+      const img = box.querySelector("img");
+      let started = false;
+      const begin = (ms) => {
+        if (started || !document.body.contains(ov)) return;
+        started = true;
+        schedule(ms);
+      };
+      img.addEventListener("load", () => begin(7000));
+      img.addEventListener("error", () => {
+        img.alt = "Photo unavailable";
+        begin(5000);
+      });
+      getStoryMediaUrl(item.mediaPath).then(({ data, error } = {}) => {
+        if (!img.isConnected || st.items[st.idx]?.id !== item.id) return;
+        if (error || !data?.signedUrl) {
+          img.alt = "Photo unavailable";
+          begin(5000);
+          return;
+        }
+        img.src = data.signedUrl;
+      }).catch(() => begin(5000));
+      setTimeout(() => begin(10000), 10000); // failsafe: never stall
+    } else {
+      box.innerHTML = `<div class="sv-text-card" style="background:${svTheme(item.id)}"><p>${esc(item.text || "")}</p><div class="sv-card-foot"><strong>${esc(item.mine ? "You" : "@" + item.handle)}</strong><small>${relTime(item.createdAt)}</small></div></div>`;
+      schedule(5000);
+    }
+    const prevBtns = [ov.querySelector("[data-sv-prev-btn]"), ov.querySelector("[data-sv-prev]")];
+    const nextBtns = [ov.querySelector("[data-sv-next-btn]"), ov.querySelector("[data-sv-next]")];
+    prevBtns.forEach((b) => { if (b) b.disabled = st.idx === 0; });
+    nextBtns.forEach((b) => { if (b) b.disabled = st.idx === st.items.length - 1; });
+    markSeen(item);
+  }
+  function advance(d, auto) {
+    const next = st.idx + d;
+    if (next < 0) {
+      show(0);
+      return;
+    }
+    if (next >= st.items.length) {
+      // At the end: auto-advance and Next both close the viewer.
+      closeStoryViewer();
+      renderCommunity();
+      return;
+    }
+    show(next);
+    void auto;
+  }
+  ov.querySelector("[data-sv-close]").onclick = () => {
+    closeStoryViewer();
+    renderCommunity();
+  };
+  ov.querySelector("[data-sv-prev]").onclick = () => advance(-1, false);
+  ov.querySelector("[data-sv-next]").onclick = () => advance(1, false);
+  ov.querySelector("[data-sv-prev-btn]").onclick = () => advance(-1, false);
+  ov.querySelector("[data-sv-next-btn]").onclick = () => advance(1, false);
+  ov.querySelector("[data-sv-del]").onclick = () => {
+    const item = st.items[st.idx];
+    if (!item?.mine) return;
+    pause();
+    confirmBox("Delete this status?", "It disappears for everyone.", async () => {
+      await deleteStory(item.id).catch(() => {});
+      if (item.mediaPath) await deleteStoryMedia(item.mediaPath).catch(() => {});
+      cloudStories = cloudStories.filter((x) => x.id !== item.id);
+      st.items = st.items.filter((x) => x.id !== item.id);
+      if (!st.items.length) {
+        closeStoryViewer();
+        renderCommunity();
+        notify("Status deleted");
+        return;
+      }
+      show(Math.min(st.idx, st.items.length - 1));
+      notify("Status deleted");
+    }, { onCancel: () => resume() });
+  };
+  stage().addEventListener("pointerdown", pause);
+  stage().addEventListener("pointerup", resume);
+  stage().addEventListener("pointercancel", resume);
+  document.addEventListener("visibilitychange", function svVis() {
+    if (!document.body.contains(ov)) {
+      document.removeEventListener("visibilitychange", svVis);
+      return;
+    }
+    if (document.hidden) pause();
+    else resume();
+  });
+  const onKey = (e) => {
+    if (!document.body.contains(ov)) return;
+    if (e.key === "ArrowRight") {
+      e.preventDefault();
+      advance(1, false);
+    } else if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      advance(-1, false);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      closeStoryViewer();
+      renderCommunity();
+    }
+  };
+  ov.__svKey = onKey;
+  document.addEventListener("keydown", onKey);
+  ov.__svClear = clearTimer;
+  show(st.idx);
 }
 
 let statusSeq = [];
@@ -1700,7 +2462,7 @@ function openStatus(startKey) {
   if (idx < 0) idx = 0;
   const overlay = document.createElement("div");
   overlay.id = "status-viewer";
-  overlay.innerHTML = `<div class="st-progress" data-st-progress></div><div class="st-head"><span class="st-avatar" data-st-avatar></span><span class="st-who"><strong data-st-name></strong><small data-st-time></small></span><button data-st-mute title="Mute">${sicon("volume")}</button><button data-st-menu title="Status options">⋮</button><button data-st-close title="Close">${sicon("x")}</button></div><div class="st-body" data-st-body></div><div class="st-cap" data-st-cap></div><button class="st-arrow left" data-st-prev title="Previous">‹</button><button class="st-arrow right" data-st-next title="Next">›</button>`;
+  overlay.innerHTML = `<div class="st-progress" data-st-progress></div><div class="st-head"><span class="st-avatar" data-st-avatar></span><span class="st-who"><strong data-st-name></strong><small data-st-time></small></span><button type="button" data-st-mute title="Mute">${sicon("volume")}</button><button type="button" data-st-menu title="Status options">⋮</button><button type="button" data-st-close title="Close">${sicon("x")}</button></div><div class="st-body" data-st-body></div><div class="st-cap" data-st-cap></div><button type="button" class="st-arrow left" data-st-prev title="Previous">‹</button><button type="button" class="st-arrow right" data-st-next title="Next">›</button>`;
   document.body.append(overlay);
   overlay.querySelector("[data-st-close]").onclick = (e) => {
     e.stopPropagation();
@@ -1768,7 +2530,7 @@ function toggleStatusMenu() {
   const pop = document.createElement("div");
   pop.className = "st-menu";
   pop.setAttribute("data-st-menu-pop", "");
-  pop.innerHTML = `<button data-st-menu-del>${sicon("trash")} Delete status</button>`;
+  pop.innerHTML = `<button type="button" data-st-menu-del>${sicon("trash")} Delete status</button>`;
   overlay.append(pop);
   pop.querySelector("[data-st-menu-del]").onclick = (e) => {
     e.stopPropagation();
@@ -1789,7 +2551,7 @@ function askDeleteStatus(item) {
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
   modal.setAttribute("data-st-confirm", "");
-  modal.innerHTML = `<div class="modal st-confirm"><h2>Delete this status?</h2><p class="muted">This status will be permanently removed.</p><p class="st-confirm-err" data-st-confirm-err hidden></p><div class="modal-actions"><button class="ghost" data-st-confirm-cancel>Cancel</button><button class="danger-button" data-st-confirm-del>Delete</button></div></div>`;
+  modal.innerHTML = `<div class="modal st-confirm"><h2>Delete this status?</h2><p class="muted">This status will be permanently removed.</p><p class="st-confirm-err" data-st-confirm-err hidden></p><div class="modal-actions"><button type="button" class="ghost" data-st-confirm-cancel>Cancel</button><button type="button" class="danger-button" data-st-confirm-del>Delete</button></div></div>`;
   document.body.append(modal);
   const done = (resume) => {
     modal.remove();
@@ -2076,7 +2838,7 @@ function renderDiscover(body) {
   const recommendMarkup = recommended.length
     ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Recommended for you</h2><span class="tag">matched</span></div><div class="grid three">${recommended.map((x) => groupCardWithReason(x.group, x.hits)).join("")}</div></div>`
     : "";
-  body.innerHTML = `${storiesMarkup()}${recommendMarkup}<div class="community-layout"><div class="card"><div class="eyebrow" style="margin-bottom:10px">Subjects</div><div class="category-list">${subjects.map((subject) => `<button class="${activeSubject === subject ? "active" : ""}" data-group-category="${subject}">${subject}</button>`).join("")}</div></div><div><div class="input-row"><input class="input" id="group-search" placeholder="Search groups and topics" aria-label="Search groups and topics"></div><div class="grid three" id="groups-grid">${subjectGroups.map(groupCard).join("") || '<p class="muted">No groups match this subject yet.</p>'}</div></div></div>`;
+  body.innerHTML = `${storiesMarkup()}${recommendMarkup}<div class="community-layout"><div class="card"><div class="eyebrow" style="margin-bottom:10px">Subjects</div><div class="category-list">${subjects.map((subject) => `<button type="button" class="${activeSubject === subject ? "active" : ""}" data-group-category="${subject}">${subject}</button>`).join("")}</div></div><div><div class="input-row"><input class="input" id="group-search" placeholder="Search groups and topics" aria-label="Search groups and topics"></div><div class="grid three" id="groups-grid">${subjectGroups.map(groupCard).join("") || '<p class="muted">No groups match this subject yet.</p>'}</div></div></div>`;
   $$("[data-group-category]", body).forEach(
     (button) =>
       (button.onclick = () => {
@@ -2096,7 +2858,7 @@ function renderDiscover(body) {
   };
   bindGroupButtons(body);
   bindStories(body);
-  body.insertAdjacentHTML("beforeend", `<section class="feed-section"><div class="section-row"><div><div class="eyebrow">Community feed</div><h2 style="margin:5px 0 0">Study notes from the community</h2></div><span class="tag">${visiblePosts().length} posts</span></div><div class="card composer"><textarea class="textarea autogrow" id="post-composer" rows="2" placeholder="Share a useful study insight, milestone, or question..."></textarea><div class="composer-actions"><span class="muted">Be generous with what you learn.</span><button class="primary" id="publish-post">Publish note</button></div></div><div class="feed-list">${visiblePosts().length ? visiblePosts().map((post) => `<article class="card post" data-post="${post.id}"><div class="post-author"><div class="avatar">${avatarMarkup(post.photo, post.avatar || state.profile.avatar)}</div><div><strong>${esc(post.author || state.profile.name)}</strong><small>@${esc(post.handle || state.profile.handle)}${post.university ? ` · ${esc(post.university)}` : ""} · ${new Date(post.time).toLocaleDateString()}</small></div>${postMenuMarkup(post)}</div><div class="post-text" data-post-text="${post.id}"><p>${esc(post.text)}</p>${post.editedAt ? '<small class="muted">(edited)</small>' : ""}</div><div class="post-actions"><button data-like-post="${post.id}" class="${(post.likedBy || []).includes(postOwnerId()) ? "liked" : ""}">${(post.likedBy || []).includes(postOwnerId()) ? sicon("heart-filled") : sicon("heartOutline")} ${post.likes || 0}</button><button data-comment-toggle="${post.id}">${sicon("chat")} ${(post.comments || []).length ? `${post.comments.length} ` : ""}Comments</button></div><div class="post-comments" data-comments="${post.id}" hidden></div></article>`).join("") : '<div class="card empty-state"><div class="emoji">' + sicon("sparkle") + '</div><h3>The feed is waiting for your first note</h3><p class="muted">Share a small insight and make someone else’s study session easier.</p></div>'}</div></section>`);
+  body.insertAdjacentHTML("beforeend", `<section class="feed-section"><div class="section-row"><div><div class="eyebrow">Community feed</div><h2 style="margin:5px 0 0">Study notes from the community</h2></div><span class="tag">${visiblePosts().length} posts</span></div><div class="card composer"><textarea class="textarea autogrow" id="post-composer" rows="2" placeholder="Share a useful study insight, milestone, or question..."></textarea><div class="composer-actions"><span class="muted">Be generous with what you learn.</span><button type="button" class="primary" id="publish-post">Publish note</button></div></div><div class="feed-list">${visiblePosts().length ? visiblePosts().map((post) => `<article class="card post" data-post="${post.id}"><div class="post-author"><div class="avatar">${avatarMarkup(post.photo, post.avatar || state.profile.avatar)}</div><div><strong>${esc(post.author || state.profile.name)}</strong><small>@${esc(post.handle || state.profile.handle)}${post.university ? ` · ${esc(post.university)}` : ""} · ${new Date(post.time).toLocaleDateString()}</small></div>${postMenuMarkup(post)}</div><div class="post-text" data-post-text="${post.id}"><p>${esc(post.text)}</p>${post.editedAt ? '<small class="muted">(edited)</small>' : ""}</div><div class="post-actions"><button type="button" data-like-post="${post.id}" class="${(post.likedBy || []).includes(postOwnerId()) ? "liked" : ""}">${(post.likedBy || []).includes(postOwnerId()) ? sicon("heart-filled") : sicon("heartOutline")} ${post.likes || 0}</button><button type="button" data-comment-toggle="${post.id}">${sicon("chat")} ${(post.comments || []).length ? `${post.comments.length} ` : ""}Comments</button></div><div class="post-comments" data-comments="${post.id}" hidden></div></article>`).join("") : '<div class="card empty-state"><div class="emoji">' + sicon("sparkle") + '</div><h3>The feed is waiting for your first note</h3><p class="muted">Share a small insight and make someone else’s study session easier.</p></div>'}</div></section>`);
   bindFeed(body);
 }
 
@@ -2115,7 +2877,7 @@ function visiblePosts() {
 }
 function postMenuMarkup(post) {
   const own = isOwnPost(post);
-  return `<div class="post-menu-wrap"><button class="icon-btn post-menu-btn" data-post-menu="${post.id}" title="Note options" aria-label="Note options">⋮</button><div class="post-menu" data-post-pop="${post.id}" hidden>${own ? `<button data-post-edit="${post.id}">Edit</button><button class="danger" data-post-del="${post.id}">Delete</button>` : `<button data-post-block="${esc(post.handle || post.author || "")}" data-post-name="${esc(post.author || post.handle || "this user")}">Block author</button>`}</div></div>`;
+  return `<div class="post-menu-wrap"><button type="button" class="icon-btn post-menu-btn" data-post-menu="${post.id}" title="Note options" aria-label="Note options">⋮</button><div class="post-menu" data-post-pop="${post.id}" hidden>${own ? `<button type="button" data-post-edit="${post.id}">Edit</button><button type="button" class="danger" data-post-del="${post.id}">Delete</button>` : `<button type="button" data-post-block="${esc(post.handle || post.author || "")}" data-post-name="${esc(post.author || post.handle || "this user")}">Block author</button>`}</div></div>`;
 }
 function isOwnPost(p) {
   if (!p) return false;
@@ -2142,7 +2904,7 @@ function startPostEdit(id) {
   const article = document.querySelector(`[data-post="${id}"]`);
   const wrap = article && article.querySelector("[data-post-text]");
   if (!wrap) return;
-  wrap.innerHTML = `<textarea class="textarea autogrow" data-post-editor rows="3">${esc(post.text)}</textarea><div class="post-edit-actions"><button class="ghost" data-post-cancel>Cancel</button><button class="primary" data-post-save>Save</button></div>`;
+  wrap.innerHTML = `<textarea class="textarea autogrow" data-post-editor rows="3">${esc(post.text)}</textarea><div class="post-edit-actions"><button type="button" class="ghost" data-post-cancel>Cancel</button><button type="button" class="primary" data-post-save>Save</button></div>`;
   const ed = wrap.querySelector("[data-post-editor]");
   fitTextarea(ed);
   try {
@@ -2171,7 +2933,7 @@ function askDeletePost(id) {
   closePostMenus();
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
-  modal.innerHTML = `<div class="modal"><div class="eyebrow">Delete note</div><h2>Delete this study note?</h2><p class="muted">This action cannot be undone.</p><p class="st-confirm-err" data-post-del-err hidden></p><div class="modal-actions"><button class="ghost" data-post-del-cancel>Cancel</button><button class="danger-button" data-post-del-go>Delete</button></div></div>`;
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Delete note</div><h2>Delete this study note?</h2><p class="muted">This action cannot be undone.</p><p class="st-confirm-err" data-post-del-err hidden></p><div class="modal-actions"><button type="button" class="ghost" data-post-del-cancel>Cancel</button><button type="button" class="danger-button" data-post-del-go>Delete</button></div></div>`;
   $("#modal-root").append(modal);
   const err = modal.querySelector("[data-post-del-err]");
   const go = modal.querySelector("[data-post-del-go]");
@@ -2317,7 +3079,7 @@ function renderComments(box, postId) {
   const post = state.posts.find((item) => item.id === postId);
   if (!post) return;
   const comments = post.comments || [];
-  box.innerHTML = `${comments.map((c) => `<div class="comment"><div class="avatar avatar-sm">${avatarMarkup(c.photo, c.avatar || "?")}</div><div class="comment-body"><strong>${esc(c.author)}</strong><small> @${esc(c.handle)} · ${new Date(c.time).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</small><p>${esc(c.text)}</p></div></div>`).join("")}<div class="input-row"><textarea class="input autogrow" data-comment-input rows="1" placeholder="Write a comment... (Shift + Enter for a new line)" aria-label="Write a comment"></textarea><button class="primary" data-comment-send>Post</button></div>`;
+  box.innerHTML = `${comments.map((c) => `<div class="comment"><div class="avatar avatar-sm">${avatarMarkup(c.photo, c.avatar || "?")}</div><div class="comment-body"><strong>${esc(c.author)}</strong><small> @${esc(c.handle)} · ${new Date(c.time).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</small><p>${esc(c.text)}</p></div></div>`).join("")}<div class="input-row"><textarea class="input autogrow" data-comment-input rows="1" placeholder="Write a comment... (Shift + Enter for a new line)" aria-label="Write a comment"></textarea><button type="button" class="primary" data-comment-send>Post</button></div>`;
   const input = $("[data-comment-input]", box);
   const send = () => {
     const text = input.value.trim();
@@ -2362,7 +3124,11 @@ function subjectForGroup(group) {
 
 function groupCard(g) {
   const joined = get("sf-joined", []).includes(g.id);
-  return `<article class="card group-card"><div class="group-top"><div class="group-logo">${g.emoji}</div><div><h3>${esc(g.name)}</h3><span class="muted">${g.members || 1} learners</span></div></div><p class="muted" style="margin-top:13px">${esc(g.description)}</p><div>${(g.tags || []).map((tag) => `<span class="tag" style="margin-right:4px">#${esc(tag)}</span>`).join("")}</div><div class="actions">${joined ? `<button class="primary" data-open-group="${g.id}" style="flex:1;padding:9px">Open chat</button><button class="ghost" data-leave-group="${g.id}">Leave</button>` : `<button class="ghost" data-join-group="${g.id}" style="flex:1">Join group</button>`}</div></article>`;
+  const vis = g.visibility === "private"
+    ? `<span class="tag" title="Invite-only">${sicon("lock")} private</span>`
+    : (g.source === "cloud" ? `<span class="tag" title="Listed in Discover">public</span>` : "");
+  const role = g.myRole && g.myRole !== "member" ? `<span class="tag">${esc(g.myRole)}</span>` : "";
+  return `<article class="card group-card"><div class="group-top">${groupAvatarMarkup(g)}<div><h3>${esc(g.name)}</h3><span class="muted">${g.members || 1} learners</span> ${vis}${role}</div></div><p class="muted" style="margin-top:13px">${esc(g.description)}</p><div>${(g.tags || []).map((tag) => `<span class="tag" style="margin-right:4px">#${esc(tag)}</span>`).join("")}</div><div class="actions">${joined ? `<button type="button" class="primary" data-open-group="${g.id}" style="flex:1;padding:9px">Open chat</button><button type="button" class="ghost" data-leave-group="${g.id}">Leave</button>` : `<button type="button" class="ghost" data-join-group="${g.id}" style="flex:1">Join group</button>`}</div></article>`;
 }
 
 function bindGroupButtons(root) {
@@ -2395,7 +3161,16 @@ function bindGroupButtons(root) {
           get("sf-joined", []).filter((id) => id !== b.dataset.leaveGroup),
         );
         renderCommunity();
-        if (backendConfigured && state.user) {
+        if (signedIn()) {
+          // Server-side leave (handles owner transfer server-side); falls
+          // back to the legacy membership delete on older projects.
+          groupLeave(b.dataset.leaveGroup).then(({ error } = {}) => {
+            if (error && !isPhase7Missing(error)) {
+              leaveCloudGroup(b.dataset.leaveGroup).catch(() => {});
+            }
+            refreshCloudGroups(true).catch(() => {});
+          }).catch(() => {});
+        } else if (backendConfigured && state.user) {
           leaveCloudGroup(b.dataset.leaveGroup).catch(() => {});
         }
       }),
@@ -2403,29 +3178,65 @@ function bindGroupButtons(root) {
 }
 
 function renderMyGroups(body) {
-  body.innerHTML = `<div class="card" style="margin-bottom:18px"><h2>Create a study group</h2><div class="grid two"><input class="input" id="new-group-name" placeholder="Group name"><select class="select" id="new-group-logo" aria-label="Group icon" style="max-width:190px">${["book", "fire", "star", "target", "users", "globe", "rocket", "palette", "music", "brain", "chat", "trophy"].map((n) => `<option value="${n}">${n[0].toUpperCase() + n.slice(1)}</option>`).join("")}</select><input class="input" id="new-group-focus" placeholder="Focus topics, separated by commas"><textarea class="textarea autogrow" id="new-group-description" placeholder="Describe what your group studies"></textarea></div><p class="muted" style="margin:8px 0 0">Every group is public — other learners can discover it and join.</p><button class="primary" id="create-group" style="margin-top:12px">Create group</button></div><div class="grid three">${
+  body.innerHTML = `<div class="card" style="margin-bottom:18px"><h2>Create a study group</h2><div class="grid two"><input class="input" id="new-group-name" placeholder="Group name"><select class="select" id="new-group-logo" aria-label="Group icon" style="max-width:190px">${["book", "fire", "star", "target", "users", "globe", "rocket", "palette", "music", "brain", "chat", "trophy"].map((n) => `<option value="${n}">${n[0].toUpperCase() + n.slice(1)}</option>`).join("")}</select><input class="input" id="new-group-focus" placeholder="Focus topics, separated by commas"><select class="select" id="new-group-vis" aria-label="Group visibility" title="Private groups stay invite-only; public groups appear in Discover"><option value="private">Private — invite only</option><option value="public">Public — listed in Discover</option></select><textarea class="textarea autogrow" id="new-group-description" placeholder="Describe what your group studies"></textarea></div><p class="muted" style="margin:8px 0 0">Private groups stay invite-only. Public groups appear in Discover for everyone.</p><button type="button" class="primary" id="create-group" style="margin-top:12px">Create group</button></div><div class="grid three">${
     allGroups()
       .filter((g) => get("sf-joined", []).includes(g.id))
       .map(groupCard)
       .join("") ||
-    '<p class="muted">No groups yet. Create one above — it appears in Discover for everyone.</p>'
+    '<p class="muted">No groups yet. Create one above — private stays invite-only, public appears in Discover.</p>'
   }</div>`;
   $("#create-group", body).onclick = async () => {
     if (!requireAuth("create study groups")) return;
     const name = $("#new-group-name").value.trim(),
       desc = $("#new-group-description").value.trim();
     if (!name || !desc) return notify("Add a name and description first");
+    const logo = $("#new-group-logo")?.value || "book";
+    const tags = $("#new-group-focus").value.split(",").map((x) => x.trim()).filter(Boolean);
+    const visibility = $("#new-group-vis")?.value === "public" ? "public" : "private";
+    // Signed-in users create the group on the server (roles + RLS enforced
+    // there); the entry below is an optimistic mirror replaced on refresh.
+    if (signedIn()) {
+      const btn = $("#create-group", body);
+      btn.disabled = true;
+      btn.textContent = "Creating…";
+      try {
+        const { data, error } = await groupCreate({ name, description: desc, logo, topics: tags, visibility });
+        if (error) throw error;
+        const g = {
+          id: data.id, name, emoji: sicon(logo), logoName: logo,
+          ownerId: state.user.id, description: desc, tags, members: 1,
+          visibility, color: "#47765a", source: "cloud", myRole: "owner",
+        };
+        cloudGroups = [g, ...cloudGroups.filter((x) => x.id !== g.id)];
+        cloudGroupsAt = Date.now();
+        save("sf-joined", [...new Set([...get("sf-joined", []), g.id])]);
+        notify(visibility === "public" ? "Group created — listed in Discover" : "Private group created — invite members from the chat");
+        renderCommunity();
+        refreshCloudGroups(true).then(() => {
+          if (state.tab === "community") renderCommunity();
+        }).catch(() => {});
+        return;
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = "Create group";
+        if (isPhase7Missing(err)) {
+          notify("Cloud groups need the latest database update — saved on this device instead");
+        } else if (!navigator.onLine) {
+          notify("You're offline — group saved on this device");
+        } else {
+          notify("Couldn't create the group — " + String(err?.message || err).slice(0, 120));
+          return;
+        }
+      }
+    }
     const g = {
       id: "custom-" + uid(),
       name,
-      emoji: sicon($("#new-group-logo")?.value || "book"),
-      logoName: $("#new-group-logo")?.value || "book",
+      emoji: sicon(logo),
+      logoName: logo,
       ownerId: chatKey(),
       description: desc,
-      tags: $("#new-group-focus")
-        .value.split(",")
-        .map((x) => x.trim())
-        .filter(Boolean),
+      tags,
       members: 1,
       visibility: "public",
       color: "#47765a",
@@ -2476,7 +3287,7 @@ function myReferralCode() {
 function referralMarkup() {
   const code = myReferralCode();
   const count = (state.referrals.redeemed || []).length;
-  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Referral rewards</h2><span class="tag">+30 ${sicon("coin")}</span></div><p class="muted">Your code <strong>${esc(code)}</strong> · ${count} redeemed. Friends who redeem it get +30 coins instantly — yours lands when cloud accounts connect.</p><div class="input-row"><input class="input" id="referral-code" placeholder="Enter a friend's code" aria-label="Referral code"><button class="primary" id="referral-redeem">Redeem</button><button class="ghost" id="referral-share">Share mine</button></div></div>`;
+  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Referral rewards</h2><span class="tag">+30 ${sicon("coin")}</span></div><p class="muted">Your code <strong>${esc(code)}</strong> · ${count} redeemed. Friends who redeem it get +30 coins instantly — yours lands when cloud accounts connect.</p><div class="input-row"><input class="input" id="referral-code" placeholder="Enter a friend's code" aria-label="Referral code"><button type="button" class="primary" id="referral-redeem">Redeem</button><button type="button" class="ghost" id="referral-share">Share mine</button></div></div>`;
 }
 
 function redeemReferral(root) {
@@ -2490,15 +3301,111 @@ function redeemReferral(root) {
   if (redeemed.includes(code)) return notify("Code already redeemed");
   redeemed.push(code);
   state.referrals.redeemed = redeemed;
-  addCoins(30);
+  try {
+    secureEarn({ amount: 30, reason: "Referral redeemed", refKey: `referral:${code}` }).catch(() => {});
+  } catch {
+    addCoins(30);
+  }
   persist();
   renderCommunity();
   celebrate(false);
   notify("Referral accepted · +30 coins");
 }
 
+let friendSearch = { q: "", results: [], searching: false };
+function cloudFriendsMarkup() {
+  const incoming = cloudFriendReqs.filter((r) => r.incoming);
+  const outgoing = cloudFriendReqs.filter((r) => !r.incoming);
+  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Connections</h2><span class="tag">${cloudFriends.length} connected${incoming.length ? ` · ${incoming.length} request${incoming.length === 1 ? "" : "s"}` : ""}</span></div>`
+    + (incoming.length ? `<div class="eyebrow" style="margin:8px 0 6px">Requests</div><div class="grid">${incoming.map((r) => `<div class="task"><div class="avatar">${esc((r.handle[0] || "?").toUpperCase())}</div><span class="task-text"><strong>@${esc(r.handle)}</strong><br><small class="muted">${esc(r.name)}</small></span><span class="friend-actions"><button type="button" class="primary" data-fr-accept="${r.id}">Accept</button><button type="button" class="ghost" data-fr-decline="${r.id}">Decline</button></span></div>`).join("")}</div>` : "")
+    + (cloudFriends.length ? `<div class="grid" style="margin-top:10px">${cloudFriends.map((f) => `<div class="task"><div class="avatar">${esc((f.handle[0] || "?").toUpperCase())}</div><span class="task-text"><strong>@${esc(f.handle)}</strong><br><small class="muted">${esc(f.name)}</small></span><span class="friend-actions"><button type="button" class="ghost" data-fr-msg="${f.id}">Message</button><button type="button" class="ghost" data-fr-unfriend="${f.id}">Remove</button></span></div>`).join("")}</div>`
+      : '<p class="muted">No connections yet — search below and send a request. Accepting notifies them automatically.</p>')
+    + (outgoing.length ? `<div class="eyebrow" style="margin:10px 0 6px">Sent (${outgoing.length})</div><div class="grid">${outgoing.map((r) => `<div class="task"><div class="avatar">…</div><span class="task-text"><strong>@${esc(r.handle)}</strong><br><small class="muted">pending</small></span><span class="friend-actions"><button type="button" class="ghost" data-fr-cancel="${r.id}">Cancel</button></span></div>`).join("")}</div>` : "")
+    + `</div><div class="card" style="margin-bottom:18px"><h2>Find people</h2><p class="muted">Search by username or name. Only public identity is ever shown.</p><div class="input-row"><input class="input" id="friend-search" placeholder="Username or name (min 2 letters)" aria-label="Search people" value="${esc(friendSearch.q)}"></div><div class="grid" id="friend-search-results">${friendSearch.searching ? '<p class="muted">Searching…</p>' : friendSearch.results.map((u) => {
+      const known = cloudFriends.some((f) => f.id === u.id) || cloudFriendReqs.some((r) => r.otherId === u.id);
+      return `<div class="task"><div class="avatar">${esc(((u.handle || "?")[0] || "?").toUpperCase())}</div><span class="task-text"><strong>@${esc(u.handle || "?")}</strong><br><small class="muted">${esc(u.name || "")}${u.bio ? ` · ${esc(u.bio.slice(0, 60))}` : ""}</small></span><span class="friend-actions">${known ? '<span class="tag">added</span>' : `<button type="button" class="primary" data-fr-add="${u.id}">Add</button>`}</span></div>`;
+    }).join("") || (friendSearch.q.length >= 2 ? '<p class="muted">No matches. Check the spelling.</p>' : "")}</div></div>`;
+}
+function bindCloudFriends(body) {
+  if (!signedIn()) return;
+  // Repaint only when the data actually changed — otherwise the
+  // refresh-then-render cycle would loop forever.
+  const before = cloudSocialSig();
+  refreshCloudSocial(false).then(() => {
+    if (state.tab === "community" && state.subtab === "friends" && cloudSocialSig() !== before) renderCommunity();
+  }).catch(() => {});
+  const input = $("#friend-search", body);
+  let t = 0;
+  input?.addEventListener("input", () => {
+    clearTimeout(t);
+    t = setTimeout(async () => {
+      friendSearch.q = input.value.trim();
+      const box = $("#friend-search-results", body);
+      if (friendSearch.q.length < 2) {
+        friendSearch.results = [];
+        if (box) renderFriends(body);
+        return;
+      }
+      friendSearch.searching = true;
+      if (box) box.innerHTML = '<p class="muted">Searching…</p>';
+      try {
+        const { data, error } = await searchUsers(friendSearch.q, 8);
+        if (error) throw error;
+        friendSearch.results = Array.isArray(data) ? data : [];
+      } catch {
+        friendSearch.results = [];
+      }
+      friendSearch.searching = false;
+      if (state.subtab === "friends") renderFriends(body);
+      const again = $("#friend-search", body);
+      if (again) {
+        again.focus();
+        try { again.setSelectionRange(again.value.length, again.value.length); } catch { /* ignore */ }
+      }
+    }, 350);
+  });
+  $$("[data-fr-add]", body).forEach((b) => (b.onclick = async () => {
+    b.disabled = true;
+    const { error } = await sendFriendRequest(b.dataset.frAdd);
+    notify(error ? "Couldn't send — " + String(error.message).slice(0, 90) : "Request sent");
+    await refreshCloudSocial(true).catch(() => {});
+    if (state.subtab === "friends") renderFriends(body);
+  }));
+  $$("[data-fr-accept]", body).forEach((b) => (b.onclick = async () => {
+    b.disabled = true;
+    const { error } = await respondFriendRequest(b.dataset.frAccept, true);
+    notify(error ? "Couldn't accept — " + String(error.message).slice(0, 90) : "Connected — they were notified");
+    await refreshCloudSocial(true).catch(() => {});
+    if (state.subtab === "friends") renderFriends(body);
+  }));
+  $$("[data-fr-decline]", body).forEach((b) => (b.onclick = async () => {
+    await respondFriendRequest(b.dataset.frDecline, false);
+    await refreshCloudSocial(true).catch(() => {});
+    if (state.subtab === "friends") renderFriends(body);
+  }));
+  $$("[data-fr-cancel]", body).forEach((b) => (b.onclick = async () => {
+    const req = cloudFriendReqs.find((r) => r.id === b.dataset.frCancel);
+    if (req) await removeFriend(req.otherId).catch(() => {});
+    await refreshCloudSocial(true).catch(() => {});
+    if (state.subtab === "friends") renderFriends(body);
+  }));
+  $$("[data-fr-unfriend]", body).forEach((b) => (b.onclick = () => {
+    confirmBox("Remove this connection?", "You will stop seeing each other's updates and DMs will close.", async () => {
+      await removeFriend(b.dataset.frUnfriend).catch(() => {});
+      await refreshCloudSocial(true).catch(() => {});
+      if (state.subtab === "friends") renderFriends(body);
+      notify("Connection removed");
+    });
+  }));
+  $$("[data-fr-msg]", body).forEach((b) => (b.onclick = () => {
+    state.subtab = "messages";
+    state.activeChat = b.dataset.frMsg;
+    renderCommunity();
+  }));
+}
 function renderFriends(body) {
-  body.innerHTML = `<div class="card" style="margin-bottom:18px"><h2>Invite study buddies</h2><p class="muted">Friends join with your username. Share this invite anywhere — anyone who installs StudyFlow can add you in seconds.</p><div class="input-row"><input class="input" id="invite-link" readonly value="${esc(inviteText())}"><button class="primary" id="copy-invite">Copy</button><button class="ghost" id="share-invite">Share</button></div></div>${referralMarkup()}<div class="card"><h2>Friends & gifting</h2><p class="muted">Add study partners here. They will also appear as gift recipients in the Rewards store.</p><div class="input-row"><input class="input" id="friend-name" placeholder="Username" aria-label="Friend username"><button class="primary" id="add-friend">Add friend</button></div><div class="grid">${state.friends.map((f) => `<div class="task"><div class="avatar">${f.username[0].toUpperCase()}</div><span class="task-text">@${esc(f.username)}</span><span class="friend-actions"><button class="ghost" data-chat-friend="${f.id}">Message</button><button class="ghost" data-block-friend="${f.id}">Block</button><button class="delete" data-remove-friend="${f.id}" title="Remove friend">×</button></span></div>`).join("") || '<p class="muted">Add a friend to send gifts and messages.</p>'}</div>${blockedSectionMarkup()}</div></div>`;
+  body.innerHTML = `<div class="card" style="margin-bottom:18px"><h2>Invite study buddies</h2><p class="muted">Friends join with your username. Share this invite anywhere — anyone who installs StudyFlow can add you in seconds.</p><div class="input-row"><input class="input" id="invite-link" readonly value="${esc(inviteText())}"><button type="button" class="primary" id="copy-invite">Copy</button><button type="button" class="ghost" id="share-invite">Share</button></div></div>${signedIn() ? cloudFriendsMarkup() : ""}${referralMarkup()}<div class="card"><h2>Friends & gifting</h2><p class="muted">Add study partners here. They will also appear as gift recipients in the Rewards store.</p><div class="input-row"><input class="input" id="friend-name" placeholder="Username" aria-label="Friend username"><button type="button" class="primary" id="add-friend">Add friend</button></div><div class="grid">${state.friends.map((f) => `<div class="task"><div class="avatar">${f.username[0].toUpperCase()}</div><span class="task-text">@${esc(f.username)}</span><span class="friend-actions"><button type="button" class="ghost" data-chat-friend="${f.id}">Message</button><button type="button" class="ghost" data-block-friend="${f.id}">Block</button><button type="button" class="delete" data-remove-friend="${f.id}" title="Remove friend">×</button></span></div>`).join("") || '<p class="muted">Add a friend to send gifts and messages.</p>'}</div>${blockedSectionMarkup()}</div></div>`;
+  bindCloudFriends(body);
   $("#add-friend", body).onclick = () => {
     if (!requireAuth("add study buddies")) return;
     const name = $("#friend-name").value.trim();
@@ -2620,7 +3527,7 @@ function askBlockUser(ref) {
   const existing = (state.blocks || {})[key];
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
-  modal.innerHTML = `<div class="modal"><div class="eyebrow">Safety & privacy</div><h2>Block ${esc(name)}?</h2><p class="muted">Blocking will limit interactions between you and this account — no more direct messages, and their notes leave your feed.${existing ? " You have reported them before — continuing updates your report." : ""}</p><div class="modal-actions"><button class="ghost" data-block-cancel>Cancel</button><button class="danger-button" data-block-continue>Block User</button></div></div>`;
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Safety & privacy</div><h2>Block ${esc(name)}?</h2><p class="muted">Blocking will limit interactions between you and this account — no more direct messages, and their notes leave your feed.${existing ? " You have reported them before — continuing updates your report." : ""}</p><div class="modal-actions"><button type="button" class="ghost" data-block-cancel>Cancel</button><button type="button" class="danger-button" data-block-continue>Block User</button></div></div>`;
   $("#modal-root").append(modal);
   modal.querySelector("[data-block-cancel]").onclick = () => modal.remove();
   modal.addEventListener("click", (e) => {
@@ -2635,7 +3542,7 @@ function blockReasonDialog(ref) {
   const name = ref.name || (ref.username ? "@" + ref.username : "this user");
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
-  modal.innerHTML = `<div class="modal"><div class="eyebrow">Report · ${esc(name)}</div><h2>Why are you blocking this user?</h2><p class="muted">Pick the closest reason. Reports go to moderation — never public.</p><div class="reason-list" data-block-reasons>${BLOCK_REASONS.map((r) => `<label><input type="radio" name="block-reason" value="${esc(r)}"> ${esc(r)}</label>`).join("")}</div><label class="field-label" data-block-other-wrap hidden>Tell us more about what happened<textarea class="textarea autogrow" data-block-other rows="3" placeholder="What did they do? Which content was inappropriate?"></textarea></label><p class="st-confirm-err" data-block-err hidden></p><div class="modal-actions"><button class="ghost" data-block-back>Back</button><button class="danger-button" data-block-submit>Submit</button></div></div>`;
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Report · ${esc(name)}</div><h2>Why are you blocking this user?</h2><p class="muted">Pick the closest reason. Reports go to moderation — never public.</p><div class="reason-list" data-block-reasons>${BLOCK_REASONS.map((r) => `<label><input type="radio" name="block-reason" value="${esc(r)}"> ${esc(r)}</label>`).join("")}</div><label class="field-label" data-block-other-wrap hidden>Tell us more about what happened<textarea class="textarea autogrow" data-block-other rows="3" placeholder="What did they do? Which content was inappropriate?"></textarea></label><p class="st-confirm-err" data-block-err hidden></p><div class="modal-actions"><button type="button" class="ghost" data-block-back>Back</button><button type="button" class="danger-button" data-block-submit>Submit</button></div></div>`;
   $("#modal-root").append(modal);
   const err = modal.querySelector("[data-block-err]");
   const otherWrap = modal.querySelector("[data-block-other-wrap]");
@@ -2713,8 +3620,20 @@ async function submitBlock(ref, reasons, complaint) {
   };
   state.reports = [...(state.reports || []).filter((r) => r.reportedKey !== key), report];
   if (ref.id) state.friends = (state.friends || []).filter((f) => f.id !== ref.id);
+  cloudFriends = cloudFriends.filter((f) => f.id !== ref.id);
   persist();
   let cloudOk = true;
+  // Server-side block (uuid accounts): enforces DM/group/message exclusion
+  // in RLS and severs the connection. Usernames-only refs stay local.
+  if (signedIn() && isUuid(ref.id)) {
+    try {
+      const { error } = await blockUser(ref.id);
+      if (error && !isPhase7Missing(error)) cloudOk = false;
+      else cloudBlocked.add(ref.id);
+    } catch {
+      cloudOk = false;
+    }
+  }
   try {
     const { error } = await reportUser({
       reportedUserId: isUuid(ref.id) ? ref.id : null,
@@ -2731,25 +3650,99 @@ async function submitBlock(ref, reasons, complaint) {
 }
 function unblockUser(key) {
   const blocks = { ...(state.blocks || {}) };
-  if (!blocks[key]) return;
+  const entry = blocks[key];
+  if (!entry) return;
   delete blocks[key];
   state.blocks = blocks;
   persist();
+  if (signedIn() && isUuid(entry.id)) {
+    cloudBlocked.delete(entry.id);
+    serverUnblock(entry.id).catch(() => {});
+  }
   renderCommunity();
   notify("User unblocked");
 }
 function blockedSectionMarkup() {
   const list = Object.values(state.blocks || {});
   if (!list.length) return "";
-  return `<div class="section-row" style="margin-top:18px"><h3>Blocked users (${list.length})</h3><span class="tag">private</span></div><p class="muted">They cannot message you, and their notes stay out of your feed. Reports remain with moderation.</p><div class="grid">${list.map((b) => `<div class="task"><div class="avatar">⊘</div><span class="task-text"><strong>${esc(b.name)}</strong><br><small class="muted">${esc((b.reasons || []).join(" · "))}${b.ts ? ` · ${new Date(b.ts).toLocaleDateString()}` : ""}</small></span><span class="friend-actions"><button class="ghost" data-unblock="${esc(b.key)}">Unblock</button></span></div>`).join("")}</div>`;
+  return `<div class="section-row" style="margin-top:18px"><h3>Blocked users (${list.length})</h3><span class="tag">private</span></div><p class="muted">They cannot message you, and their notes stay out of your feed. Reports remain with moderation.</p><div class="grid">${list.map((b) => `<div class="task"><div class="avatar">⊘</div><span class="task-text"><strong>${esc(b.name)}</strong><br><small class="muted">${esc((b.reasons || []).join(" · "))}${b.ts ? ` · ${new Date(b.ts).toLocaleDateString()}` : ""}</small></span><span class="friend-actions"><button type="button" class="ghost" data-unblock="${esc(b.key)}">Unblock</button></span></div>`).join("")}</div>`;
+}
+let cloudNotifList = [];
+let cloudNotifListAt = 0;
+function notifTime(ts) {
+  try {
+    return new Date(ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return "";
+  }
+}
+function renderNotifications(body) {
+  if (!signedIn()) {
+    body.innerHTML = `<div class="card"><h2>Notifications</h2><p class="muted">Sign in to see group invites, connection updates and group activity.</p></div>`;
+    return;
+  }
+  body.innerHTML = `<div class="card"><div class="section-row"><h2>Notifications</h2><span class="tag" data-notif-tag>${cloudNotifCount ? `${cloudNotifCount} unread` : "up to date"}</span></div><div data-notif-list><p class="muted">Loading…</p></div><div class="modal-actions"><button type="button" class="ghost" data-notif-read-all>Mark all read</button></div></div>`;
+  const paint = (list) => {
+    const box = body.querySelector("[data-notif-list]");
+    if (!box) return;
+    box.innerHTML = list.length ? list.map((n) => `<div class="task"><div class="avatar">${sicon(n.type === "connection" ? "users" : n.type === "group_removed" ? "run" : "bell")}</div><span class="task-text"><strong>${esc(n.title)}</strong><br><small class="muted">${esc(n.text || "")} · ${notifTime(n.created_at)}</small></span><span class="friend-actions">${!n.read_at ? `<span class="tag">new</span>` : ""}${n.metadata?.group_id ? `<button type="button" class="primary" data-notif-open="${n.id}">Open</button>` : ""}</span></div>`).join("")
+      : '<p class="muted">Nothing yet. Group invites, new connections and group activity land here.</p>';
+    box.querySelectorAll("[data-notif-open]").forEach((b) => (b.onclick = async () => {
+      const item = list.find((x) => x.id === b.dataset.notifOpen);
+      if (item && !item.read_at) {
+        markNotificationRead(item.id).catch(() => {});
+        item.read_at = new Date().toISOString();
+        cloudNotifCount = Math.max(0, cloudNotifCount - 1);
+      }
+      const gid = item?.metadata?.group_id;
+      if (gid) {
+        await refreshCloudGroups(true).catch(() => {});
+        state.subtab = "messages";
+        state.activeChat = gid;
+      } else {
+        state.subtab = "friends";
+      }
+      renderCommunity();
+    }));
+  };
+  paint(cloudNotifList);
+  listNotifications(30).then(({ data, error } = {}) => {
+    if (error || !Array.isArray(data)) {
+      const box = body.querySelector("[data-notif-list]");
+      if (box && !cloudNotifList.length) box.innerHTML = '<p class="muted">Couldn\'t load notifications — check your connection.</p>';
+      return;
+    }
+    cloudNotifList = data;
+    cloudNotifListAt = Date.now();
+    cloudNotifCount = data.filter((n) => !n.read_at).length;
+    cloudNotifAt = Date.now();
+    if (state.tab === "community" && state.subtab === "notifications") {
+      paint(data);
+      const tag = body.querySelector("[data-notif-tag]");
+      if (tag) tag.textContent = cloudNotifCount ? `${cloudNotifCount} unread` : "up to date";
+      const tab = document.querySelector('[data-subtab="notifications"]');
+      if (tab) tab.textContent = `Notifications${cloudNotifCount ? ` (${cloudNotifCount})` : ""}`;
+    }
+  }).catch(() => {});
+  body.querySelector("[data-notif-read-all]").onclick = async () => {
+    await markAllNotificationsRead().catch(() => {});
+    cloudNotifList = cloudNotifList.map((n) => ({ ...n, read_at: n.read_at || new Date().toISOString() }));
+    cloudNotifCount = 0;
+    renderCommunity();
+    notify("All caught up");
+  };
 }
 function renderMessages(body) {
+  const cloudConns = cloudFriends
+    .filter((f) => !cloudBlocked.has(f.id))
+    .map((f) => ({ id: f.id, username: f.handle, name: f.name, cloud: true }));
   const chats = [
     ...allGroups().filter((g) => get("sf-joined", []).includes(g.id)),
     ...(state.friends || []).filter((f) => !isBlockedKey(f.id)),
+    ...cloudConns.filter((c) => !(state.friends || []).some((f) => f.id === c.id)),
   ];
-  if (state.activeChat && isBlockedKey(state.activeChat)) state.activeChat = null;
-  body.innerHTML = `<div class="card messages"><div class="conversation">${chats.map((c) => `<button class="${state.activeChat === c.id ? "active" : ""}" data-select-chat="${c.id}">${c.emoji || "●"} ${esc(c.name || "@" + c.username)}${isChatMuted(c.id) ? ` <span class="mute-ico" title="Muted">${sicon("mute")}</span>` : ""}</button>`).join("") || '<span class="muted">No conversations yet.</span>'}</div><div class="chat">${state.activeChat ? (groupSearch && groupSearch.id === state.activeChat ? groupSearchMarkup(state.activeChat) : chatMarkup(state.activeChat)) : '<div style="margin:auto" class="muted">Select a group or friend to start messaging.</div>'}</div></div>`;
+  if (state.activeChat && (isBlockedKey(state.activeChat) || cloudBlocked.has(state.activeChat))) state.activeChat = null;
+  body.innerHTML = `<div class="card messages"><div class="conversation">${chats.map((c) => `<button type="button" class="${state.activeChat === c.id ? "active" : ""}" data-select-chat="${c.id}">${c.emoji || "●"} ${esc(c.name || "@" + c.username)}${isChatMuted(c.id) ? ` <span class="mute-ico" title="Muted">${sicon("mute")}</span>` : ""}</button>`).join("") || '<span class="muted">No conversations yet.</span>'}</div><div class="chat">${state.activeChat ? (groupSearch && groupSearch.id === state.activeChat ? groupSearchMarkup(state.activeChat) : chatMarkup(state.activeChat)) : '<div style="margin:auto" class="muted">Select a group or friend to start messaging.</div>'}</div></div>`;
   $$("[data-select-chat]", body).forEach(
     (b) =>
       (b.onclick = () => {
@@ -2769,6 +3762,7 @@ function renderMessages(body) {
     const chatBody = $(".chat-body", body);
     if (chatBody) chatBody.scrollTop = chatBody.scrollHeight;
   }
+  paintGroupAvatars(body);
 }
 
 function chatKey() {
@@ -2822,7 +3816,7 @@ function messageHtml(m) {
     const mine = (m.voters || {})[key];
     body = `<div class="poll-q">${sicon("chart")} ${esc(m.question || "Poll")}</div>${m.options.map((opt, i) => {
       const pct = Math.round((counts[i] / (cast || 1)) * 100);
-      return `<button class="poll-opt${mine === i ? " mine" : ""}" data-poll-vote="${m.id}:${i}"><span class="poll-bar" style="width:${pct}%"></span><span class="poll-label">${esc(opt.text)}${mine === i ? " " + sicon("check") : ""}</span><span class="poll-pct">${pct}%</span></button>`;
+      return `<button type="button" class="poll-opt${mine === i ? " mine" : ""}" data-poll-vote="${m.id}:${i}"><span class="poll-bar" style="width:${pct}%"></span><span class="poll-label">${esc(opt.text)}${mine === i ? " " + sicon("check") : ""}</span><span class="poll-pct">${pct}%</span></button>`;
     }).join("")}<div class="muted" style="font-size:11px">${cast} vote${cast === 1 ? "" : "s"} · tap to ${mine != null ? "change" : "cast"} your vote</div>`;
   } else if (m.kind === "file" && m.url) {
     if (m.mime && m.mime.startsWith("image/")) {
@@ -2852,7 +3846,7 @@ function messageHtml(m) {
     .filter(([, users]) => users && users.length)
     .map(
       ([emoji, users]) =>
-        `<button class="react-chip${users.includes(key) ? " mine" : ""}" data-react="${m.id}:${esc(emoji)}" title="${esc(REACT_LABELS[emoji] || emoji)}">${REACT_LABELS[emoji] || sicon(emoji)} <span>${users.length}</span></button>`,
+        `<button type="button" class="react-chip${users.includes(key) ? " mine" : ""}" data-react="${m.id}:${esc(emoji)}" title="${esc(REACT_LABELS[emoji] || emoji)}">${REACT_LABELS[emoji] || sicon(emoji)} <span>${users.length}</span></button>`,
     )
     .join("");
   const status = m.me
@@ -2862,7 +3856,9 @@ function messageHtml(m) {
         ? "· Delivered"
         : "· Sent"
     : "";
-  return `${quote}${sysIcon}${body}<div class="bubble-tools"><small class="message-meta">${new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} ${status}</small><span class="bubble-actions"><button data-react-open="${m.id}" title="React">${sicon("smile")}</button><button data-reply-to="${m.id}" title="Reply">${sicon("reply")}</button><button data-pin="${m.id}" title="Pin message">${sicon("pin")}</button></span></div>${chips ? `<div class="react-row">${chips}</div>` : ""}<div class="react-picker" data-picker="${m.id}" hidden>${REACT_EMOJI.map((e) => `<button data-react="${m.id}:${e}" title="${REACT_LABELS[e]}" aria-label="React ${REACT_LABELS[e]}">${REACT_LABELS[e]}</button>`).join("")}</div>`;
+  const editedTag = m.edited ? ' · <span class="edited-tag">edited</span>' : "";
+  const canEdit = m.me && (m.kind == null || m.kind === "text") && typeof m.text === "string";
+  return `${quote}${sysIcon}${body}<div class="bubble-tools"><small class="message-meta">${new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} ${status}${editedTag}</small><span class="bubble-actions"><button type="button" data-react-open="${m.id}" title="React">${sicon("smile")}</button><button type="button" data-reply-to="${m.id}" title="Reply">${sicon("reply")}</button><button type="button" data-pin="${m.id}" title="Pin message">${sicon("pin")}</button>${canEdit ? `<button type="button" data-edit-msg="${m.id}" title="Edit message" aria-label="Edit message">${sicon("memo")}</button>` : ""}${m.me ? `<button type="button" data-del-msg="${m.id}" title="Delete message">${sicon("trash")}</button>` : ""}</span></div>${chips ? `<div class="react-row">${chips}</div>` : ""}<div class="react-picker" data-picker="${m.id}" hidden>${REACT_EMOJI.map((e) => `<button type="button" data-react="${m.id}:${e}" title="${REACT_LABELS[e]}" aria-label="React ${REACT_LABELS[e]}">${REACT_LABELS[e]}</button>`).join("")}</div>`;
 }
 
 // ---------- group chat options (three-dot menu + utilities) ----------
@@ -2926,6 +3922,7 @@ function setChatMute(id, choiceId) {
     [id]: c.ms === Infinity ? "forever" : Date.now() + c.ms,
   };
   persist();
+  pushMuteToCloud(id);
   rerenderChat();
   const g = groupById(id);
   notify(c.id === "forever" ? `Muted ${g?.name || "group"} · always` : `Muted ${g?.name || "group"} · ${c.label}`);
@@ -2937,6 +3934,7 @@ function clearChatMute(id) {
   delete next[id];
   state.mutedChats = next;
   persist();
+  pushMuteToCloud(id);
   rerenderChat();
   notify(`Unmuted ${groupById(id)?.name || "group"}`);
   return true;
@@ -2963,16 +3961,18 @@ function groupRoster(id) {
   return [...roster.values()].sort((a, b) => (b.you ? 1 : 0) - (a.you ? 1 : 0) || b.last - a.last);
 }
 function groupMenuMarkup(id) {
-  const owner = isGroupOwner(id);
+  const role = myGroupRole(id);
+  const owner = isGroupOwner(id) || role === "owner";
+  const canManage = owner || role === "admin";
   const muted = isChatMuted(id);
-  const item = (act, icon, label, sub) => `<button data-gact="${act}" data-gid="${esc(id)}"><span class="gact-ico">${sicon(icon)}</span><span class="gact-txt"><strong>${label}</strong>${sub ? `<small>${sub}</small>` : ""}</span></button>`;
+  const item = (act, icon, label, sub) => `<button type="button" data-gact="${act}" data-gid="${esc(id)}"><span class="gact-ico">${sicon(icon)}</span><span class="gact-txt"><strong>${label}</strong>${sub ? `<small>${sub}</small>` : ""}</span></button>`;
   return `${item("search", "search", "Search messages", "Find text, files and links")}`
     + `${item(muted ? "unmute" : "mute", muted ? "volume" : "mute", muted ? "Unmute notifications" : "Mute notifications", muted ? esc(muteLabel(id)) : "Silence this group")}`
     + `${item("media", "film", "Media, files & links", "Photos, videos, files")}`
     + `${item("members", "users", "Members", `${groupRoster(id).length || "No"} active here`)}`
     + `${item("info", "book", "Group info", "About this group")}`
     + `<hr class="gsep">`
-    + `${owner ? item("settings", "gear", "Group settings", "Name, description, topics") : ""}`
+    + `${canManage ? item("settings", "gear", "Group settings", "Name, description, topics") : ""}`
     + `${item("clear", "trash", "Clear local history", "Removes messages on this device")}`
     + `${owner ? "" : item("report", "flag", "Report group", "Alert moderation")}`
     + `${owner ? item("disband", "trash", "Delete group", "Remove this group") : item("leave", "run", "Leave group", "Stop receiving messages")}`;
@@ -3004,7 +4004,8 @@ function togglePinMessage(id, msgId) {
 function chatMarkup(id) {
   const target =
     allGroups().find((g) => g.id === id) ||
-    state.friends.find((f) => f.id === id);
+    state.friends.find((f) => f.id === id) ||
+    cloudFriends.find((f) => f.id === id);
   const msgs = state.messages[id] || [];
   const pinned = pinnedIdsFor(id)
     .map((pid) => msgs.find((m) => m.id === pid))
@@ -3013,9 +4014,9 @@ function chatMarkup(id) {
     ? `<div class="pin-bar" role="list" aria-label="Pinned messages"><span class="pin-count">${sicon("pin")} ${pinned.length}</span><div class="pin-scroll" role="listbox">${pinned
         .map(
           (pm) =>
-            `<button class="pin-item" role="option" data-pin-jump="${pm.id}" title="Jump to pinned message"><b>${esc(senderLabel(pm))}</b><span>${escSnippet(messageText(pm), 60)}</span></button>`,
+            `<button type="button" class="pin-item" role="option" data-pin-jump="${pm.id}" title="Jump to pinned message"><b>${esc(senderLabel(pm))}</b><span>${escSnippet(messageText(pm), 60)}</span></button>`,
         )
-        .join("")}</div><button class="icon-btn" data-pins-all title="All pinned messages" aria-label="Show all pinned messages">${sicon("list")}</button><button class="icon-btn" data-unpin-latest title="Unpin latest" aria-label="Unpin latest pinned message">×</button></div>`
+        .join("")}</div><button type="button" class="icon-btn" data-pins-all title="All pinned messages" aria-label="Show all pinned messages">${sicon("list")}</button><button type="button" class="icon-btn" data-unpin-latest title="Unpin latest" aria-label="Unpin latest pinned message">×</button></div>`
     : "";
   const typing = state.typing[id]
     ? '<div class="typing-indicator">Someone is typing…</div>'
@@ -3028,23 +4029,24 @@ function chatMarkup(id) {
       : "";
   const reply =
     chatReply && chatReply.chatId === id
-      ? `<div class="reply-strip"><div><strong>Replying to ${esc(chatReply.author)}</strong><span>${escSnippet(chatReply.text, 80)}</span></div><button data-reply-cancel title="Cancel reply">×</button></div>`
+      ? `<div class="reply-strip"><div><strong>Replying to ${esc(chatReply.author)}</strong><span>${escSnippet(chatReply.text, 80)}</span></div><button type="button" data-reply-cancel title="Cancel reply">×</button></div>`
       : "";
   const rec = voiceRec
-    ? `<div class="rec-bar"><span data-rec-time>● 0s / 60s</span><button class="ghost" data-rec-cancel>Cancel</button><button class="primary" data-rec-send>Send</button></div>`
+    ? `<div class="rec-bar"><span data-rec-time>● 0s / 60s</span><button type="button" class="ghost" data-rec-cancel>Cancel</button><button type="button" class="primary" data-rec-send>Send</button></div>`
     : "";
-  const isFriendChat = (state.friends || []).some((f) => f.id === id);
+  const isFriendChat = (state.friends || []).some((f) => f.id === id) || cloudFriends.some((f) => f.id === id);
   const isGroup = allGroups().some((g) => g.id === id);
   const mutedTag = isGroup && isChatMuted(id) ? ' <span class="tag">muted</span>' : "";
   const nav = groupNav && groupNav.id === id && groupNav.matches.length
-    ? `<div class="msg-nav"><button data-gnav="prev" aria-label="Previous match">‹</button><span>${groupNav.pos + 1} / ${groupNav.matches.length}</span><button data-gnav="next" aria-label="Next match">›</button><button data-gnav="close" aria-label="Close search navigation">×</button></div>`
+    ? `<div class="msg-nav"><button type="button" data-gnav="prev" aria-label="Previous match">‹</button><span>${groupNav.pos + 1} / ${groupNav.matches.length}</span><button type="button" data-gnav="next" aria-label="Next match">›</button><button type="button" data-gnav="close" aria-label="Close search navigation">×</button></div>`
     : "";
-  return `<div class="chat-head"><div><strong>${esc(target?.name || "@" + target?.username)}</strong>${mutedTag}${typing}${presence}</div><span class="friend-actions"><button class="primary" data-start-call="${id}" style="padding:8px 12px;font-size:11px">Video call</button>${isFriendChat ? `<span class="post-menu-wrap"><button class="icon-btn" data-chat-menu="${id}" title="Conversation options" aria-label="Conversation options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden><button data-chat-block="${id}">Block user</button></span></span>` : ""}${isGroup && !isFriendChat ? `<span class="post-menu-wrap"><button class="icon-btn" data-chat-menu="${id}" title="Group options" aria-label="Group options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden>${groupMenuMarkup(id)}</span></span>` : ""}</span></div>${pinbar}${nav}<div class="chat-body">${msgs.map((m, i) => `<div class="bubble ${m.me ? "me" : ""}" data-midx="${i}">${messageHtml(m)}</div>`).join("") || '<span class="muted">No messages yet. Start the conversation.</span>'}</div>${reply}${rec}<div class="chat-input"><textarea class="input autogrow chat-textarea" id="chat-text" rows="1" data-grow-max="150" placeholder="Type a message (Shift + Enter for a new line)" aria-label="Type a message"></textarea><div class="chat-extras-wrap"><button class="icon-btn chat-extras-toggle" data-chat-extras title="Attach, poll or voice" aria-label="Attach, poll or voice"><span class="chat-extras-dots">⋯</span></button><div class="chat-extras-menu" data-chat-extras-pop hidden><label class="chat-extras-item" style="display:grid;place-items:center;cursor:pointer"><input type="file" id="chat-file" hidden>${sicon("clip")} <span>File</span></label><button class="chat-extras-item" id="poll-button">${sicon("chart")} <span>Poll</span></button><button class="chat-extras-item" id="voice-button">${sicon("mic")} <span>Voice</span></button></div></div><button class="primary" id="send-message">Send</button></div>`;
+  return `<div class="chat-head"><div class="chat-head-who">${isGroup ? groupAvatarMarkup(allGroups().find((g) => g.id === id)) : ""}<div><strong>${esc(target?.name || "@" + (target?.username || target?.handle || "?"))}</strong>${mutedTag}${typing}${presence}</div></div><span class="friend-actions"><button type="button" class="primary" data-start-call="${id}" style="padding:8px 12px;font-size:11px">Video call</button>${isFriendChat ? `<span class="post-menu-wrap"><button type="button" class="icon-btn" data-chat-menu="${id}" title="Conversation options" aria-label="Conversation options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden><button type="button" data-chat-block="${id}">Block user</button></span></span>` : ""}${isGroup && !isFriendChat ? `<span class="post-menu-wrap"><button type="button" class="icon-btn" data-chat-menu="${id}" title="Group options" aria-label="Group options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden>${groupMenuMarkup(id)}</span></span>` : ""}</span></div>${pinbar}${nav}<div class="chat-body">${msgs.map((m, i) => `<div class="bubble ${m.me ? "me" : ""}" data-midx="${i}">${messageHtml(m)}</div>`).join("") || '<span class="muted">No messages yet. Start the conversation.</span>'}</div>${reply}${rec}<div class="chat-input"><textarea class="input autogrow chat-textarea" id="chat-text" rows="1" data-grow-max="150" placeholder="Type a message (Shift + Enter for a new line)" aria-label="Type a message"></textarea><div class="chat-extras-wrap"><button type="button" class="icon-btn chat-extras-toggle" data-chat-extras title="Attach, poll or voice" aria-label="Attach, poll or voice"><span class="chat-extras-dots">⋯</span></button><div class="chat-extras-menu" data-chat-extras-pop hidden><label class="chat-extras-item" style="display:grid;place-items:center;cursor:pointer"><input type="file" id="chat-file" hidden>${sicon("clip")} <span>File</span></label><button type="button" class="chat-extras-item" id="poll-button">${sicon("chart")} <span>Poll</span></button><button type="button" class="chat-extras-item" id="voice-button">${sicon("mic")} <span>Voice</span></button></div></div><button type="button" class="primary" id="send-message">Send</button></div>`;
 }
 
 function bindChat(root, id) {
   subscribeToChat(id);
   subscribePresenceFor(id);
+  loadCloudHistory(id, root).catch(() => {});
   $("#send-message", root).onclick = () => {
     const input = $("#chat-text", root);
     const value = input.value;
@@ -3073,12 +4075,13 @@ function bindChat(root, id) {
     (b) =>
       (b.onclick = (e) => {
         e.stopPropagation();
-        const target = (state.friends || []).find((f) => f.id === b.dataset.chatBlock);
+        const target = (state.friends || []).find((f) => f.id === b.dataset.chatBlock)
+          || cloudFriends.find((f) => f.id === b.dataset.chatBlock);
         if (!target) return;
         askBlockUser({
           id: target.id,
-          username: target.username,
-          name: "@" + target.username,
+          username: target.username || target.handle,
+          name: "@" + (target.username || target.handle),
           context: "chat",
         });
       }),
@@ -3124,7 +4127,7 @@ function bindChat(root, id) {
     pop.innerHTML = cands
       .map(
         (f) =>
-          `<button data-mention="${esc(f.username)}">@${esc(f.username)}</button>`,
+          `<button type="button" data-mention="${esc(f.username)}">@${esc(f.username)}</button>`,
       )
       .join("");
     $$("[data-mention]", pop).forEach(
@@ -3211,15 +4214,100 @@ function bindChat(root, id) {
     chatReply = null;
     renderMessages(root);
   });
-  $$("[data-pin]", root).forEach(
-    (b) =>
-      (b.onclick = () => {
-        const wasPinned = pinnedIdsFor(id).includes(b.dataset.pin);
-        togglePinMessage(id, b.dataset.pin);
+  // Bubble buttons use one delegated listener so messages appended by
+  // realtime updates (no full re-render) stay interactive. The active chat
+  // id rides on the root dataset so switching chats never leaves a stale
+  // closure behind.
+  root.dataset.chatDelegatedId = id;
+  if (!root.dataset.bubbleDelegated) {
+    root.dataset.bubbleDelegated = "1";
+    root.addEventListener("click", (e) => {
+      const cid = root.dataset.chatDelegatedId;
+      const pin = e.target.closest("[data-pin]");
+      if (pin && root.contains(pin)) {
+        const wasPinned = pinnedIdsFor(cid).includes(pin.dataset.pin);
+        togglePinMessage(cid, pin.dataset.pin);
         renderMessages(root);
         notify(wasPinned ? "Message unpinned" : sicon("pin") + " Message pinned");
-      }),
-  );
+        return;
+      }
+      const reactOpen = e.target.closest("[data-react-open]");
+      if (reactOpen && root.contains(reactOpen)) {
+        e.stopPropagation();
+        const picker = $(`[data-picker="${reactOpen.dataset.reactOpen}"]`, root);
+        if (!picker) return;
+        const willOpen = picker.hidden;
+        if (willOpen) $$("[data-picker]", root).forEach((p) => (p.hidden = true));
+        picker.hidden = !willOpen;
+        return;
+      }
+      const react = e.target.closest("[data-react]");
+      if (react && root.contains(react)) {
+        const v = react.dataset.react;
+        const sep = v.indexOf(":");
+        const mid = v.slice(0, sep);
+        const emoji = v.slice(sep + 1);
+        const msg = (state.messages[cid] || []).find((m) => m.id === mid);
+        if (!msg) return;
+        msg.reactions = msg.reactions || {};
+        const users = msg.reactions[emoji] || [];
+        const key = chatKey();
+        msg.reactions[emoji] = users.includes(key)
+          ? users.filter((u) => u !== key)
+          : [...users, key];
+        if (!msg.reactions[emoji].length) delete msg.reactions[emoji];
+        persist();
+        renderMessages(root);
+        return;
+      }
+      const reply = e.target.closest("[data-reply-to]");
+      if (reply && root.contains(reply)) {
+        const msg = (state.messages[cid] || []).find(
+          (m) => m.id === reply.dataset.replyTo,
+        );
+        if (!msg) return;
+        const target =
+          allGroups().find((g) => g.id === cid) ||
+          state.friends.find((f) => f.id === cid);
+        chatReply = {
+          chatId: cid,
+          author: msg.me
+            ? "You"
+            : target?.name || (target ? "@" + target.username : "Them"),
+          text: messageText(msg),
+        };
+        renderMessages(root);
+        $("#chat-text", root)?.focus();
+        return;
+      }
+      const vote = e.target.closest("[data-poll-vote]");
+      if (vote && root.contains(vote)) {
+        const v = vote.dataset.pollVote;
+        const sep = v.indexOf(":");
+        const mid = v.slice(0, sep);
+        const idx = Number(v.slice(sep + 1));
+        const msg = (state.messages[cid] || []).find((m) => m.id === mid);
+        if (!msg || !msg.options) return;
+        msg.voters = msg.voters || {};
+        if (msg.voters[chatKey()] === idx) delete msg.voters[chatKey()];
+        else msg.voters[chatKey()] = idx;
+        persist();
+        renderMessages(root);
+        return;
+      }
+      const del = e.target.closest("[data-del-msg]");
+      if (del && root.contains(del)) {
+        e.stopPropagation();
+        askDeleteMessage(cid, del.dataset.delMsg, root);
+        return;
+      }
+      const edit = e.target.closest("[data-edit-msg]");
+      if (edit && root.contains(edit)) {
+        e.stopPropagation();
+        startMessageEdit(cid, edit.dataset.editMsg, root);
+      }
+    });
+  }
   $("[data-unpin-latest]", root)?.addEventListener("click", () => {
     const list = pinnedIdsFor(id);
     if (!list.length) return;
@@ -3234,75 +4322,9 @@ function bindChat(root, id) {
   $("[data-pins-all]", root)?.addEventListener("click", () => {
     openPinnedList(id);
   });
-  $$("[data-react-open]", root).forEach(
-    (b) =>
-      (b.onclick = (e) => {
-        e.stopPropagation();
-        const picker = $(`[data-picker="${b.dataset.reactOpen}"]`, root);
-        if (!picker) return;
-        const willOpen = picker.hidden;
-        // Only one reaction picker stays open at a time.
-        if (willOpen) $$("[data-picker]", root).forEach((p) => (p.hidden = true));
-        picker.hidden = !willOpen;
-      }),
-  );
-  $$("[data-react]", root).forEach(
-    (b) =>
-      (b.onclick = () => {
-        const v = b.dataset.react;
-        const sep = v.indexOf(":");
-        const mid = v.slice(0, sep);
-        const emoji = v.slice(sep + 1);
-        const msg = (state.messages[id] || []).find((m) => m.id === mid);
-        if (!msg) return;
-        msg.reactions = msg.reactions || {};
-        const users = msg.reactions[emoji] || [];
-        const key = chatKey();
-        msg.reactions[emoji] = users.includes(key)
-          ? users.filter((u) => u !== key)
-          : [...users, key];
-        if (!msg.reactions[emoji].length) delete msg.reactions[emoji];
-        persist();
-        renderMessages(root);
-      }),
-  );
-  $$("[data-reply-to]", root).forEach(
-    (b) =>
-      (b.onclick = () => {
-        const msg = (state.messages[id] || []).find(
-          (m) => m.id === b.dataset.replyTo,
-        );
-        if (!msg) return;
-        const target =
-          allGroups().find((g) => g.id === id) ||
-          state.friends.find((f) => f.id === id);
-        chatReply = {
-          chatId: id,
-          author: msg.me
-            ? "You"
-            : target?.name || (target ? "@" + target.username : "Them"),
-          text: messageText(msg),
-        };
-        renderMessages(root);
-        $("#chat-text", root)?.focus();
-      }),
-  );
-  $$("[data-poll-vote]", root).forEach(
-    (b) =>
-      (b.onclick = () => {
-        const v = b.dataset.pollVote;
-        const sep = v.indexOf(":");
-        const mid = v.slice(0, sep);
-        const idx = Number(v.slice(sep + 1));
-        const msg = (state.messages[id] || []).find((m) => m.id === mid);
-        if (!msg || !msg.options) return;
-        msg.voters = msg.voters || {};
-        if (msg.voters[chatKey()] === idx) delete msg.voters[chatKey()];
-        else msg.voters[chatKey()] = idx;
-        persist();
-        renderMessages(root);
-      }),
-  );
+  $("[data-pins-all]", root)?.addEventListener("click", () => {
+    openPinnedList(id);
+  });
   const call = $("[data-start-call]", root);
   if (call)
     call.onclick = () => {
@@ -3412,20 +4434,20 @@ function paintGroupMedia() {
   const shown = list.slice(0, groupMedia.shown);
   const rest = list.length - shown.length;
   const empty = { media: "No media shared yet.", files: "No files shared yet.", links: "No links shared yet." };
-  const head = (t, label, n) => `<button class="filter ${tab === t ? "active" : ""}" data-gm-tab="${t}">${label} (${n})</button>`;
+  const head = (t, label, n) => `<button type="button" class="filter ${tab === t ? "active" : ""}" data-gm-tab="${t}">${label} (${n})</button>`;
   let body = "";
   if (!list.length) {
     body = `<p class="muted" style="padding:16px 4px">${empty[tab]}</p>`;
   } else if (tab === "media") {
     body = `<div class="media-grid">${shown.map((it, i) => it.kind === "image"
-      ? `<button class="media-thumb" data-gm-view="${i}" title="${esc(it.name)}"><img src="${it.url}" alt="${esc(it.name)}" loading="lazy"></button>`
-      : `<button class="media-thumb" data-gm-view="${i}" title="${esc(it.name)}"><video src="${it.url}" preload="metadata" muted playsinline></video><span class="media-play">${sicon("play")}</span></button>`).join("")}</div>`;
+      ? `<button type="button" class="media-thumb" data-gm-view="${i}" title="${esc(it.name)}"><img src="${it.url}" alt="${esc(it.name)}" loading="lazy"></button>`
+      : `<button type="button" class="media-thumb" data-gm-view="${i}" title="${esc(it.name)}"><video src="${it.url}" preload="metadata" muted playsinline></video><span class="media-play">${sicon("play")}</span></button>`).join("")}</div>`;
   } else if (tab === "files") {
     body = `<div class="file-list">${shown.map((it) => `<div class="file-row"><span class="file-ico">${sicon(fileIcon(it.mime, it.name))}</span><span class="file-meta"><strong title="${esc(it.name)}">${esc(it.name)}</strong><small class="muted">${esc(it.sender)} · ${fmtSharedDate(it.ts)}${it.size ? ` · ${fmtSize(it.size)}` : ""}</small></span><a class="ghost" href="${it.url}" download="${esc(it.name)}" title="Open or download">Open</a></div>`).join("")}</div>`;
   } else {
     body = `<div class="file-list">${shown.map((it) => `<div class="file-row"><span class="file-ico">${sicon("globe")}</span><span class="file-meta"><strong title="${esc(it.url)}">${esc(it.domain || it.url)}</strong><small class="muted">${esc(it.sender)} · ${fmtSharedDate(it.ts)}</small></span><a class="ghost" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer" title="Open link">Visit</a></div>`).join("")}</div>`;
   }
-  if (rest > 0) body += `<div style="text-align:center;margin-top:12px"><button class="ghost" data-gm-more>Show more (${rest} remaining)</button></div>`;
+  if (rest > 0) body += `<div style="text-align:center;margin-top:12px"><button type="button" class="ghost" data-gm-more>Show more (${rest} remaining)</button></div>`;
   let modal = $("#group-media-modal");
   if (!modal) {
     modal = document.createElement("div");
@@ -3436,7 +4458,7 @@ function paintGroupMedia() {
       if (e.target === modal) closeGroupMedia();
     });
   }
-  modal.innerHTML = `<div class="modal wide"><div class="eyebrow">Shared in ${esc(g.name)}</div><h2>Media, files & links</h2><div class="filter-bar">${head("media", "Media", counts.media)}${head("files", "Files", counts.files)}${head("links", "Links", counts.links)}</div><div style="margin-top:12px;max-height:min(52vh,440px);overflow-y:auto">${body}</div><div class="modal-actions"><button class="ghost" data-gm-close>Close</button></div></div>`;
+  modal.innerHTML = `<div class="modal wide"><div class="eyebrow">Shared in ${esc(g.name)}</div><h2>Media, files & links</h2><div class="filter-bar">${head("media", "Media", counts.media)}${head("files", "Files", counts.files)}${head("links", "Links", counts.links)}</div><div style="margin-top:12px;max-height:min(52vh,440px);overflow-y:auto">${body}</div><div class="modal-actions"><button type="button" class="ghost" data-gm-close>Close</button></div></div>`;
   $$("[data-gm-tab]", modal).forEach((b) => (b.onclick = () => {
     groupMedia.tab = b.dataset.gmTab;
     groupMedia.shown = 30;
@@ -3479,7 +4501,7 @@ function paintMediaViewer() {
       if (e.target === modal) closeMediaViewer();
     });
   }
-  modal.innerHTML = `<div class="viewer"><div class="viewer-head"><span class="muted">${esc(title)} · ${pos + 1} / ${items.length}</span><button class="icon-btn" data-mv-close aria-label="Close viewer">×</button></div><div class="viewer-body">${it.kind === "image" ? `<img src="${it.url}" alt="${esc(it.name)}">` : `<video src="${it.url}" controls autoplay playsinline></video>`}<button class="viewer-arrow left" data-mv-prev aria-label="Previous">‹</button><button class="viewer-arrow right" data-mv-next aria-label="Next">›</button></div><div class="viewer-foot muted">${esc(it.name)} · ${esc(it.sender)} · ${fmtSharedDate(it.ts)}</div></div>`;
+  modal.innerHTML = `<div class="viewer"><div class="viewer-head"><span class="muted">${esc(title)} · ${pos + 1} / ${items.length}</span><button type="button" class="icon-btn" data-mv-close aria-label="Close viewer">×</button></div><div class="viewer-body">${it.kind === "image" ? `<img src="${it.url}" alt="${esc(it.name)}">` : `<video src="${it.url}" controls autoplay playsinline></video>`}<button type="button" class="viewer-arrow left" data-mv-prev aria-label="Previous">‹</button><button type="button" class="viewer-arrow right" data-mv-next aria-label="Next">›</button></div><div class="viewer-foot muted">${esc(it.name)} · ${esc(it.sender)} · ${fmtSharedDate(it.ts)}</div></div>`;
   $("[data-mv-close]", modal).onclick = () => closeMediaViewer();
   $("[data-mv-prev]", modal).onclick = (e) => {
     e.stopPropagation();
@@ -3502,7 +4524,7 @@ function openMuteModal(id) {
   const cur = muteRecord(id);
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
-  modal.innerHTML = `<div class="modal"><div class="eyebrow">Notifications</div><h2>Mute ${esc(g.name)}?</h2><p class="muted">You can still open the group and read everything. Only notifications pause.${isChatMuted(id) ? ` Currently: <strong>${esc(muteLabel(id))}</strong>.` : ""}</p><div class="reason-list">${MUTE_CHOICES.map((c) => `<label><input type="radio" name="mute-choice" value="${c.id}"${cur === "forever" && c.id === "forever" ? " checked" : ""}> ${c.id === "forever" ? "Always (until turned back on)" : c.label}</label>`).join("")}</div><p class="st-confirm-err" data-mute-err hidden></p><div class="modal-actions"><button class="ghost" data-mute-cancel>Cancel</button>${isChatMuted(id) ? `<button class="ghost" data-mute-off>Unmute</button>` : ""}<button class="primary" data-mute-save>Save</button></div></div>`;
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Notifications</div><h2>Mute ${esc(g.name)}?</h2><p class="muted">You can still open the group and read everything. Only notifications pause.${isChatMuted(id) ? ` Currently: <strong>${esc(muteLabel(id))}</strong>.` : ""}</p><div class="reason-list">${MUTE_CHOICES.map((c) => `<label><input type="radio" name="mute-choice" value="${c.id}"${cur === "forever" && c.id === "forever" ? " checked" : ""}> ${c.id === "forever" ? "Always (until turned back on)" : c.label}</label>`).join("")}</div><p class="st-confirm-err" data-mute-err hidden></p><div class="modal-actions"><button type="button" class="ghost" data-mute-cancel>Cancel</button>${isChatMuted(id) ? `<button type="button" class="ghost" data-mute-off>Unmute</button>` : ""}<button type="button" class="primary" data-mute-save>Save</button></div></div>`;
   $("#modal-root").append(modal);
   const err = modal.querySelector("[data-mute-err]");
   modal.querySelector("[data-mute-cancel]").onclick = () => modal.remove();
@@ -3536,7 +4558,7 @@ function openGroupInfo(id) {
   const roster = groupRoster(id);
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
-  modal.innerHTML = `<div class="modal"><div class="eyebrow">Group info</div><h2>${esc(g.name)}</h2><p class="muted">${esc(g.description || "A study group.")}</p><div class="book-facts">${(g.tags || []).map((t) => `<span class="tag">#${esc(t)}</span>`).join("")}<span class="tag">${typeof g.members === "number" ? `~${g.members} members` : `${roster.length || "No"} active here`}</span>${isChatMuted(id) ? `<span class="tag">${esc(muteLabel(id))}</span>` : ""}</div><div class="book-facts"><span class="tag">${counts.media} media</span><span class="tag">${counts.files} files</span><span class="tag">${counts.links} links</span></div><div class="modal-actions"><button class="ghost" data-info-media>View shared</button><button class="primary" data-info-close>Done</button></div></div>`;
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Group info</div><h2>${esc(g.name)}</h2><p class="muted">${esc(g.description || "A study group.")}</p><div class="book-facts">${(g.tags || []).map((t) => `<span class="tag">#${esc(t)}</span>`).join("")}<span class="tag">${typeof g.members === "number" ? `~${g.members} members` : `${roster.length || "No"} active here`}</span>${isChatMuted(id) ? `<span class="tag">${esc(muteLabel(id))}</span>` : ""}</div><div class="book-facts"><span class="tag">${counts.media} media</span><span class="tag">${counts.files} files</span><span class="tag">${counts.links} links</span></div><div class="modal-actions"><button type="button" class="ghost" data-info-media>View shared</button><button type="button" class="primary" data-info-close>Done</button></div></div>`;
   $("#modal-root").append(modal);
   modal.querySelector("[data-info-close]").onclick = () => modal.remove();
   modal.querySelector("[data-info-media]").onclick = () => {
@@ -3553,19 +4575,109 @@ function openGroupMembers(id) {
   const roster = groupRoster(id);
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
-  modal.innerHTML = `<div class="modal"><div class="eyebrow">Members</div><h2>${esc(g.name)}</h2>${typeof g.members === "number" && !g.ownerId ? `<p class="muted">About ${g.members} learners follow this group. Recently active here:</p>` : `<p class="muted">People who have sent messages here:</p>`}${roster.length ? `<div class="grid">${roster.map((r) => `<div class="task"><div class="avatar">${r.you ? esc((state.profile.handle || "Y")[0].toUpperCase()) : "M"}</div><span class="task-text"><strong>${r.you ? "You" : "Group member"}</strong><br><small class="muted">${r.count} message${r.count === 1 ? "" : "s"}</small></span><span>${r.you ? `<span class="tag">you</span>` : ""}${r.you && g.ownerId === chatKey() ? `<span class="tag">owner</span>` : ""}${!r.you && g.ownerId && r.key === `other:${g.ownerId}` ? `<span class="tag">owner</span>` : ""}</span></div>`).join("")}</div>` : `<p class="muted">No messages here yet — members appear once they write.</p>`}<div class="modal-actions"><button class="primary" data-members-close>Done</button></div></div>`;
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Members</div><h2>${esc(g.name)}</h2><div data-cloud-roster><p class="muted">Loading members…</p></div>${typeof g.members === "number" && !g.ownerId ? `<p class="muted">About ${g.members} learners follow this group. Recently active here:</p>` : `<p class="muted">People who have sent messages here:</p>`}${roster.length ? `<div class="grid">${roster.map((r) => `<div class="task"><div class="avatar">${r.you ? esc((state.profile.handle || "Y")[0].toUpperCase()) : "M"}</div><span class="task-text"><strong>${r.you ? "You" : "Group member"}</strong><br><small class="muted">${r.count} message${r.count === 1 ? "" : "s"}</small></span><span>${r.you ? `<span class="tag">you</span>` : ""}${r.you && g.ownerId === chatKey() ? `<span class="tag">owner</span>` : ""}${!r.you && g.ownerId && r.key === `other:${g.ownerId}` ? `<span class="tag">owner</span>` : ""}</span></div>`).join("")}</div>` : `<p class="muted">No messages here yet — members appear once they write.</p>`}<div class="modal-actions"><button type="button" class="primary" data-members-close>Done</button></div></div>`;
   $("#modal-root").append(modal);
   modal.querySelector("[data-members-close]").onclick = () => modal.remove();
   modal.addEventListener("click", (e) => {
     if (e.target === modal) modal.remove();
   });
+  paintCloudRoster(modal, id);
+}
+// Server membership roster with role badges and owner/admin actions.
+// Local message-derived roster above stays as the offline fallback.
+async function paintCloudRoster(modal, id) {
+  const box = modal.querySelector("[data-cloud-roster]");
+  if (!box) return;
+  if (!signedIn() || !(isCloudGroup(id) || myGroupRole(id))) {
+    box.innerHTML = "";
+    return;
+  }
+  try {
+    const { data, error } = await getGroupMembers(id);
+    if (error) throw error;
+    const members = Array.isArray(data) ? data : [];
+    const me = state.user.id;
+    const myRole = (members.find((m) => m.user_id === me) || {}).role || myGroupRole(id);
+    const canAdmin = myRole === "owner" || myRole === "admin";
+    if (!members.length) {
+      box.innerHTML = "";
+      return;
+    }
+    box.innerHTML = `<div class="section-row" style="margin-top:4px"><h3>Members (${members.length})</h3>${myRole ? `<span class="tag">you: ${esc(myRole)}</span>` : ""}</div><div class="grid">${members.map((m) => {
+      const you = m.user_id === me;
+      const actions = !you && canAdmin && m.role !== "owner"
+        ? `<span class="friend-actions">${myRole === "owner" && m.role === "member" ? `<button type="button" class="ghost" data-m-promote="${m.user_id}">Make admin</button>` : ""}${myRole === "owner" && m.role === "admin" ? `<button type="button" class="ghost" data-m-demote="${m.user_id}">Demote</button>` : ""}<button type="button" class="ghost" data-m-remove="${m.user_id}">Remove</button>${myRole === "owner" ? `<button type="button" class="ghost" data-m-transfer="${m.user_id}" title="Give them ownership">Transfer</button>` : ""}</span>`
+        : "";
+      return `<div class="task"><div class="avatar">${esc(((m.handle || m.name || "?")[0] || "?").toUpperCase())}</div><span class="task-text"><strong>${you ? "You" : "@" + esc(m.handle || "member")}</strong><br><small class="muted">${esc(m.name || "")}</small></span><span class="tag">${esc(m.role)}</span>${actions}</div>`;
+    }).join("")}</div>${canAdmin ? `<div class="input-row" style="margin-top:10px"><input class="input" data-m-invite placeholder="Username to invite" aria-label="Username to invite"><button type="button" class="primary" data-m-invite-btn>Invite</button></div><p class="muted" style="margin:6px 0 0">Invites work for private groups too — only owners and admins can add people.</p>` : ""}`;
+    const refresh = async () => {
+      await refreshCloudGroups(true).catch(() => {});
+      paintCloudRoster(modal, id);
+      if (state.tab === "community") renderCommunity();
+    };
+    box.querySelectorAll("[data-m-promote]").forEach((b) => (b.onclick = async () => {
+      const { error } = await groupSetMember(id, b.dataset.mPromote, "promote");
+      notify(error ? "Couldn't promote — " + String(error.message).slice(0, 100) : "Promoted to admin");
+      if (!error) refresh();
+    }));
+    box.querySelectorAll("[data-m-demote]").forEach((b) => (b.onclick = async () => {
+      const { error } = await groupSetMember(id, b.dataset.mDemote, "demote");
+      notify(error ? "Couldn't demote — " + String(error.message).slice(0, 100) : "Demoted to member");
+      if (!error) refresh();
+    }));
+    box.querySelectorAll("[data-m-remove]").forEach((b) => (b.onclick = () => {
+      confirmBox("Remove this member?", "They lose access to the group and its chat.", async () => {
+        const { error } = await groupSetMember(id, b.dataset.mRemove, "remove");
+        notify(error ? "Couldn't remove — " + String(error.message).slice(0, 100) : "Member removed");
+        if (!error) refresh();
+      });
+    }));
+    box.querySelectorAll("[data-m-transfer]").forEach((b) => (b.onclick = () => {
+      confirmBox("Transfer ownership?", "They become the group owner and you become an admin. This can't be undone by you.", async () => {
+        const { error } = await groupTransfer(id, b.dataset.mTransfer);
+        notify(error ? "Couldn't transfer — " + String(error.message).slice(0, 100) : "Ownership transferred");
+        if (!error) refresh();
+      });
+    }));
+    const inviteBtn = box.querySelector("[data-m-invite-btn]");
+    if (inviteBtn) inviteBtn.onclick = async () => {
+      const q = box.querySelector("[data-m-invite]").value.trim().replace(/^@/, "");
+      if (q.length < 2) return notify("Type a username to invite");
+      inviteBtn.disabled = true;
+      try {
+        const found = await inviteMemberByHandle(id, q);
+        notify(found);
+        if (!found.startsWith("Couldn't") && !found.startsWith("No user")) refresh();
+      } finally {
+        inviteBtn.disabled = false;
+      }
+    };
+  } catch {
+    box.innerHTML = "";
+  }
+}
+// Resolve a username through the locked-down directory and add them.
+async function inviteMemberByHandle(groupId, handle) {
+  const { data: results, error: sErr } = await searchUsers(handle, 5);
+  if (sErr) return "Couldn't search right now — " + String(sErr.message).slice(0, 80);
+  const match = (results || []).find((u) => String(u.handle || "").toLowerCase() === handle.toLowerCase()) || (results || [])[0];
+  if (!match) return "No user found with that name";
+  const { error } = await groupAddMember(groupId, match.id, "member");
+  if (error) return "Couldn't invite — " + String(error.message).slice(0, 100);
+  return `Invited @${match.handle}`;
 }
 function openGroupSettings(id) {
+  const role = myGroupRole(id);
+  const cloudG = groupById(id);
+  const isCloud = isCloudGroup(id) || (cloudG && cloudG.source === "cloud");
+  if (isCloud && signedIn() && (role === "owner" || role === "admin")) {
+    return openCloudGroupSettings(id, cloudG, role);
+  }
   const g = (state.customGroups || []).find((x) => x.id === id);
   if (!g || !isGroupOwner(id)) return notify("Only the group owner can change settings");
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
-  modal.innerHTML = `<div class="modal"><div class="eyebrow">Group settings</div><h2>${esc(g.name)}</h2><label class="field-label">Name<input class="input" data-gs-name value="${esc(g.name)}" maxlength="80"></label><label class="field-label">Description<textarea class="textarea autogrow" data-gs-desc rows="2" maxlength="500">${esc(g.description || "")}</textarea></label><label class="field-label">Topics (comma separated)<input class="input" data-gs-tags value="${esc((g.tags || []).join(", "))}" maxlength="200"></label><label class="field-label">Icon<select class="select" data-gs-logo>${GROUP_LOGOS.map((n) => `<option value="${n}"${g.logoName === n ? " selected" : ""}>${n[0].toUpperCase() + n.slice(1)}</option>`).join("")}</select></label><p class="st-confirm-err" data-gs-err hidden></p><div class="modal-actions"><button class="ghost" data-gs-cancel>Cancel</button><button class="primary" data-gs-save>Save</button></div></div>`;
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Group settings</div><h2>${esc(g.name)}</h2><label class="field-label">Name<input class="input" data-gs-name value="${esc(g.name)}" maxlength="80"></label><label class="field-label">Description<textarea class="textarea autogrow" data-gs-desc rows="2" maxlength="500">${esc(g.description || "")}</textarea></label><label class="field-label">Topics (comma separated)<input class="input" data-gs-tags value="${esc((g.tags || []).join(", "))}" maxlength="200"></label><label class="field-label">Icon<select class="select" data-gs-logo>${GROUP_LOGOS.map((n) => `<option value="${n}"${g.logoName === n ? " selected" : ""}>${n[0].toUpperCase() + n.slice(1)}</option>`).join("")}</select></label><p class="st-confirm-err" data-gs-err hidden></p><div class="modal-actions"><button type="button" class="ghost" data-gs-cancel>Cancel</button><button type="button" class="primary" data-gs-save>Save</button></div></div>`;
   $("#modal-root").append(modal);
   const err = modal.querySelector("[data-gs-err]");
   modal.querySelector("[data-gs-cancel]").onclick = () => modal.remove();
@@ -3592,12 +4704,128 @@ function openGroupSettings(id) {
     notify("Group settings saved");
   };
 }
+// Server-backed settings for cloud groups (owner/admin; visibility is
+// owner-only and enforced again by the database).
+function openCloudGroupSettings(id, g, role) {
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Group settings · ${esc(role)}</div><h2>${esc(g.name)}</h2><div class="group-avatar-row"><span data-av-settings>${groupAvatarMarkup(g)}</span><div><div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="ghost" data-av-change>Change photo</button>${g.avatarPath ? `<button type="button" class="ghost" data-av-remove>Remove</button>` : ""}</div><p class="muted" style="margin:6px 0 0">JPEG, PNG, WebP or GIF · under 2 MB · visible to members.</p><input type="file" data-av-file accept="image/jpeg,image/png,image/webp,image/gif" hidden aria-label="Choose a group photo"></div></div><label class="field-label">Name<input class="input" data-gs-name value="${esc(g.name)}" maxlength="120"></label><label class="field-label">Description<textarea class="textarea autogrow" data-gs-desc rows="2" maxlength="500">${esc(g.description || "")}</textarea></label><label class="field-label">Topics (comma separated)<input class="input" data-gs-tags value="${esc((g.tags || []).join(", "))}" maxlength="200"></label><label class="field-label">Icon<select class="select" data-gs-logo>${GROUP_LOGOS.map((n) => `<option value="${n}"${g.logoName === n ? " selected" : ""}>${n[0].toUpperCase() + n.slice(1)}</option>`).join("")}</select></label>${role === "owner" ? `<label class="field-label">Visibility<select class="select" data-gs-vis><option value="private"${g.visibility !== "public" ? " selected" : ""}>Private — invite only</option><option value="public"${g.visibility === "public" ? " selected" : ""}>Public — listed in Discover</option></select></label>` : ""}<p class="st-confirm-err" data-gs-err hidden></p><div class="modal-actions"><button type="button" class="ghost" data-gs-cancel>Cancel</button><button type="button" class="primary" data-gs-save>Save</button></div></div>`;
+  $("#modal-root").append(modal);
+  paintGroupAvatars(modal);
+  const err = modal.querySelector("[data-gs-err]");
+  modal.querySelector("[data-gs-cancel]").onclick = () => modal.remove();
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) modal.remove();
+  });
+  const avFile = modal.querySelector("[data-av-file]");
+  modal.querySelector("[data-av-change]").onclick = () => avFile?.click();
+  avFile?.addEventListener("change", async () => {
+    const file = avFile.files?.[0];
+    avFile.value = "";
+    if (!file) return;
+    err.hidden = true;
+    // Instant local verdict (same shared validator the server path uses),
+    // so a valid PNG never spins into "Uploading…" just to be rejected.
+    const bad = await validateImageFile(file, 2 * 1024 * 1024, "group-avatar");
+    if (bad) {
+      err.textContent = bad;
+      err.hidden = false;
+      return;
+    }
+    const btn = modal.querySelector("[data-av-change]");
+    btn.disabled = true;
+    btn.textContent = "Uploading…";
+    try {
+      const { data, error: upErr } = await uploadGroupAvatar(id, file);
+      if (upErr) throw upErr;
+      const { error: dbErr } = await groupUpdate(id, { avatarPath: data.path });
+      if (dbErr) {
+        await removeGroupAvatar(data.path).catch(() => {});
+        throw dbErr;
+      }
+      const prev = groupById(id)?.avatarPath;
+      if (prev && prev !== data.path) await removeGroupAvatar(prev).catch(() => {});
+      const entry = cloudGroups.find((x) => x.id === id);
+      if (entry) {
+        entry.avatarPath = data.path;
+        cloudGroupsAt = Date.now();
+      }
+      const wrap = modal.querySelector("[data-av-settings]");
+      if (wrap) {
+        wrap.innerHTML = groupAvatarMarkup({ ...g, avatarPath: data.path });
+        paintGroupAvatars(wrap);
+      }
+      paintGroupAvatars(document);
+      notify("Group photo updated");
+    } catch (e2) {
+      err.textContent = friendlyUploadError(e2);
+      err.hidden = false;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Change photo";
+    }
+  });
+  modal.querySelector("[data-av-remove]")?.addEventListener("click", async () => {
+    err.hidden = true;
+    try {
+      // Empty string clears avatar_path server-side (the RPC coalesces NULL
+      // as "no change", so "" is the explicit clear signal).
+      const { error: dbErr } = await groupUpdate(id, { avatarPath: "" });
+      if (dbErr) throw dbErr;
+      const prev = groupById(id)?.avatarPath;
+      if (prev) await removeGroupAvatar(prev).catch(() => {});
+      const entry = cloudGroups.find((x) => x.id === id);
+      if (entry) {
+        entry.avatarPath = null;
+        cloudGroupsAt = Date.now();
+      }
+      const wrap = modal.querySelector("[data-av-settings]");
+      if (wrap) wrap.innerHTML = groupAvatarMarkup({ ...g, avatarPath: null });
+      paintGroupAvatars(document);
+      notify("Group photo removed");
+    } catch (e2) {
+      err.textContent = friendlyUploadError(e2);
+      err.hidden = false;
+    }
+  });
+  modal.querySelector("[data-gs-save]").onclick = async () => {
+    const name = modal.querySelector("[data-gs-name]").value.trim();
+    if (!name) {
+      err.textContent = "The group needs a name.";
+      err.hidden = false;
+      return;
+    }
+    const btn = modal.querySelector("[data-gs-save]");
+    btn.disabled = true;
+    btn.textContent = "Saving…";
+    const patch = {
+      name: name.slice(0, 120),
+      description: modal.querySelector("[data-gs-desc]").value.trim().slice(0, 500),
+      topics: modal.querySelector("[data-gs-tags]").value.split(",").map((x) => x.trim()).filter(Boolean).slice(0, 8),
+      logo: modal.querySelector("[data-gs-logo]").value,
+    };
+    const visSel = modal.querySelector("[data-gs-vis]");
+    if (visSel && role === "owner") patch.visibility = visSel.value === "public" ? "public" : "private";
+    const { error } = await groupUpdate(id, patch);
+    btn.disabled = false;
+    btn.textContent = "Save";
+    if (error) {
+      err.textContent = "Couldn't save — " + String(error.message).slice(0, 120);
+      err.hidden = false;
+      return;
+    }
+    modal.remove();
+    await refreshCloudGroups(true).catch(() => {});
+    renderCommunity();
+    notify("Group settings saved");
+  };
+}
 function openGroupReport(id) {
   const g = groupById(id);
   if (!g || isGroupOwner(id)) return;
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
-  modal.innerHTML = `<div class="modal"><div class="eyebrow">Report · ${esc(g.name)}</div><h2>What's wrong with this group?</h2><p class="muted">Pick the closest reason. Reports go to moderation — never public.</p><div class="reason-list">${BLOCK_REASONS.map((r) => `<label><input type="radio" name="group-report-reason" value="${esc(r)}"> ${esc(r)}</label>`).join("")}</div><label class="field-label">Details (optional)<textarea class="textarea autogrow" data-group-report-details rows="2" maxlength="2000" placeholder="What happened in this group?"></textarea></label><p class="st-confirm-err" data-group-report-err hidden></p><div class="modal-actions"><button class="ghost" data-group-report-cancel>Cancel</button><button class="primary" data-group-report-send>Send report</button></div></div>`;
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Report · ${esc(g.name)}</div><h2>What's wrong with this group?</h2><p class="muted">Pick the closest reason. Reports go to moderation — never public.</p><div class="reason-list">${BLOCK_REASONS.map((r) => `<label><input type="radio" name="group-report-reason" value="${esc(r)}"> ${esc(r)}</label>`).join("")}</div><label class="field-label">Details (optional)<textarea class="textarea autogrow" data-group-report-details rows="2" maxlength="2000" placeholder="What happened in this group?"></textarea></label><p class="st-confirm-err" data-group-report-err hidden></p><div class="modal-actions"><button type="button" class="ghost" data-group-report-cancel>Cancel</button><button type="button" class="primary" data-group-report-send>Send report</button></div></div>`;
   $("#modal-root").append(modal);
   const err = modal.querySelector("[data-group-report-err]");
   modal.querySelector("[data-group-report-cancel]").onclick = () => modal.remove();
@@ -3660,8 +4888,9 @@ function askClearGroupHistory(id) {
     notify("Local chat history cleared");
   });
 }
-function leaveGroupById(id) {
+function leaveGroupById(id, cloudResult) {
   save("sf-joined", get("sf-joined", []).filter((x) => x !== id));
+  cloudGroups = cloudGroups.filter((g) => g.id !== id);
   if (state.activeChat === id) state.activeChat = null;
   if (groupNav?.id === id) groupNav = null;
   if (groupSearch?.id === id) groupSearch = null;
@@ -3671,18 +4900,55 @@ function leaveGroupById(id) {
 function askLeaveGroup(id) {
   const g = groupById(id);
   if (!g) return;
-  confirmBox(`Leave ${g.name}?`, "You stop receiving its messages. Your sent messages stay visible to others.", () => {
+  const role = myGroupRole(id);
+  const ownerNote = role === "owner"
+    ? " You own this group — ownership passes to the longest-standing admin or member, or the group is removed if you're the only one left."
+    : "";
+  confirmBox(`Leave ${g.name}?`, `You stop receiving its messages. Your sent messages stay visible to others.${ownerNote}`, async () => {
+    if (signedIn() && (isCloudGroup(id) || role)) {
+      try {
+        const { data, error } = await groupLeave(id);
+        if (error) throw error;
+        leaveGroupById(id);
+        if (data?.deleted_group) notify(`Left ${g.name} — the group was removed (you were the only member)`);
+        else if (data?.transferred_to) notify(`Left ${g.name} — ownership transferred`);
+        else notify(`Left ${g.name}`);
+        refreshCloudGroups(true).then(() => {
+          if (state.tab === "community") renderCommunity();
+        }).catch(() => {});
+        return;
+      } catch (err) {
+        if (!isPhase7Missing(err) && navigator.onLine) {
+          notify("Couldn't leave on the server — " + String(err?.message || err).slice(0, 100));
+          return;
+        }
+      }
+    }
     leaveGroupById(id);
     notify(`Left ${g.name}`);
   });
 }
 function askDisbandGroup(id) {
-  const g = (state.customGroups || []).find((x) => x.id === id);
-  if (!g || !isGroupOwner(id)) return notify("Only the group owner can delete it");
-  confirmBox(`Delete ${g.name}?`, "The group disappears for everyone, along with its messages.", () => {
+  const g = (state.customGroups || []).find((x) => x.id === id) || groupById(id);
+  const role = myGroupRole(id);
+  const cloudOwned = isCloudGroup(id) && (role === "owner" || (g?.ownerId && state.user && g.ownerId === state.user.id));
+  if (!g || (!isGroupOwner(id) && !cloudOwned)) return notify("Only the group owner can delete it");
+  confirmBox(`Delete ${g.name}?`, "The group disappears for everyone, along with its messages.", async () => {
+    if (signedIn() && isCloudGroup(id)) {
+      try {
+        const { error } = await groupDelete(id);
+        if (error) throw error;
+      } catch (err) {
+        if (!isPhase7Missing(err) && navigator.onLine) {
+          notify("Couldn't delete on the server — " + String(err?.message || err).slice(0, 100));
+          return;
+        }
+      }
+    }
     state.customGroups = (state.customGroups || []).filter((x) => x.id !== id);
     save("sf-groups", state.customGroups);
     save("sf-joined", get("sf-joined", []).filter((x) => x !== id));
+    cloudGroups = cloudGroups.filter((x) => x.id !== id);
     const msgs = { ...(state.messages || {}) };
     delete msgs[id];
     state.messages = msgs;
@@ -3735,7 +5001,9 @@ function groupAction(act, id, root) {
   else if (act === "members") openGroupMembers(id);
   else if (act === "info") openGroupInfo(id);
   else if (act === "settings") {
-    if (!isGroupOwner(id)) return notify("Only the group owner can change settings");
+    const role = myGroupRole(id);
+    if (!isGroupOwner(id) && role !== "owner" && role !== "admin")
+      return notify("Only the group owner can change settings");
     openGroupSettings(id);
   } else if (act === "clear") askClearGroupHistory(id);
   else if (act === "report") {
@@ -3751,6 +5019,10 @@ if (!window.__sfGroupKeysBound) {
   window.__sfGroupKeysBound = true;
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
+    if (editingMessage) {
+      cancelMessageEdit();
+      return;
+    }
     const pop = document.querySelector('[data-chat-pop]:not([hidden])');
     if (pop) {
       pop.hidden = true;
@@ -3812,9 +5084,9 @@ function openPinnedList(id) {
   modal.innerHTML = `<div class="modal pins-modal"><div class="eyebrow">${esc(target?.name || "Chat")}</div><h2>${sicon("pin")} Pinned messages</h2>${pinned.length ? `<div class="pins-list">${pinned
     .map(
       (pm) =>
-        `<div class="pin-entry"><button class="pin-entry-main" data-pin-jump-modal="${pm.id}"><b>${esc(senderLabel(pm))}</b><span>${escSnippet(messageText(pm), 110)}</span><small>${new Date(pm.ts).toLocaleDateString([], { month: "short", day: "numeric" })} · ${new Date(pm.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small></button><button class="ghost" data-pin-remove="${pm.id}" title="Unpin">${sicon("trash")}</button></div>`,
+        `<div class="pin-entry"><button type="button" class="pin-entry-main" data-pin-jump-modal="${pm.id}"><b>${esc(senderLabel(pm))}</b><span>${escSnippet(messageText(pm), 110)}</span><small>${new Date(pm.ts).toLocaleDateString([], { month: "short", day: "numeric" })} · ${new Date(pm.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small></button><button type="button" class="ghost" data-pin-remove="${pm.id}" title="Unpin">${sicon("trash")}</button></div>`,
     )
-    .join("")}</div>` : '<p class="muted">Nothing pinned yet. Hover a message and press the pin icon.</p>'}<div class="modal-actions"><button class="primary" data-pins-close>Done</button></div></div>`;
+    .join("")}</div>` : '<p class="muted">Nothing pinned yet. Hover a message and press the pin icon.</p>'}<div class="modal-actions"><button type="button" class="primary" data-pins-close>Done</button></div></div>`;
   $("#modal-root").append(modal);
   modal.addEventListener("click", (e) => {
     if (e.target === modal) modal.remove();
@@ -3894,14 +5166,14 @@ function groupSearchMarkup(id) {
   const g = groupById(id);
   const q = groupSearch?.q || "";
   const results = searchGroupMessages(id, q);
-  return `<div class="chat-head"><button class="icon-btn" data-gs-back aria-label="Back to chat">‹</button><div style="flex:1;min-width:0"><strong>${esc(g?.name || "Group")}</strong><div class="muted" style="font-size:11px">Search this group</div></div><span class="tag">${results.length}</span></div><div class="input-row" style="margin:12px 14px 0"><span class="song-search-ico" style="position:static;transform:none" aria-hidden="true">${sicon("search")}</span><input class="input" id="gs-input" style="flex:1" placeholder="Search messages, files, links…" value="${esc(q)}" aria-label="Search group messages" autocomplete="off"></div><div class="chat-body" id="gs-results">${groupSearchResultsHtml(id, results)}</div>`;
+  return `<div class="chat-head"><button type="button" class="icon-btn" data-gs-back aria-label="Back to chat">‹</button><div style="flex:1;min-width:0"><strong>${esc(g?.name || "Group")}</strong><div class="muted" style="font-size:11px">Search this group</div></div><span class="tag">${results.length}</span></div><div class="input-row" style="margin:12px 14px 0"><span class="song-search-ico" style="position:static;transform:none" aria-hidden="true">${sicon("search")}</span><input class="input" id="gs-input" style="flex:1" placeholder="Search messages, files, links…" value="${esc(q)}" aria-label="Search group messages" autocomplete="off"></div><div class="chat-body" id="gs-results">${groupSearchResultsHtml(id, results)}</div>`;
 }
 function groupSearchResultsHtml(id, results) {
   if (!results.length) {
     const q = groupSearch?.q || "";
     return `<p class="muted" style="padding:16px">${q ? "No messages match that search." : "Type above to search this group's stored messages."}</p>`;
   }
-  return results.map((r) => `<button class="gs-row" data-gs-jump="${r.idx}"><span class="gs-who">${esc(r.sender)} · ${new Date(r.ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}${r.tags.length ? ` · ${r.tags.join(" · ")}` : ""}</span><span class="gs-snippet">${r.snippet}</span></button>`).join("");
+  return results.map((r) => `<button type="button" class="gs-row" data-gs-jump="${r.idx}"><span class="gs-who">${esc(r.sender)} · ${new Date(r.ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}${r.tags.length ? ` · ${r.tags.join(" · ")}` : ""}</span><span class="gs-snippet">${r.snippet}</span></button>`).join("");
 }
 function paintGroupSearchResults(id) {
   const box = $("#gs-results");
@@ -3939,7 +5211,7 @@ function bindGroupSearch(body, id) {
 function openPollBuilder(id, root) {
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
-  modal.innerHTML = `<div class="modal"><div class="eyebrow">New poll</div><h2>Ask the group</h2><label class="field-label">Question<input class="input" id="poll-q" placeholder="e.g. Sprint at 6pm?"></label>${[1, 2, 3, 4].map((n) => `<label class="field-label">Option ${n}${n > 2 ? " (optional)" : ""}<input class="input" data-poll-opt placeholder="Option ${n}"></label>`).join("")}<div class="modal-actions"><button class="ghost" data-poll-cancel>Cancel</button><button class="primary" data-poll-create>Create poll</button></div></div>`;
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">New poll</div><h2>Ask the group</h2><label class="field-label">Question<input class="input" id="poll-q" placeholder="e.g. Sprint at 6pm?"></label>${[1, 2, 3, 4].map((n) => `<label class="field-label">Option ${n}${n > 2 ? " (optional)" : ""}<input class="input" data-poll-opt placeholder="Option ${n}"></label>`).join("")}<div class="modal-actions"><button type="button" class="ghost" data-poll-cancel>Cancel</button><button type="button" class="primary" data-poll-create>Create poll</button></div></div>`;
   $("#modal-root").append(modal);
   $("[data-poll-cancel]", modal).onclick = () => modal.remove();
   $("[data-poll-create]", modal).onclick = () => {
@@ -4103,82 +5375,240 @@ function subscribePresenceFor(id) {
   );
 }
 
+// Resolve a chat id to its conversation: a group, a local friend, or a
+// cloud connection (uuid). Cloud sends/loads happen only for cloud targets —
+// local-only chats never touch the network.
+function chatTarget(id) {
+  const group = allGroups().find((g) => g.id === id);
+  if (group) return { kind: "group", group };
+  const local = (state.friends || []).find((f) => f.id === id);
+  if (local) return { kind: "friend", friend: local };
+  const cloud = cloudFriends.find((f) => f.id === id);
+  if (cloud) return { kind: "connection", friend: { id: cloud.id, username: cloud.handle, handle: cloud.handle, name: cloud.name, cloud: true } };
+  return { kind: "unknown" };
+}
+function chatRoot() {
+  return $("#tab-messages") || $("#community-body");
+}
+function chatBodyEl(root) {
+  return $(".chat-body", root || chatRoot());
+}
+// Rebuild only the message list. Input drafts, focus and scroll survive:
+// the textarea lives outside .chat-body, and we restore the scroll position
+// unless the caller explicitly wants the bottom (new outbound message).
+function paintChatBody(id, root, scrollBottom) {
+  const body = chatBodyEl(root);
+  if (!body) return;
+  const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 120;
+  const msgs = state.messages[id] || [];
+  body.innerHTML = msgs.map((m, i) => `<div class="bubble ${m.me ? "me" : ""}" data-midx="${i}">${messageHtml(m)}</div>`).join("")
+    || '<span class="muted">No messages yet. Start the conversation.</span>';
+  if (scrollBottom || nearBottom) body.scrollTop = body.scrollHeight;
+}
+function appendChatBubble(id, m, root) {
+  const body = chatBodyEl(root);
+  if (!body) return false;
+  const empty = body.querySelector(":scope > .muted");
+  if (empty) empty.remove();
+  const idx = (state.messages[id] || []).length - 1;
+  const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 160;
+  body.insertAdjacentHTML("beforeend", `<div class="bubble ${m.me ? "me" : ""}" data-midx="${idx}">${messageHtml(m)}</div>`);
+  if (nearBottom || m.me) body.scrollTop = body.scrollHeight;
+  return true;
+}
+function paintMessageStatus(messageId) {
+  const btn = document.querySelector(`[data-react-open="${messageId}"]`);
+  const meta = btn?.closest(".bubble")?.querySelector(".message-meta");
+  if (!meta || !btn) return;
+  const st = state.messageStatus[messageId];
+  meta.textContent = meta.textContent.replace(/·.*$/, st === "read" ? "· Read" : st === "delivered" ? "· Delivered" : "· Sent");
+}
+function paintTypingIndicator(id, isTyping, root) {
+  const head = (root || chatRoot())?.querySelector(".chat-head > div");
+  if (!head || state.activeChat !== id) return;
+  let el = head.querySelector(".typing-indicator");
+  if (isTyping && !el) {
+    el = document.createElement("div");
+    el.className = "typing-indicator";
+    el.textContent = "Someone is typing…";
+    head.append(el);
+  } else if (!isTyping && el) {
+    el.remove();
+  }
+}
+// Server history merges into the local cache once per chat open. Guarded by
+// a token so a late response never paints into a different conversation.
+let historyToken = 0;
+async function loadCloudHistory(id, root) {
+  if (!signedIn()) return;
+  const target = chatTarget(id);
+  if (target.kind === "group" && !isCloudGroup(id) && !myGroupRole(id)) {
+    // Custom groups created before Phase 7 may still have a cloud copy with
+    // the same id — try it, but treat any failure as local-only.
+  }
+  if (target.kind !== "group" && target.kind !== "connection") return;
+  if (target.kind === "connection" && !isUuid(id)) return;
+  const token = ++historyToken;
+  try {
+    const { data, error } = await loadConversation(
+      target.kind === "group" ? { groupId: id } : { recipientId: id },
+    );
+    if (error || token !== historyToken || state.activeChat !== id) return;
+    const rows = Array.isArray(data) ? data : [];
+    if (!rows.length) return;
+    const me = state.user.id;
+    const unknown = [...new Set(rows.filter((r) => r.sender_id !== me).map((r) => r.sender_id).filter(Boolean))];
+    let names = new Map();
+    if (unknown.length) {
+      const { data: profiles } = await getPublicProfiles(unknown).catch(() => ({ data: [] }));
+      names = new Map((profiles || []).map((p) => [p.id, "@" + (p.handle || "member")]));
+      if (token !== historyToken || state.activeChat !== id) return;
+    }
+    const seen = new Set((state.messages[id] || []).map((m) => m.id || m.cloudId));
+    let added = 0;
+    const merged = [...(state.messages[id] || [])];
+    for (const r of rows) {
+      if (!r || !r.id || seen.has(r.id)) continue;
+      seen.add(r.id);
+      merged.push({
+        id: r.id,
+        cloudId: r.id,
+        me: r.sender_id === me,
+        sender_id: r.sender_id,
+        sysName: r.sender_id === me ? undefined : names.get(r.sender_id),
+        text: r.text || "",
+        kind: r.kind && r.kind !== "text" ? r.kind : undefined,
+        ts: r.created_at ? new Date(r.created_at).getTime() : Date.now(),
+        edited: Boolean(r.edited_at),
+      });
+      if (r.sender_id === me) state.messageStatus[r.id] = "delivered";
+      added++;
+    }
+    if (!added) return;
+    merged.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    state.messages[id] = merged.slice(-300);
+    persist();
+    if (token === historyToken && state.activeChat === id) paintChatBody(id, root, false);
+  } catch {
+    /* offline — local cache stands */
+  }
+}
+
 function sendChat(id, text) {
   const trimmed = String(text || "").trim();
   if (!trimmed) return;
-  if (isBlockedKey(id)) {
+  if (isBlockedKey(id) || cloudBlocked.has(id)) {
     renderCommunity();
     return notify("You have blocked this conversation");
   }
+  const target = chatTarget(id);
   const message = {
     id: uid(),
     me: true,
     text: trimmed.slice(0, 4000),
     ts: Date.now(),
-    deliveryStatus: backendConfigured && state.user ? "sending" : "sent",
+    deliveryStatus: "sent",
   };
   if (chatReply && chatReply.chatId === id) {
     message.reply = { author: chatReply.author, text: chatReply.text };
     chatReply = null;
   }
   state.messages[id] = [...(state.messages[id] || []), message];
-  state.messageStatus[message.id] = message.deliveryStatus;
+  state.messageStatus[message.id] = "sent";
   persist();
-  if (backendConfigured && state.user) {
-    sendCloudMessage({
-      id: crypto.randomUUID(),
-      sender_id: state.user.id,
-      group_id: allGroups().some((group) => group.id === id) ? id : null,
-      recipient_id: allGroups().some((group) => group.id === id) ? null : id,
-      text: message.text,
-      kind: "text",
-      delivery_status: "sent",
-    }).then((result) => {
-      state.messageStatus[message.id] = result.error ? "failed" : "delivered";
-      renderCommunity();
-    });
+  // Cloud fan-out only for cloud-backed conversations. Local-only chats
+  // stay local — and a cloud failure never blocks or spams the sender.
+  // (Group sends always attempt when signed in: pre-Phase-7 custom groups
+  // may still own a cloud copy with the same id; RLS decides.)
+  const cloudOk = signedIn() && (target.kind === "group" || target.kind === "connection");
+  if (cloudOk) {
+    const payload = target.kind === "group"
+      ? { id: crypto.randomUUID(), sender_id: state.user.id, group_id: id, recipient_id: null, text: message.text, kind: "text", delivery_status: "sent" }
+      : { id: crypto.randomUUID(), sender_id: state.user.id, group_id: null, recipient_id: id, text: message.text, kind: "text", delivery_status: "sent" };
+    sendCloudMessage(payload).then((result) => {
+      if (!result.error) {
+        message.cloudId = payload.id;
+        state.messageStatus[message.id] = "delivered";
+        persist();
+      }
+      paintMessageStatus(message.id);
+    }).catch(() => {});
   }
   renderMessages($("#tab-messages") || $("#community-body"));
 }
 
 function subscribeToChat(id) {
   conversationSubscription?.unsubscribe();
-  const group = allGroups().find((item) => item.id === id);
+  const target = chatTarget(id);
+  const group = target.kind === "group" ? target.group : null;
+  // Local-only chats have no server counterpart — nothing to subscribe to.
+  if (!signedIn() || (target.kind !== "group" && target.kind !== "connection")) {
+    conversationSubscription = { unsubscribe: () => {}, sendTyping: async () => {} };
+    return;
+  }
   conversationSubscription = subscribeToConversation({
     groupId: group?.id,
     recipientId: group ? undefined : id,
     onMessage: (message) => {
-      if (message.sender_id === state.user?.id) return;
-      state.messages[id] = [
-        ...(state.messages[id] || []),
-        {
-          id: message.id,
-          text: message.text,
-          kind: message.kind,
-          ts: message.created_at
-            ? new Date(message.created_at).getTime()
-            : Date.now(),
-          me: false,
-        },
-      ];
-      persist();
-      if (state.user) markMessageRead(message.id, state.user.id);
-      if (notifOn("community") && !isChatMuted(id)) {
-        const chat =
-          allGroups().find((g) => g.id === id) ||
-          state.friends.find((f) => f.id === id);
-        const who = chat?.name || (chat ? "@" + chat.username : "Community");
-        browserNotify(
-          `New message · ${who}`,
-          cleanText(message.text || "").slice(0, 120),
-        );
+      if (!message || message.sender_id === state.user?.id) return;
+      const row = {
+        id: message.id,
+        cloudId: message.id,
+        text: message.text,
+        kind: message.kind,
+        ts: message.created_at ? new Date(message.created_at).getTime() : Date.now(),
+        me: false,
+        sender_id: message.sender_id,
+      };
+      const attach = async () => {
+        if (row.sender_id) {
+          const { data } = await getPublicProfiles([row.sender_id]).catch(() => ({ data: [] }));
+          row.sysName = data?.[0] ? "@" + (data[0].handle || "member") : undefined;
+        }
+        if (state.activeChat !== id) {
+          // Background chat: cache only, plus the standard notification path.
+          state.messages[id] = [...(state.messages[id] || []), row].slice(-300);
+          persist();
+        } else {
+          state.messages[id] = [...(state.messages[id] || []), row].slice(-300);
+          persist();
+          appendChatBubble(id, row, chatRoot()) || (state.tab === "community" && renderCommunity());
+        }
+        if (state.user) markMessageRead(message.id, state.user.id).catch(() => {});
+        if (notifOn("community") && !isChatMuted(id)) {
+          const chat = groupById(id) || (state.friends || []).find((f) => f.id === id) || cloudFriends.find((f) => f.id === id);
+          const who = chat?.name || (chat ? "@" + (chat.username || chat.handle) : "Community");
+          browserNotify(`New message · ${who}`, cleanText(message.text || "").slice(0, 120));
+        }
+      };
+      attach().catch(() => {});
+    },
+    onUpdate: (message) => {
+      // Edits repaint in place; soft-deletes remove the bubble. Both are
+      // targeted — the input, focus and scroll are untouched.
+      if (!message || state.activeChat !== id) return;
+      const list = state.messages[id] || [];
+      const idx = list.findIndex((m) => m.id === message.id || m.cloudId === message.id);
+      if (idx < 0) return;
+      if (message.deleted_at) {
+        const [gone] = list.splice(idx, 1);
+        if (gone) {
+          const pins = pinnedIdsFor(id);
+          if (pins.includes(gone.id)) togglePinMessage(id, gone.id);
+        }
+        state.messages[id] = list;
+        persist();
+        paintChatBody(id, chatRoot(), false);
+      } else if (message.text != null && list[idx].text !== message.text) {
+        list[idx] = { ...list[idx], text: message.text, edited: true };
+        persist();
+        paintChatBody(id, chatRoot(), false);
       }
-      renderCommunity();
     },
     onTyping: (payload) => {
       if (payload.userId === state.user?.id) return;
       state.typing[id] = payload.isTyping;
-      renderCommunity();
+      paintTypingIndicator(id, payload.isTyping, chatRoot());
       // Typing flags expire on their own — a lost realtime update must
       // not leave "Someone is typing…" on screen forever.
       clearTimeout(typingTimeouts[id]);
@@ -4186,7 +5616,7 @@ function subscribeToChat(id) {
         typingTimeouts[id] = setTimeout(() => {
           if (state.typing[id]) {
             delete state.typing[id];
-            if (state.tab === "community") renderCommunity();
+            paintTypingIndicator(id, false, chatRoot());
           }
         }, 6000);
     },
@@ -4194,9 +5624,137 @@ function subscribeToChat(id) {
       state.messageStatus[receipt.message_id] = receipt.read_at
         ? "read"
         : "delivered";
-      renderCommunity();
+      paintMessageStatus(receipt.message_id);
     },
   });
+}
+// Delete a message: own messages always; others' only by group owner/admin
+// on the server (the RPC re-checks the role — the UI gate is just courtesy).
+function askDeleteMessage(id, mid, root) {
+  const list = state.messages[id] || [];
+  const msg = list.find((m) => m.id === mid);
+  if (!msg) return;
+  const role = myGroupRole(id);
+  const canModerate = signedIn() && isGroupChat(id) && (role === "owner" || role === "admin") && msg.cloudId;
+  if (!msg.me && !canModerate) return notify("You can only delete your own messages");
+  confirmBox(canModerate && !msg.me ? "Delete this message?" : "Delete this message?", canModerate && !msg.me ? "Removed for everyone in the group." : "Removed from this conversation.", async () => {
+    state.messages[id] = (state.messages[id] || []).filter((m) => m.id !== mid);
+    const pins = pinnedIdsFor(id);
+    if (pins.includes(mid)) togglePinMessage(id, mid);
+    persist();
+    if (msg.cloudId && signedIn()) {
+      try {
+        const { error } = await deleteCloudMessage(msg.cloudId);
+        if (error && !isPhase7Missing(error) && navigator.onLine) {
+          notify("Couldn't delete on the server — " + String(error.message).slice(0, 80));
+        }
+      } catch { /* local delete stands */ }
+    }
+    const bubble = document.querySelector(`[data-react-open="${mid}"]`)?.closest(".bubble");
+    if (bubble && state.activeChat === id) bubble.remove();
+    else paintChatBody(id, root, false);
+    notify("Message deleted");
+  });
+}
+// Inline message editing: own text messages only (admins/owners get no edit
+// rights on other people's messages — moderation stays delete-only, and the
+// database re-checks sender ownership on every save).
+let editingMessage = null; // { chatId, mid }
+function startMessageEdit(cid, mid, root) {
+  const msg = (state.messages[cid] || []).find((m) => m.id === mid);
+  if (!msg || !msg.me) return;
+  if (msg.kind != null && msg.kind !== "text") return notify("Only text messages can be edited");
+  editingMessage = { chatId: cid, mid };
+  const bubble = root.querySelector(`[data-react-open="${mid}"]`)?.closest(".bubble");
+  if (!bubble) {
+    editingMessage = null;
+    return;
+  }
+  bubble.dataset.editing = "1";
+  bubble.innerHTML = `<div class="msg-edit-box"><textarea class="textarea" data-msg-edit-input rows="2" maxlength="4000" aria-label="Edit message">${esc(msg.text || "")}</textarea><div class="msg-edit-actions"><button type="button" class="ghost" data-msg-edit-cancel>Cancel</button><button type="button" class="primary" data-msg-edit-save>Save</button></div></div>`;
+  const input = bubble.querySelector("[data-msg-edit-input]");
+  input?.focus();
+  try {
+    input?.setSelectionRange(input.value.length, input.value.length);
+  } catch { /* ignore */ }
+  input?.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      cancelMessageEdit();
+    } else if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) {
+      ev.preventDefault();
+      saveMessageEdit();
+    }
+  });
+  bubble.querySelector("[data-msg-edit-cancel]").onclick = () => cancelMessageEdit();
+  bubble.querySelector("[data-msg-edit-save]").onclick = () => saveMessageEdit();
+}
+function cancelMessageEdit() {
+  // Cancel makes NO database change — just repaint the chat region.
+  if (!editingMessage) return;
+  const { chatId } = editingMessage;
+  editingMessage = null;
+  paintChatBody(chatId, chatRoot(), false);
+}
+async function saveMessageEdit() {
+  if (!editingMessage) return;
+  const { chatId: cid, mid } = editingMessage;
+  if (state.activeChat !== cid) {
+    editingMessage = null;
+    return;
+  }
+  const root = chatRoot();
+  const bubble = root.querySelector(`[data-react-open="${mid}"]`)?.closest(".bubble")
+    || [...root.querySelectorAll(".bubble")].find((b) => b.dataset.editing);
+  const input = bubble?.querySelector("[data-msg-edit-input]");
+  const msg = (state.messages[cid] || []).find((m) => m.id === mid);
+  if (!msg || !input || !msg.me) {
+    editingMessage = null;
+    paintChatBody(cid, root, false);
+    return;
+  }
+  const next = input.value.trim().slice(0, 4000);
+  if (!next) {
+    notify("Message can't be empty");
+    input.focus();
+    return;
+  }
+  if (next === msg.text) {
+    editingMessage = null;
+    paintChatBody(cid, root, false);
+    return;
+  }
+  const saveBtn = bubble.querySelector("[data-msg-edit-save]");
+  // Cloud-backed messages confirm with the server first, so a reload always
+  // shows exactly what the user sees. Local-only edits apply instantly.
+  if (msg.cloudId && signedIn()) {
+    if (!navigator.onLine) {
+      notify("You're offline — reconnect to save this edit.");
+      input.focus();
+      return;
+    }
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Saving…";
+    try {
+      const { error } = await editCloudMessage(msg.cloudId, next);
+      if (error) throw error;
+    } catch (e) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Save";
+      const raw = String(e?.message || "");
+      notify(/permission|forbidden|GROUP_FORBIDDEN/i.test(raw)
+        ? "You can only edit your own messages."
+        : "Couldn't save the edit — try again.");
+      input.focus();
+      return;
+    }
+  }
+  msg.text = next;
+  msg.edited = true;
+  persist();
+  editingMessage = null;
+  paintChatBody(cid, root, false);
+  notify("Message edited");
 }
 
 let callClockT = 0;
@@ -4281,8 +5839,8 @@ function renderCall() {
         <span class="call-quality q-${q.cls}"><i></i>${q.label}</span>
       </span>
       <span class="call-head-actions">
-        <button class="call-icon" data-call-pips title="${minimized ? "Expand call" : "Minimize"}" aria-label="${minimized ? "Expand call" : "Minimize call"}">${minimized ? sicon("expand") : sicon("tab")}</button>
-        <button class="call-icon danger" data-end title="End call" aria-label="End call">${sicon("x")}</button>
+        <button type="button" class="call-icon" data-call-pips title="${minimized ? "Expand call" : "Minimize"}" aria-label="${minimized ? "Expand call" : "Minimize call"}">${minimized ? sicon("expand") : sicon("tab")}</button>
+        <button type="button" class="call-icon danger" data-end title="End call" aria-label="End call">${sicon("x")}</button>
       </span>
     </div>
     <div class="call-stage" data-call-stage>
@@ -4293,15 +5851,15 @@ function renderCall() {
     </div>
     <div class="call-controls">
       <div class="call-ctrl-group">
-        ${state.callStatus === "connected" ? `<button class="call-btn" data-call-reaction="fire" title="Send a fire reaction" aria-label="Fire reaction">🔥</button><button class="call-btn" data-call-reaction="party" title="Send a celebration reaction" aria-label="Celebration reaction">🎉</button><button class="call-btn" data-call-reaction="strong" title="Send a encouragement reaction" aria-label="Encouragement reaction">💪</button>` : `<button class="call-btn primary tall" data-connect>${state.callStatus === "connecting" ? '<span class="call-dots light"><i></i><i></i><i></i></span> Connecting…' : sicon("phone") + " Start call"}</button>`}
+        ${state.callStatus === "connected" ? `<button type="button" class="call-btn" data-call-reaction="fire" title="Send a fire reaction" aria-label="Fire reaction">🔥</button><button type="button" class="call-btn" data-call-reaction="party" title="Send a celebration reaction" aria-label="Celebration reaction">🎉</button><button type="button" class="call-btn" data-call-reaction="strong" title="Send a encouragement reaction" aria-label="Encouragement reaction">💪</button>` : `<button type="button" class="call-btn primary tall" data-connect>${state.callStatus === "connecting" ? '<span class="call-dots light"><i></i><i></i><i></i></span> Connecting…' : sicon("phone") + " Start call"}</button>`}
       </div>
       <div class="call-ctrl-group">
-        <button class="call-btn round ${state.callMuted ? "off" : ""}" data-mute title="${state.callMuted ? "Unmute microphone" : "Mute microphone"}" aria-pressed="${Boolean(state.callMuted)}" aria-label="Microphone">${state.callMuted ? sicon("mute") : sicon("mic")}</button>
-        <button class="call-btn round ${state.callCameraOff ? "off" : ""}" data-camera title="${state.callCameraOff ? "Turn camera on" : "Turn camera off"}" aria-pressed="${Boolean(state.callCameraOff)}" aria-label="Camera">${sicon("camera")}</button>
-        <button class="call-btn round" data-flip-camera title="Flip camera" aria-label="Flip camera">${sicon("refresh")}</button>
-        <button class="call-btn round" data-share title="Share your screen" aria-label="Share screen">${sicon("upload")}</button>
-        <button class="call-btn round" data-call-chat title="Open chat" aria-label="Open chat">${sicon("chat")}</button>
-        <button class="call-btn round hang" data-end title="Leave call" aria-label="Leave call">${sicon("phone")}</button>
+        <button type="button" class="call-btn round ${state.callMuted ? "off" : ""}" data-mute title="${state.callMuted ? "Unmute microphone" : "Mute microphone"}" aria-pressed="${Boolean(state.callMuted)}" aria-label="Microphone">${state.callMuted ? sicon("mute") : sicon("mic")}</button>
+        <button type="button" class="call-btn round ${state.callCameraOff ? "off" : ""}" data-camera title="${state.callCameraOff ? "Turn camera on" : "Turn camera off"}" aria-pressed="${Boolean(state.callCameraOff)}" aria-label="Camera">${sicon("camera")}</button>
+        <button type="button" class="call-btn round" data-flip-camera title="Flip camera" aria-label="Flip camera">${sicon("refresh")}</button>
+        <button type="button" class="call-btn round" data-share title="Share your screen" aria-label="Share screen">${sicon("upload")}</button>
+        <button type="button" class="call-btn round" data-call-chat title="Open chat" aria-label="Open chat">${sicon("chat")}</button>
+        <button type="button" class="call-btn round hang" data-end title="Leave call" aria-label="Leave call">${sicon("phone")}</button>
       </div>
     </div>
   `;

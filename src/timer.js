@@ -9,6 +9,7 @@ import { techniques, TECH_DETAILS, matchTech, totalDue, applyTechPreset } from "
 import { logFocusDay, progressChallenges, missionDeskMarkup, bindMissionDesk, challengeLock, challengeLockBanner, leaveChallenge, paceSec } from "./community.js";
 import { shell } from "./app.js";
 import { mirrorTasks, deleteTaskEverywhere, mirrorTechniqueUsage, onSyncStatus } from "./services/productivity-sync.js";
+import { secureEarn, secureUnlock, secureStreak, cloudRewards, REWARD_EVENTS } from "./services/rewards-sync.js";
 let timerHandle;
 
 let durations = { focus: 1500, short: 300, long: 900 };
@@ -54,11 +55,35 @@ export function initTimerState() {
 
 const modeLabels = { focus: "Focus", short: "Short Break", long: "Long Break" };
 
-function recordFocusDay() {
+function recordFocusDay(sessionRef) {
   if (!state.streak || !Array.isArray(state.streak.days)) {
     state.streak = { count: 0, lastDate: "", days: [] };
   }
   const today = dayKey(new Date());
+  // Cloud members: the DATABASE owns the streak count (UTC day boundaries,
+  // same-day repeats never advance it). Keep the local day-dots + best mirror.
+  if (cloudRewards()) {
+    if (!state.streak.days.includes(today)) {
+      state.streak.days.push(today);
+      state.streak.days = state.streak.days.slice(-30);
+    }
+    persist();
+    try {
+      secureStreak(`day:${today}:${sessionRef || "na"}`).then((r) => {
+        if (!r || !r.ok) return;
+        state.streak.lastDate = today;
+        if (r.longest > (state.bestStreak || 0)) state.bestStreak = r.longest;
+        persist();
+        if (r.bonus > 0) {
+          notify(`${sicon("fire")} ${r.current}-day streak · +${r.bonus} coins milestone!`);
+          celebrate(true);
+        }
+      }).catch(() => {});
+    } catch {
+      /* streak sync is best-effort */
+    }
+    return;
+  }
   const yesterday = dayKey(new Date(Date.now() - 86400000));
   if (state.streak.lastDate !== today) {
     if (!state.streak.lastDate || state.streak.lastDate === yesterday) {
@@ -154,14 +179,14 @@ function streakDots() {
     const key = dayKey(new Date(Date.now() - i * 86400000));
     out += `<i class="${active.has(key) ? "on" : ""}" title="${key}"></i>`;
   }
-  return `<button class="streak-dots" data-status-open="streak:current" title="Watch status loop">${out}</button>`;
+  return `<button type="button" class="streak-dots" data-status-open="streak:current" title="Watch status loop">${out}</button>`;
 }
 
 function openFocusView() {
   closeFocusView();
   const overlay = document.createElement("div");
   overlay.id = "focus-view";
-  overlay.innerHTML = `<div class="eyebrow">${modeLabels[state.mode]} · nothing else</div><div class="timer-ring" style="--progress:${(state.time / durations[state.mode]) * 360}deg"><div><div class="time">${fmt(state.time)}</div><div class="timer-label">${modeLabels[state.mode]}</div></div></div><div class="timer-actions"><button class="primary" data-toggle>${state.running ? "Pause" : "Start session"}</button></div><button class="ghost focus-exit" data-focus-exit>${sicon("x")} Exit focus (Esc)</button>`;
+  overlay.innerHTML = `<div class="eyebrow">${modeLabels[state.mode]} · nothing else</div><div class="timer-ring" style="--progress:${(state.time / durations[state.mode]) * 360}deg"><div><div class="time">${fmt(state.time)}</div><div class="timer-label">${modeLabels[state.mode]}</div></div></div><div class="timer-actions"><button type="button" class="primary" data-toggle>${state.running ? "Pause" : "Start session"}</button></div><button type="button" class="ghost focus-exit" data-focus-exit>${sicon("x")} Exit focus (Esc)</button>`;
   document.body.append(overlay);
   document.body.style.overflow = "hidden";
   $("[data-toggle]", overlay).onclick = () => toggleTimer();
@@ -211,11 +236,11 @@ function renderTimer() {
   )
     .map(
       ([id, label]) =>
-        `<button data-mode="${id}" class="${state.mode === id ? "active" : ""}">${label}</button>`,
+        `<button type="button" data-mode="${id}" class="${state.mode === id ? "active" : ""}">${label}</button>`,
     )
     .join(
       "",
-    )}</div><div class="template-row">${TIMER_TEMPLATES.map((p) => `<button class="template-chip" data-template="${p.id}" title="Focus ${p.focus}:${String(p.focusSec ?? 0).padStart(2, "0")} · break ${p.short}:${String(p.shortSec ?? 0).padStart(2, "0")}">${p.name}</button>`).join("")}</div><div class="dur-row"><label class="field-label">Minutes<input class="input dur-input" id="dur-min" type="number" min="0" max="180" step="1" value="${Math.floor(durations[state.mode] / 60)}" aria-label="Custom minutes"></label><label class="field-label">Seconds<input class="input dur-input" id="dur-sec" type="number" min="0" max="59" step="1" value="${durations[state.mode] % 60}" aria-label="Custom seconds"></label><button class="ghost" data-set-dur title="Apply to ${modeLabels[state.mode]}">Set duration</button></div>${challengeLockBanner()}<div class="focus-live off" data-focus-live><span class="live-dot"></span>Focus live — leaving this page resets the session</div>${techTagMarkup()}<div class="timer-ring" style="--progress:${(state.time / durations[state.mode]) * 360}deg"><div><div class="time">${fmt(state.time)}</div><div class="timer-label">${modeLabels[state.mode]}</div></div></div><div class="timer-actions"><button class="icon-btn" data-reset title="Reset">↻</button><button class="primary" data-toggle>${state.running ? "Pause" : "Start session"}</button><button class="icon-btn" data-focusview title="Focus mode — just the timer">${sicon("expand")}</button></div><div class="muted" style="margin-top:36px">${state.sessions % 4}/4 sessions until a long break</div></div><div class="card tasks-card"><div class="section-row"><h2>Today’s tasks</h2><span class="tag" data-task-count>${state.tasks.filter((t) => t.done).length}/${state.tasks.length} complete</span><span class="sync-pill" data-sync-pill hidden></span></div><div class="input-row"><input class="input" id="task-input" placeholder="What are you working on?"><button class="primary" data-add-task>+</button></div><div id="task-list">${state.tasks.length ? state.tasks.map(taskRow).join("") : '<p class="muted" style="padding:25px 0">Your task list is clear. Add one small next step.</p>'}</div></div></div><div class="grid four stats"><div class="card stat"><span>Sessions</span><strong>${state.sessions}</strong><span>all time</span></div><div class="card stat"><span>Coins</span><strong data-coin="stat">${state.coins}</strong><span>available to spend</span></div><div class="card stat"><span>Tasks</span><strong>${state.tasks.filter((t) => t.done).length}</strong><span>completed</span></div><div class="card stat"><span>Focus streak</span><strong>${state.streak.count}</strong>${streakDots()}<span>day streak</span></div></div>${missionDeskMarkup()}${techOfDayMarkup()}${gardenMarkup()}${recordsMarkup()}${achievementsCabinetMarkup()}`;
+    )}</div><div class="template-row">${TIMER_TEMPLATES.map((p) => `<button type="button" class="template-chip" data-template="${p.id}" title="Focus ${p.focus}:${String(p.focusSec ?? 0).padStart(2, "0")} · break ${p.short}:${String(p.shortSec ?? 0).padStart(2, "0")}">${p.name}</button>`).join("")}</div><div class="dur-row"><label class="field-label">Minutes<input class="input dur-input" id="dur-min" type="number" min="0" max="180" step="1" value="${Math.floor(durations[state.mode] / 60)}" aria-label="Custom minutes"></label><label class="field-label">Seconds<input class="input dur-input" id="dur-sec" type="number" min="0" max="59" step="1" value="${durations[state.mode] % 60}" aria-label="Custom seconds"></label><button type="button" class="ghost" data-set-dur title="Apply to ${modeLabels[state.mode]}">Set duration</button></div>${challengeLockBanner()}<div class="focus-live off" data-focus-live><span class="live-dot"></span>Focus live — leaving this page resets the session</div>${techTagMarkup()}<div class="timer-ring" style="--progress:${(state.time / durations[state.mode]) * 360}deg"><div><div class="time">${fmt(state.time)}</div><div class="timer-label">${modeLabels[state.mode]}</div></div></div><div class="timer-actions"><button type="button" class="icon-btn" data-reset title="Reset">↻</button><button type="button" class="primary" data-toggle>${state.running ? "Pause" : "Start session"}</button><button type="button" class="icon-btn" data-focusview title="Focus mode — just the timer">${sicon("expand")}</button></div><div class="muted" style="margin-top:36px">${state.sessions % 4}/4 sessions until a long break</div></div><div class="card tasks-card"><div class="section-row"><h2>Today’s tasks</h2><span class="tag" data-task-count>${state.tasks.filter((t) => t.done).length}/${state.tasks.length} complete</span><span class="sync-pill" data-sync-pill hidden></span></div><div class="input-row"><input class="input" id="task-input" placeholder="What are you working on?"><button type="button" class="primary" data-add-task>+</button></div><div id="task-list">${state.tasks.length ? state.tasks.map(taskRow).join("") : '<p class="muted" style="padding:25px 0">Your task list is clear. Add one small next step.</p>'}</div></div></div><div class="grid four stats"><div class="card stat"><span>Sessions</span><strong>${state.sessions}</strong><span>all time</span></div><div class="card stat"><span>Coins</span><strong data-coin="stat">${state.coins}</strong><span>available to spend</span></div><div class="card stat"><span>Tasks</span><strong>${state.tasks.filter((t) => t.done).length}</strong><span>completed</span></div><div class="card stat"><span>Focus streak</span><strong>${state.streak.count}</strong>${streakDots()}<span>day streak</span></div></div>${missionDeskMarkup()}${techOfDayMarkup()}${gardenMarkup()}${recordsMarkup()}${achievementsCabinetMarkup()}`;
   $$("[data-mode]", target).forEach(
     (b) =>
       (b.onclick = () => {
@@ -350,6 +375,19 @@ function renderTimer() {
         t.updated = Date.now();
         persist();
         mirrorTasks();
+        if (t.done) {
+          // One reward per completion state: unchecking + rechecking moves
+          // `updated`, so only genuinely new completions pay.
+          try {
+            secureEarn({
+              amount: REWARD_EVENTS.task_complete,
+              reason: "Task completed",
+              refKey: `task:${t.id}:${t.updated}`,
+            }).catch(() => {});
+          } catch {
+            /* reward is best-effort */
+          }
+        }
         const row = target.querySelector(`[data-task-row="${t.id}"]`);
         if (row) row.classList.toggle("done", t.done);
         b.classList.toggle("done", t.done);
@@ -428,6 +466,7 @@ function achievementsCabinetMarkup() {
 }
 
 function checkAchievements() {
+  let changed = false;
   ACHIEVEMENTS.forEach((a) => {
     if ((state.achievements || []).includes(a.id)) return;
     // Achievements define progress() (have/need), not test() — unlock when
@@ -436,12 +475,22 @@ function checkAchievements() {
     const earned = Boolean(p && p.have >= p.need);
     if (earned) {
       state.achievements.push(a.id);
+      changed = true;
       addNotification("Achievement unlocked", a.name, a.icon || "medal");
       celebrate(false);
       notify(`${a.emoji} Achievement unlocked: ${a.name}!`);
+      // Cloud members: the unlock + its coin reward are recorded
+      // idempotently server-side (unique user+achievement, one ledger row).
+      if (cloudRewards()) {
+        try {
+          secureUnlock(a.id).catch(() => {});
+        } catch {
+          /* unlock sync is best-effort */
+        }
+      }
     }
   });
-  persist();
+  if (changed) persist();
 }
 
 function saveAccomplishment() {
@@ -593,7 +642,7 @@ function techniqueOfDay() {
 
 function techOfDayMarkup() {
   const x = techniqueOfDay();
-  return `<div class="card" style="margin-top:18px"><div class="section-row"><h2>Technique of the day</h2><span class="tag">try it</span></div><div class="section-row" style="margin-bottom:0"><div><strong>${x[2]} ${x[1]}</strong><br><small class="muted">${esc(x[3])}</small></div><button class="primary" data-today-tech="${x[0]}" style="padding:9px 14px;font-size:12px;flex-shrink:0">Try it</button></div></div>`;
+  return `<div class="card" style="margin-top:18px"><div class="section-row"><h2>Technique of the day</h2><span class="tag">try it</span></div><div class="section-row" style="margin-bottom:0"><div><strong>${x[2]} ${x[1]}</strong><br><small class="muted">${esc(x[3])}</small></div><button type="button" class="primary" data-today-tech="${x[0]}" style="padding:9px 14px;font-size:12px;flex-shrink:0">Try it</button></div></div>`;
 }
 
 function biggestDay() {
@@ -610,7 +659,7 @@ function recordsMarkup() {
     (a) => !(state.achievements || []).includes(a.id),
   );
   const wins = (state.focusLog || []).slice(0, 5);
-  return `<div class="grid two" style="margin-top:18px"><div class="card"><div class="section-row"><h2>Records</h2><span class="tag">all time</span></div><div class="records-grid"><div><strong>${state.bestStreak || 0}${sicon("fire")}</strong><span>longest streak</span></div><div><strong>${biggestDay()}m</strong><span>biggest day</span></div><div><strong>${hours}h ${mins}m</strong><span>total focus</span></div><div><strong>${state.sessions}</strong><span>sessions</span></div></div><div class="section-row" style="margin-top:14px"><h3>Achievements</h3><span class="tag">${earned.length}/${ACHIEVEMENTS.length}</span></div><div class="ach-row">${earned.map((a) => `<span class="ach earned" title="${esc(a.name)}">${a.emoji}</span>`).join("")}${locked.map((a) => `<span class="ach locked" title="${esc(a.name)} — locked">${a.emoji}</span>`).join("")}</div></div><div class="card"><div class="section-row"><h2>Win journal</h2><span class="tag">${(state.focusLog || []).length}</span></div>${wins.length ? wins.map((w) => `<div class="win-row"><span>${sicon("check")}</span><div><p data-win-text="${w.id}">${esc(w.text)}</p><small class="muted">${new Date(w.at).toLocaleDateString()} · ${w.mins}m focus</small></div><span class="win-actions"><button class="icon-btn" data-win-edit="${w.id}" title="Edit win" aria-label="Edit win">${sicon("memo")}</button><button class="icon-btn" data-win-copy="${w.id}" title="Copy win" aria-label="Copy win">${sicon("clip")}</button><button class="icon-btn" data-win-del="${w.id}" title="Delete win" aria-label="Delete win">${sicon("trash")}</button></span></div>`).join("") : '<p class="muted">After each focus session, note one win. Future-you will thank you on hard days.</p>'}</div></div>`;
+  return `<div class="grid two" style="margin-top:18px"><div class="card"><div class="section-row"><h2>Records</h2><span class="tag">all time</span></div><div class="records-grid"><div><strong>${state.bestStreak || 0}${sicon("fire")}</strong><span>longest streak</span></div><div><strong>${biggestDay()}m</strong><span>biggest day</span></div><div><strong>${hours}h ${mins}m</strong><span>total focus</span></div><div><strong>${state.sessions}</strong><span>sessions</span></div></div><div class="section-row" style="margin-top:14px"><h3>Achievements</h3><span class="tag">${earned.length}/${ACHIEVEMENTS.length}</span></div><div class="ach-row">${earned.map((a) => `<span class="ach earned" title="${esc(a.name)}">${a.emoji}</span>`).join("")}${locked.map((a) => `<span class="ach locked" title="${esc(a.name)} — locked">${a.emoji}</span>`).join("")}</div></div><div class="card"><div class="section-row"><h2>Win journal</h2><span class="tag">${(state.focusLog || []).length}</span></div>${wins.length ? wins.map((w) => `<div class="win-row"><span>${sicon("check")}</span><div><p data-win-text="${w.id}">${esc(w.text)}</p><small class="muted">${new Date(w.at).toLocaleDateString()} · ${w.mins}m focus</small></div><span class="win-actions"><button type="button" class="icon-btn" data-win-edit="${w.id}" title="Edit win" aria-label="Edit win">${sicon("memo")}</button><button type="button" class="icon-btn" data-win-copy="${w.id}" title="Copy win" aria-label="Copy win">${sicon("clip")}</button><button type="button" class="icon-btn" data-win-del="${w.id}" title="Delete win" aria-label="Delete win">${sicon("trash")}</button></span></div>`).join("") : '<p class="muted">After each focus session, note one win. Future-you will thank you on hard days.</p>'}</div></div>`;
 }
 
 function findWin(id) {
@@ -622,7 +671,7 @@ function editWin(id) {
   if (!win) return;
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
-  modal.innerHTML = `<div class="modal"><div class="eyebrow">Win journal</div><h2>Edit win</h2><textarea class="textarea" data-win-input rows="3" maxlength="600">${esc(win.text)}</textarea><p class="st-confirm-err" data-win-err hidden></p><div class="modal-actions"><button class="ghost" data-win-cancel>Cancel</button><button class="primary" data-win-save>Save</button></div></div>`;
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Win journal</div><h2>Edit win</h2><textarea class="textarea" data-win-input rows="3" maxlength="600">${esc(win.text)}</textarea><p class="st-confirm-err" data-win-err hidden></p><div class="modal-actions"><button type="button" class="ghost" data-win-cancel>Cancel</button><button type="button" class="primary" data-win-save>Save</button></div></div>`;
   $("#modal-root").append(modal);
   const ta = modal.querySelector("[data-win-input]");
   ta.focus();
@@ -695,7 +744,7 @@ function techTagMarkup() {
   if (!state.sessionTech) return "";
   const x = techniques.find((y) => y[0] === state.sessionTech);
   if (!x) return "";
-  return `<div class="tech-tag"><span>${x[2]} Focusing with ${esc(x[1])}</span><button class="tech-untag" data-untag title="Remove tag">×</button></div>`;
+  return `<div class="tech-tag"><span>${x[2]} Focusing with ${esc(x[1])}</span><button type="button" class="tech-untag" data-untag title="Remove tag">×</button></div>`;
 }
 
 function toggleTimer() {
@@ -719,6 +768,8 @@ function startTimer() {
   if (state.time >= (state.sessionDuration || 0)) {
     state.distractions = 0;
     state.lastScore = null;
+    // Fresh session = fresh idempotency key for its completion reward.
+    if (state.mode === "focus") state.sessionId = uid();
   }
   // Timestamp-based: remaining time is derived from endsAt, so the session
   // stays accurate even when the browser throttles inactive tabs.
@@ -762,7 +813,7 @@ function completeSession() {
   state.endsAt = null;
   if (state.mode === "focus") {
     state.sessions++;
-    recordFocusDay();
+    recordFocusDay(state.sessionId);
     if (state.sessionTech) {
       const tagged = state.sessionTech;
       state.techStats = {
@@ -813,7 +864,20 @@ function completeSession() {
     );
     plantFlower();
     checkAchievements();
-    addCoins(reward);
+    // Idempotent earn: the same session id can never pay twice, even if this
+    // handler re-fires or the offline queue replays it after reconnect.
+    try {
+      secureEarn({
+        amount: reward,
+        reason: "Focus session complete",
+        refKey: `focus:${state.sessionId || "legacy"}:${state.sessions}`,
+        metadata: { sessions: state.sessions, streak: state.streak?.count || 0 },
+      }).then((r) => {
+        if (r && !r.ok && r.error) notify(r.error);
+      }).catch(() => {});
+    } catch {
+      addCoins(reward);
+    }
     addNotification(
       "Focus session complete",
       `You earned ${reward} coins (includes ${streakBonus} streak bonus${extras.length ? ` · ${extras.join(" · ")}` : ""}) for showing up and doing the work.`,
@@ -891,7 +955,7 @@ function showCompletionCard(kind) {
     const suggestLong = state.sessions % 4 === 0;
     const next = suggestLong ? "long" : "short";
     const mins = Math.round(durations[next] / 60);
-    overlay.innerHTML = `<div class="modal complete-card"><div class="complete-emoji">${sicon("party")}</div><div class="eyebrow">Focus session complete</div><h2>Beautiful work.</h2><p class="muted">+${state.lastReward || 10 + 2 * state.streak.count} coins earned · ${state.sessions} total sessions · ${state.streak.count}-day streak</p><div class="score-line"><strong>${state.lastScore ?? 100}</strong><span> · ${scoreGrade(state.lastScore ?? 100)}</span></div><input class="input" id="accomp-input" placeholder="What did you accomplish? (optional)" aria-label="What did you accomplish" style="margin-top:12px"><div class="modal-actions" style="justify-content:center;margin-top:18px"><button class="ghost" data-complete-close>Back to desk</button><button class="primary" data-complete-next>Start ${mins}-min ${next === "long" ? "long break" : "break"}</button></div></div>`;
+    overlay.innerHTML = `<div class="modal complete-card"><div class="complete-emoji">${sicon("party")}</div><div class="eyebrow">Focus session complete</div><h2>Beautiful work.</h2><p class="muted">+${state.lastReward || 10 + 2 * state.streak.count} coins earned · ${state.sessions} total sessions · ${state.streak.count}-day streak</p><div class="score-line"><strong>${state.lastScore ?? 100}</strong><span> · ${scoreGrade(state.lastScore ?? 100)}</span></div><input class="input" id="accomp-input" placeholder="What did you accomplish? (optional)" aria-label="What did you accomplish" style="margin-top:12px"><div class="modal-actions" style="justify-content:center;margin-top:18px"><button type="button" class="ghost" data-complete-close>Back to desk</button><button type="button" class="primary" data-complete-next>Start ${mins}-min ${next === "long" ? "long break" : "break"}</button></div></div>`;
     root.append(overlay);
     let overlayAuto = null;
     $("[data-complete-close]", overlay).onclick = () => {
@@ -917,7 +981,7 @@ function showCompletionCard(kind) {
     return;
   }
   const mins = Math.round(durations.focus / 60);
-  overlay.innerHTML = `<div class="modal complete-card"><div class="complete-emoji">${sicon("bolt")}</div><div class="eyebrow">${modeLabels[state.mode]} over</div><h2>Feeling refreshed?</h2><p class="muted">Your next focus session is a ${mins}-minute sprint away.</p><p class="muted" data-break-idea style="margin-top:10px">Try this break: <strong>${randomBreakIdea()}</strong></p><div class="modal-actions" style="justify-content:center;margin-top:18px"><button class="ghost" data-break-spin>${sicon("wheel")} Spin idea</button><button class="ghost" data-complete-close>Back to desk</button><button class="primary" data-complete-next>Start ${mins}-min focus</button></div></div>`;
+  overlay.innerHTML = `<div class="modal complete-card"><div class="complete-emoji">${sicon("bolt")}</div><div class="eyebrow">${modeLabels[state.mode]} over</div><h2>Feeling refreshed?</h2><p class="muted">Your next focus session is a ${mins}-minute sprint away.</p><p class="muted" data-break-idea style="margin-top:10px">Try this break: <strong>${randomBreakIdea()}</strong></p><div class="modal-actions" style="justify-content:center;margin-top:18px"><button type="button" class="ghost" data-break-spin>${sicon("wheel")} Spin idea</button><button type="button" class="ghost" data-complete-close>Back to desk</button><button type="button" class="primary" data-complete-next>Start ${mins}-min focus</button></div></div>`;
   root.append(overlay);
   $("[data-break-spin]", overlay).onclick = () => {
     const idea = $("[data-break-idea]", overlay);
@@ -1050,7 +1114,7 @@ function renderMiniTimer() {
     updateBarPadding();
     return;
   }
-  root.innerHTML = `<div class="mini-timer"><span class="mini-live off" data-mini-live title="Focus live — leaving this page resets the session">${sicon("rec")}</span><span class="eyebrow" data-mini-mode style="color:#b7d0bd">${state.sessionTech && techniques.find((y) => y[0] === state.sessionTech) ? `${techniques.find((y) => y[0] === state.sessionTech)[2]} ` : ""}${modeLabels[state.mode]}</span><span class="mini-time" data-mini-time>${fmt(state.time)}</span><button class="mini-btn" data-mini-toggle>${state.running ? "Pause" : "Resume"}</button><button class="mini-btn ghost" data-mini-goto>Focus desk</button></div>`;
+  root.innerHTML = `<div class="mini-timer"><span class="mini-live off" data-mini-live title="Focus live — leaving this page resets the session">${sicon("rec")}</span><span class="eyebrow" data-mini-mode style="color:#b7d0bd">${state.sessionTech && techniques.find((y) => y[0] === state.sessionTech) ? `${techniques.find((y) => y[0] === state.sessionTech)[2]} ` : ""}${modeLabels[state.mode]}</span><span class="mini-time" data-mini-time>${fmt(state.time)}</span><button type="button" class="mini-btn" data-mini-toggle>${state.running ? "Pause" : "Resume"}</button><button type="button" class="mini-btn ghost" data-mini-goto>Focus desk</button></div>`;
   $("[data-mini-toggle]", root).onclick = () => toggleTimer();
   $("[data-mini-goto]", root).onclick = () => {
     state.tab = "timer";
@@ -1063,7 +1127,7 @@ function renderMiniTimer() {
 }
 
 function taskRow(task) {
-  return `<div class="task ${task.done ? "done" : ""}" data-task-row="${task.id}"><button class="task-check ${task.done ? "done" : ""}" data-task-check="${task.id}" aria-pressed="${Boolean(task.done)}" title="${task.done ? "Mark as not done" : "Mark as done"}" aria-label="${task.done ? "Mark as not done" : "Mark as done"}"><span class="tc-box">${sicon("check")}</span></button><span class="task-text">${esc(task.text)}${task.desc ? `<br><small class="muted">${esc(task.desc)}</small>` : ""}</span><span class="task-meta">${task.pomodoros || 0} ◷</span><button class="ghost task-edit" data-edit-task="${task.id}">Edit</button><button class="delete" data-delete-task="${task.id}" title="Remove task">×</button></div>`;
+  return `<div class="task ${task.done ? "done" : ""}" data-task-row="${task.id}"><button type="button" class="task-check ${task.done ? "done" : ""}" data-task-check="${task.id}" aria-pressed="${Boolean(task.done)}" title="${task.done ? "Mark as not done" : "Mark as done"}" aria-label="${task.done ? "Mark as not done" : "Mark as done"}"><span class="tc-box">${sicon("check")}</span></button><span class="task-text">${esc(task.text)}${task.desc ? `<br><small class="muted">${esc(task.desc)}</small>` : ""}</span><span class="task-meta">${task.pomodoros || 0} ◷</span><button type="button" class="ghost task-edit" data-edit-task="${task.id}">Edit</button><button type="button" class="delete" data-delete-task="${task.id}" title="Remove task">×</button></div>`;
 }
 
 function openTaskEditor(id) {
@@ -1071,7 +1135,7 @@ function openTaskEditor(id) {
   if (!task) return notify("That task no longer exists");
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
-  modal.innerHTML = `<div class="modal"><div class="eyebrow">Edit task</div><h2>Make it right</h2><label class="field-label">Task<input class="input" data-task-title value="${esc(task.text)}"></label><label class="field-label">Description<textarea class="textarea autogrow" data-task-desc rows="2" placeholder="What does done look like?">${esc(task.desc || "")}</textarea></label><div class="modal-actions"><button class="ghost" data-task-cancel>Cancel</button><button class="primary" data-task-save>Save changes</button></div></div>`;
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Edit task</div><h2>Make it right</h2><label class="field-label">Task<input class="input" data-task-title value="${esc(task.text)}"></label><label class="field-label">Description<textarea class="textarea autogrow" data-task-desc rows="2" placeholder="What does done look like?">${esc(task.desc || "")}</textarea></label><div class="modal-actions"><button type="button" class="ghost" data-task-cancel>Cancel</button><button type="button" class="primary" data-task-save>Save changes</button></div></div>`;
   $("#modal-root").append(modal);
   const titleInput = $("[data-task-title]", modal);
   $("[data-task-cancel]", modal).onclick = () => modal.remove();

@@ -4,9 +4,13 @@ import {
   spendCoins, addCoins, addNotification, dayKey, applyEquippedTheme, celebrate, confettiBurst,
   refreshServerTime, serverDayKey, serverNow,
 } from "./core.js";
-import { recordStorePurchase, backendConfigured, searchUsers, sendCloudMessage, sendGiftNotification } from "./services/backend.js";
+import { backendConfigured, searchUsers, sendCloudMessage, sendGiftNotification, loadInventory } from "./services/backend.js";
 import { SOUND_EQUIP, startLayer, stopLayer, playChime } from "./audio.js";
 import { shell } from "./app.js";
+import {
+  secureEarn, securePurchase, secureDeal, secureGift, secureConsume, secureOpenBox,
+  cloudRewards, getDailyDeals, pullRewards, refreshBalance, cachedLedger, REWARD_EVENTS,
+} from "./services/rewards-sync.js";
 const storeItems = [
   [
     "focus-flame",
@@ -438,15 +442,56 @@ function checkinReward() {
 function earnMarkup() {
   const claimed = state.checkin?.last === dayKey(new Date());
   const multActive = (state.boosts?.multiplierUntil || 0) > Date.now();
-  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>How to earn</h2><span class="tag" data-coin="earn">${sicon("coin")} ${state.coins}</span></div><div class="earn-grid"><div><strong>+10</strong><span>per focus session</span></div><div><strong>+2/day</strong><span>streak bonus</span></div><div><strong>${multActive ? "active" : "+25%"}</strong><span>coin multiplier${multActive ? " · ends " + new Date(state.boosts.multiplierUntil).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}</span></div><div><strong>+${checkinReward()}</strong><span>daily check-in</span></div></div><button class="primary" data-checkin style="margin-top:12px"${claimed ? " disabled" : ""}>${claimed ? "Checked in " + sicon("check") + " — see you tomorrow" : `Check in (+${checkinReward()} coins)`}</button></div>`;
+  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>How to earn</h2><span class="tag" data-coin="earn">${sicon("coin")} ${state.coins}</span></div><div class="earn-grid"><div><strong>+10</strong><span>per focus session</span></div><div><strong>+2/day</strong><span>streak bonus</span></div><div><strong>${multActive ? "active" : "+25%"}</strong><span>coin multiplier${multActive ? " · ends " + new Date(state.boosts.multiplierUntil).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}</span></div><div><strong>+${checkinReward()}</strong><span>daily check-in</span></div></div><button type="button" class="primary" data-checkin style="margin-top:12px"${claimed ? " disabled" : ""}>${claimed ? "Checked in " + sicon("check") + " — see you tomorrow" : `Check in (+${checkinReward()} coins)`}</button>${ledgerMarkup()}</div>`;
 }
 
-function claimCheckin() {
+function ledgerMarkup() {
+  // Cloud members see their authoritative ledger; guests see local purchases.
+  if (!cloudRewards()) return "";
+  let rows = [];
+  try {
+    rows = cachedLedger().slice(0, 8);
+  } catch {
+    rows = [];
+  }
+  if (!rows.length)
+    return `<details class="purchase-history"><summary>Coin history</summary><p class="muted">No coin activity yet — finish a focus session to earn.</p></details>`;
+  return `<details class="purchase-history"><summary>Coin history</summary>${rows.map((r) => {
+    const earn = r.type === "earn";
+    const when = r.created_at ? new Date(r.created_at).toLocaleDateString() : "";
+    return `<div class="purchase-row"><span class="${earn ? "earn-pos" : "earn-neg"}">${earn ? "+" : "−"}${Math.abs(r.amount)} ${sicon("coin")}</span><span class="muted">${esc(r.reason || "")} · ${when}</span></div>`;
+  }).join("")}</details>`;
+}
+
+async function claimCheckin() {
   const today = dayKey(new Date());
   if (state.checkin?.last === today) return notify("Already checked in today");
   const reward = checkinReward();
   state.checkin = { last: today };
-  addCoins(reward);
+  persist();
+  // Idempotent: one ref per day — refresh/reconnect can never double-pay.
+  try {
+    const r = await secureEarn({
+      amount: reward,
+      reason: "Daily check-in",
+      refKey: `checkin:${today}`,
+    });
+    if (r && !r.ok && r.error) {
+      state.checkin = { last: "" };
+      persist();
+      notify(r.error);
+      renderStore();
+      return;
+    }
+  } catch {
+    // secureEarn only throws on unexpected internal failure — never mint
+    // coins here. Reset so the user can retry cleanly.
+    state.checkin = { last: "" };
+    persist();
+    notify("Check-in failed — please try again.");
+    renderStore();
+    return;
+  }
   notify(`Checked in · +${reward} coins`);
   renderStore();
 }
@@ -466,7 +511,7 @@ const COIN_PACKS = [
 ];
 
 function topupMarkup() {
-  return `<div class="card topup-card" id="coin-packs" style="margin-bottom:18px"><div class="section-row"><h2>${sicon("coin")} Top up coins</h2><span class="tag">MoMo · GHS</span></div><p class="muted">Real money, real focus fuel — MTN, Telecel or AirtelTigo MoMo through Paystack. Approve the prompt on your phone and coins land instantly.</p><div class="pack-grid">${COIN_PACKS.map((p) => `<div class="pack${p.tag ? " featured" : ""}">${p.tag ? `<span class="pack-tag">${esc(p.tag)}</span>` : ""}<strong class="pack-coins">${sicon("coin")} ${p.coins}</strong><span class="pack-name">${esc(p.name)}</span><small class="muted">${esc(p.blurb)}</small><strong class="pack-price">GH₵ ${p.price}</strong><button class="primary" data-topup="${p.id}">Buy</button></div>`).join("")}</div>${PAYSTACK_PUBLIC_KEY ? "" : '<p class="muted setup-note">Seller setup: paste your Paystack public key into <b>PAYSTACK_PUBLIC_KEY</b> at the top of the store module and this section starts accepting MoMo.</p>'}</div>`;
+  return `<div class="card topup-card" id="coin-packs" style="margin-bottom:18px"><div class="section-row"><h2>${sicon("coin")} Top up coins</h2><span class="tag">MoMo · GHS</span></div><p class="muted">Real money, real focus fuel — MTN, Telecel or AirtelTigo MoMo through Paystack. Approve the prompt on your phone and coins land instantly.</p><div class="pack-grid">${COIN_PACKS.map((p) => `<div class="pack${p.tag ? " featured" : ""}">${p.tag ? `<span class="pack-tag">${esc(p.tag)}</span>` : ""}<strong class="pack-coins">${sicon("coin")} ${p.coins}</strong><span class="pack-name">${esc(p.name)}</span><small class="muted">${esc(p.blurb)}</small><strong class="pack-price">GH₵ ${p.price}</strong><button type="button" class="primary" data-topup="${p.id}">Buy</button></div>`).join("")}</div>${PAYSTACK_PUBLIC_KEY ? "" : '<p class="muted setup-note">Seller setup: paste your Paystack public key into <b>PAYSTACK_PUBLIC_KEY</b> at the top of the store module and this section starts accepting MoMo.</p>'}</div>`;
 }
 
 let paystackLoading = null;
@@ -495,7 +540,7 @@ function openTopup(packId) {
   }
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
-  modal.innerHTML = `<div class="modal"><div class="eyebrow">Top up · Mobile money</div><h2>${pack.coins} coins for GH₵ ${pack.price}</h2><p class="muted">Enter the email for your receipt, hit pay, then approve the MoMo prompt on your phone. Coins land the second Paystack confirms.</p><label class="field-label">Email for receipt<input class="input" data-topup-email type="email" value="${esc(state.profile.email || "")}" placeholder="you@example.com"></label><p class="st-confirm-err" data-topup-err hidden></p><div class="modal-actions"><button class="ghost" data-topup-cancel>Cancel</button><button class="primary" data-topup-pay>Pay GH₵ ${pack.price}</button></div></div>`;
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Top up · Mobile money</div><h2>${pack.coins} coins for GH₵ ${pack.price}</h2><p class="muted">Enter the email for your receipt, hit pay, then approve the MoMo prompt on your phone. Coins land the second Paystack confirms.</p><label class="field-label">Email for receipt<input class="input" data-topup-email type="email" value="${esc(state.profile.email || "")}" placeholder="you@example.com"></label><p class="st-confirm-err" data-topup-err hidden></p><div class="modal-actions"><button type="button" class="ghost" data-topup-cancel>Cancel</button><button type="button" class="primary" data-topup-pay>Pay GH₵ ${pack.price}</button></div></div>`;
   $("#modal-root").append(modal);
   const err = modal.querySelector("[data-topup-err]");
   const payBtn = modal.querySelector("[data-topup-pay]");
@@ -555,12 +600,77 @@ function openTopup(packId) {
   };
 }
 
-function creditTopup(pack, ref) {
-  addCoins(pack.coins);
+async function creditTopup(pack, ref) {
+  // Top-ups are real value: cloud members mint them through the ledger
+  // (idempotent on the payment ref) instead of local arithmetic.
+  try {
+    const r = await secureEarn({
+      amount: pack.coins,
+      reason: "Coin top-up",
+      refKey: `topup:${ref}`,
+      metadata: { pack: pack.id },
+    });
+    if (r && !r.ok && r.error) {
+      notify(r.error);
+      return;
+    }
+  } catch {
+    // Never mint top-up coins on an unexpected failure — the payment ref
+    // makes the earn safely retryable instead.
+    notify("Top-up failed before coins landed — please try again.");
+    return;
+  }
   addNotification("Coins topped up", `+${pack.coins} coins via MoMo · GH₵ ${pack.price} · ref ${ref}.`, "coin");
   celebrate(false);
   notify(`+${pack.coins} coins landed — enjoy the grind ${sicon("coin")}`);
   if (state.tab === "store") renderStore();
+}
+
+function removeOwnedById(id) {
+  const idx = (state.owned || []).findIndex((o) => o && o.id === id);
+  if (idx < 0) return null;
+  return removeOwnedAt(idx);
+}
+
+// Consume one owned unit, server-verified for cloud members. The effect only
+// applies after the database confirms the user actually owned it.
+let consumeBusy = false;
+async function consumeOne(rewardId, apply, opts = {}) {
+  if (consumeBusy) return false;
+  consumeBusy = true;
+  try {
+    return await consumeOneInner(rewardId, apply, opts);
+  } finally {
+    consumeBusy = false;
+  }
+}
+
+async function consumeOneInner(rewardId, apply, opts = {}) {
+  if (!cloudRewards()) {
+    const item = removeOwnedById(rewardId);
+    if (!item) return false;
+    if (opts.sellBack) addCoins(Math.floor((item.price || 0) * 0.6));
+    apply(item);
+    return true;
+  }
+  const res = await secureConsume({
+    rewardId,
+    qty: 1,
+    sellBack: opts.sellBack === true,
+  });
+  if (!res.ok) {
+    // Stale mirror (e.g. consumed on another device): drop it and resync.
+    if (/don't own/i.test(res.error || "")) {
+      removeOwnedById(rewardId);
+      persist();
+    }
+    notify(res.error || "Couldn't use that right now.");
+    renderStore();
+    return false;
+  }
+  removeOwnedById(rewardId);
+  apply();
+  return true;
 }
 
 function removeOwnedAt(idx) {
@@ -579,26 +689,26 @@ function collectionRow(i, idx) {
   let action = `<span class="tag">keepsake</span>`;
   if (i.category === "Themes") {
     const on = state.equipped?.theme === i.id;
-    action = `<button class="${on ? "ghost" : "primary"} ${btn}" data-equip-theme="${idx}">${on ? "Equipped " + sicon("check") : "Equip"}</button>`;
+    action = `<button type="button" class="${on ? "ghost" : "primary"} ${btn}" data-equip-theme="${idx}">${on ? "Equipped " + sicon("check") : "Equip"}</button>`;
   } else if (i.category === "Avatars") {
     const on = state.equipped?.avatar === i.id;
-    action = `<button class="${on ? "ghost" : "primary"} ${btn}" data-equip-avatar="${idx}">${on ? "Wearing " + sicon("check") : "Wear"}</button>`;
+    action = `<button type="button" class="${on ? "ghost" : "primary"} ${btn}" data-equip-avatar="${idx}">${on ? "Wearing " + sicon("check") : "Wear"}</button>`;
   } else if (i.category === "Badges") {
     const on = state.equipped?.badge === i.id;
-    action = `<button class="${on ? "ghost" : "primary"} ${btn}" data-equip-badge="${idx}">${on ? "Showcased " + sicon("check") : "Showcase"}</button>`;
+    action = `<button type="button" class="${on ? "ghost" : "primary"} ${btn}" data-equip-badge="${idx}">${on ? "Showcased " + sicon("check") : "Showcase"}</button>`;
   } else if (SOUND_EQUIP[i.id]) {
     const playing = state.soundMix[SOUND_EQUIP[i.id]] != null;
-    action = `<button class="${playing ? "ghost" : "primary"} ${btn}" data-equip-sound="${idx}">${playing ? "Playing " + sicon("check") : "Play"}</button>`;
+    action = `<button type="button" class="${playing ? "ghost" : "primary"} ${btn}" data-equip-sound="${idx}">${playing ? "Playing " + sicon("check") : "Play"}</button>`;
   } else if (i.id === "shield") {
-    action = `<button class="primary ${btn}" data-activate-shield="${idx}">Activate${(state.boosts?.shields || 0) ? ` (${state.boosts.shields} armed)` : ""}</button>`;
+    action = `<button type="button" class="primary ${btn}" data-activate-shield="${idx}">Activate${(state.boosts?.shields || 0) ? ` (${state.boosts.shields} armed)` : ""}</button>`;
   } else if (i.id === "multiplier") {
     const active = (state.boosts?.multiplierUntil || 0) > Date.now();
-    action = `<button class="primary ${btn}" data-activate-multiplier="${idx}">${active ? "Extend +24h" : "Activate"}</button>`;
+    action = `<button type="button" class="primary ${btn}" data-activate-multiplier="${idx}">${active ? "Extend +24h" : "Activate"}</button>`;
   } else if (i.id === "double") {
     const armed = Boolean(state.boosts?.doubleArmed);
-    action = `<button class="${armed ? "ghost" : "primary"} ${btn}" data-activate-double="${idx}"${armed ? " disabled" : ""}>${armed ? "Armed " + sicon("check") : "Activate"}</button>`;
+    action = `<button type="button" class="${armed ? "ghost" : "primary"} ${btn}" data-activate-double="${idx}"${armed ? " disabled" : ""}>${armed ? "Armed " + sicon("check") : "Activate"}</button>`;
   }
-  return `<div class="collection-row"><span class="collection-item">${i.emoji} <strong>${esc(i.name)}</strong></span><span class="collection-actions">${action}<button class="ghost ${btn}" data-sell-idx="${idx}" title="Sell for ${sell} coins">+${sell} ${sicon("coin")}</button></span></div>`;
+  return `<div class="collection-row"><span class="collection-item">${i.emoji} <strong>${esc(i.name)}</strong></span><span class="collection-actions">${action}<button type="button" class="ghost ${btn}" data-sell-idx="${idx}" title="Sell for ${sell} coins">+${sell} ${sicon("coin")}</button></span></div>`;
 }
 
 function collectionMarkup() {
@@ -771,6 +881,44 @@ const MYSTERY_BOXES = {
   },
 };
 
+let cloudDeals = null; // server deals when signed in: [{reward_id, deal_price, pct}]
+let cloudDealsFailed = false; // set when the Phase-4 RPCs are unreachable
+
+// Today's deals: server-computed (authoritative prices) for cloud members,
+// locally-seeded for guests (or when the Phase-4 migration isn't applied yet
+// — purchases then fail with an honest "run migration 012" error).
+function activeDeals() {
+  if (cloudRewards() && !cloudDealsFailed && Array.isArray(cloudDeals)) {
+    return cloudDeals
+      .map((d) => {
+        const item = findStoreItem(d.reward_id);
+        return item ? { item, pct: d.pct, price: d.deal_price } : null;
+      })
+      .filter(Boolean);
+  }
+  return dailyDeals();
+}
+
+function refreshCloudDeals() {
+  if (!cloudRewards() || cloudDealsFailed) return;
+  getDailyDeals()
+    .then((d) => {
+      if (!Array.isArray(d)) {
+        // Migration 012 not applied (or transient failure): fall back to
+        // local deals; secure purchase calls will explain honestly.
+        cloudDealsFailed = true;
+        if (state.tab === "store" && $("#tab-store")?.innerHTML) renderStore();
+        return;
+      }
+      const sig = JSON.stringify(d);
+      if (sig !== JSON.stringify(cloudDeals)) {
+        cloudDeals = d;
+        if (state.tab === "store" && $("#tab-store")?.innerHTML) renderStore();
+      }
+    })
+    .catch(() => {});
+}
+
 function dailyDeals() {
   const key = dayKey(new Date());
   let seed = 0;
@@ -883,6 +1031,48 @@ function grantReward(reward) {
 
 let boxBusy = false;
 
+async function buyBoxCloud(type, qty) {
+  // Each box is paid for AND rolled server-side (one RPC per box). The
+  // authoritative result is sealed into a local token — tapping it later
+  // only REVEALS the stored roll, never rerolls or mints.
+  for (let k = 0; k < qty; k++) {
+    const res = await secureOpenBox(type);
+    if (!res.ok) {
+      notify(res.error || "Box purchase failed.");
+      renderStore();
+      return;
+    }
+    const sealed = {
+      rarity: res.rarity,
+      kind: res.kind,
+      rewardId: res.rewardId,
+      amount: res.amount,
+    };
+    if (res.kind === "item") {
+      const item = findStoreItem(res.rewardId);
+      sealed.item = item ? { ...item } : { id: res.rewardId, name: res.rewardId, emoji: sicon("gift"), description: "", price: 0, category: "Badges" };
+    }
+    state.boxes.push({ id: uid(), type, boughtAt: Date.now(), sealed });
+    recordTransaction({
+      itemId: "box:" + type,
+      name: `${MYSTERY_BOXES[type].name} (${res.rarity})`,
+      qty: 1,
+      unitPrice: MYSTERY_BOXES[type].price,
+      total: MYSTERY_BOXES[type].price,
+      ts: Date.now(),
+      recipient: "me",
+    });
+  }
+  clearItemQty("box:" + type);
+  persist();
+  renderStore();
+  notify(
+    qty > 1
+      ? `${qty} × ${MYSTERY_BOXES[type].name} added — tap them to reveal`
+      : `${MYSTERY_BOXES[type].name} added — tap it to reveal`,
+  );
+}
+
 function buyBox(type, qty) {
   const box = MYSTERY_BOXES[type];
   if (!box || boxBusy) return;
@@ -890,10 +1080,19 @@ function buyBox(type, qty) {
   const total = box.price * qty;
   if ((state.coins || 0) < total)
     return notify(`You need ${total - state.coins} more coins.`);
+  if (cloudRewards() && !requireAuth("buy mystery boxes")) return;
   confirmBox(
     "Confirm purchase",
     `${qty} × ${esc(box.name)} — <strong>Total: ${total} coins</strong>`,
     () => {
+      if (cloudRewards()) {
+        if (boxBusy) return;
+        boxBusy = true;
+        buyBoxCloud(type, qty).finally(() => {
+          boxBusy = false;
+        });
+        return;
+      }
       boxBusy = true;
       try {
         if ((state.coins || 0) < total)
@@ -914,7 +1113,6 @@ function buyBox(type, qty) {
         });
         clearItemQty("box:" + type);
         persist();
-        recordPurchasesCloud([{ item: { id: "box:" + type }, qty, line: total }]);
         renderStore();
         notify(
           qty > 1
@@ -1023,6 +1221,34 @@ async function claimFreeBox() {
   }
   claimBusy = true;
   try {
+    if (cloudRewards()) {
+      if (!requireAuth("claim your free box")) return;
+      notify("Checking the calendar…");
+      await refreshServerTime();
+      // The server rolls, enforces one-per-day (UTC) and credits the
+      // reward. Refresh/replay can never mint a second box: the ref is
+      // unique AND the day guard rejects duplicates.
+      const res = await secureOpenBox("free-common");
+      if (!res.ok) {
+        renderStore();
+        notify(res.error || "Could not claim your box.");
+        return;
+      }
+      let reward;
+      if (res.kind === "item") {
+        const item = findStoreItem(res.rewardId) || { id: res.rewardId, name: res.rewardId, emoji: sicon("gift"), description: "", price: 0, category: "Badges" };
+        reward = { kind: "item", item, tier: res.rarity, emoji: item.emoji, name: item.name };
+      } else {
+        reward = { kind: "coins", amount: res.amount, tier: res.rarity, emoji: res.rarity === "Common" ? sicon("coin") : sicon("coins"), name: `${res.amount} coins${res.rarity === "Legendary" ? " JACKPOT" : ""}` };
+      }
+      const day = serverDayKey();
+      fb.pending = { day, tier: res.rarity, reward, sealed: true, opened: false, claimedAt: Date.now() };
+      fb.lastClaimDay = day;
+      persist();
+      renderStore();
+      openFreeBoxReveal();
+      return;
+    }
     notify("Checking the calendar…");
     await refreshServerTime();
     const day = serverDayKey();
@@ -1045,8 +1271,23 @@ function collectFreeReward() {
   const fb = freeBoxState();
   const p = fb.pending;
   if (!p || p.opened) return;
+  if (cloudRewards() && !p.sealed) {
+    // Same rule as paid boxes: members only collect server-sealed rolls.
+    fb.pending = null;
+    persist();
+    renderStore();
+    notify("That box wasn't issued by the server — claim a fresh one.");
+    return;
+  }
   p.opened = true;
-  grantReward(p.reward);
+  if (p.sealed) {
+    // Cloud box: coins are already in the server balance; mirror items.
+    if (p.reward.kind === "item" && p.reward.item) {
+      state.owned.push({ ...p.reward.item, owner: "me", boughtAt: Date.now() });
+    }
+  } else {
+    grantReward(p.reward);
+  }
   fb.history = [
     ...(fb.history || []),
     {
@@ -1093,10 +1334,10 @@ function freeBoxMarkup() {
   const fb = freeBoxState();
   const today = serverDayKey();
   if (fb.pending && !fb.pending.opened)
-    return `<div class="card freebox-card pending" style="margin-bottom:18px"><div class="section-row"><h2>Free daily box</h2><span class="tag">unopened</span></div><p class="muted">Your sealed box is waiting — the reward inside is already locked in.</p><button class="primary" data-free-reveal style="margin-top:10px">Reveal my box</button></div>`;
+    return `<div class="card freebox-card pending" style="margin-bottom:18px"><div class="section-row"><h2>Free daily box</h2><span class="tag">unopened</span></div><p class="muted">Your sealed box is waiting — the reward inside is already locked in.</p><button type="button" class="primary" data-free-reveal style="margin-top:10px">Reveal my box</button></div>`;
   if (fb.lastClaimDay === today)
     return `<div class="card freebox-card claimed" style="margin-bottom:18px"><div class="section-row"><h2>Free daily box</h2><span class="tag">claimed</span></div><p class="muted">Next free box in <strong>${freeBoxCountdown()}</strong> (midnight UTC).</p></div>`;
-  return `<div class="card freebox-card" style="margin-bottom:18px"><div class="section-row"><h2>Free daily box</h2><span class="tag">free</span></div><p class="muted">One Common box on the house — <strong>9.3% Rare</strong>, plus micro chances at <strong>Epic (0.63%)</strong> and <strong>Legendary (0.07%)</strong>. No coins needed.</p><button class="primary" data-free-claim style="margin-top:10px">Claim free box</button></div>`;
+  return `<div class="card freebox-card" style="margin-bottom:18px"><div class="section-row"><h2>Free daily box</h2><span class="tag">free</span></div><p class="muted">One Common box on the house — <strong>9.3% Rare</strong>, plus micro chances at <strong>Epic (0.63%)</strong> and <strong>Legendary (0.07%)</strong>. No coins needed.</p><button type="button" class="primary" data-free-claim style="margin-top:10px">Claim free box</button></div>`;
 }
 
 function isStackable(id) {
@@ -1132,7 +1373,7 @@ function clearItemQty(key) {
 
 function qtyStepperMarkup(key, unit) {
   const q = itemQty(key);
-  return `<div class="qty-stepper" role="group" aria-label="Quantity"><button data-qty-dec="${key}" title="Decrease quantity" aria-label="Decrease quantity">−</button><span data-qty-val="${key}" aria-live="polite">${q}</span><button data-qty-inc="${key}" title="Increase quantity" aria-label="Increase quantity">+</button></div><div class="qty-line" data-qty-line="${key}" data-qty-unit="${unit}">${qtyLineText(q, unit)}</div>`;
+  return `<div class="qty-stepper" role="group" aria-label="Quantity"><button type="button" data-qty-dec="${key}" title="Decrease quantity" aria-label="Decrease quantity">−</button><span data-qty-val="${key}" aria-live="polite">${q}</span><button type="button" data-qty-inc="${key}" title="Increase quantity" aria-label="Increase quantity">+</button></div><div class="qty-line" data-qty-line="${key}" data-qty-unit="${unit}">${qtyLineText(q, unit)}</div>`;
 }
 
 function qtyLineText(q, unit) {
@@ -1216,7 +1457,7 @@ function afterStoreQty(key) {
       (state.coins || 0) < box.price * itemQty("box:" + b.dataset.boxBuy);
   });
   $$("[data-deal-buy]").forEach((b) => {
-    const deal = dailyDeals().find((d) => d.item.id === b.dataset.dealBuy);
+    const deal = activeDeals().find((d) => d.item.id === b.dataset.dealBuy);
     if (!deal) return;
     const q = isStackable(deal.item.id)
       ? itemQty("deal:" + deal.item.id)
@@ -1234,30 +1475,17 @@ function recordTransaction(entry) {
   persist();
 }
 
-async function recordPurchasesCloud(lines) {
-  try {
-    if (!backendConfigured || !state.user) return;
-    for (const { item, qty, line } of lines) {
-      await recordStorePurchase({
-        rewardId: item.id,
-        qty,
-        price: line,
-      });
-    }
-  } catch {
-    /* local purchase already succeeded — cloud record is best effort */
-  }
-}
-
 function dealsMarkup() {
-  const deals = dailyDeals();
+  if (cloudRewards() && !cloudDealsFailed && !Array.isArray(cloudDeals))
+    return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Today's deals</h2><span class="tag">loading…</span></div><p class="muted">Fetching today's member deals.</p></div>`;
+  const deals = activeDeals();
   if (!deals.length) return "";
-  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Today's deals</h2><span class="tag">refreshes in ${dealCountdown()}</span></div>${deals.map((d) => `<div class="deal-row"><span class="deal-item">${d.item.emoji} <strong>${esc(d.item.name)}</strong></span>${isStackable(d.item.id) ? `<span class="deal-qty">${qtyStepperMarkup("deal:" + d.item.id, d.price)}</span>` : ""}<span class="deal-prices"><s class="muted">${sicon("coin")}${d.item.price}</s> <strong>${sicon("coin")}${d.price}</strong> <span class="tag">-${d.pct}%</span></span><button class="primary equip-btn" data-deal-buy="${d.item.id}"${ownsMine(d.item.id) && !isStackable(d.item.id) ? " disabled" : ""}>${ownsMine(d.item.id) && !isStackable(d.item.id) ? "Owned " + sicon("check") : "Buy"}</button></div>`).join("")}</div>`;
+  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Today's deals</h2><span class="tag">refreshes in ${dealCountdown()}</span></div>${deals.map((d) => `<div class="deal-row"><span class="deal-item">${d.item.emoji} <strong>${esc(d.item.name)}</strong></span>${isStackable(d.item.id) ? `<span class="deal-qty">${qtyStepperMarkup("deal:" + d.item.id, d.price)}</span>` : ""}<span class="deal-prices"><s class="muted">${sicon("coin")}${d.item.price}</s> <strong>${sicon("coin")}${d.price}</strong> <span class="tag">-${d.pct}%</span></span><button type="button" class="primary equip-btn" data-deal-buy="${d.item.id}"${ownsMine(d.item.id) && !isStackable(d.item.id) ? " disabled" : ""}>${ownsMine(d.item.id) && !isStackable(d.item.id) ? "Owned " + sicon("check") : "Buy"}</button></div>`).join("")}</div>`;
 }
 
 function mysteryMarkup() {
   const boxes = state.boxes || [];
-  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Mystery boxes</h2><span class="tag">luck</span></div>${freeBoxMarkup()}<div class="grid two">${Object.entries(MYSTERY_BOXES).map(([type, b]) => `<div class="box-card box-${type}"><div class="box-emoji">${b.emoji}</div><h3>${b.name}</h3><p class="muted" style="font-size:12px">${b.blurb}</p><div class="odds-row">${b.odds.filter(([, pct]) => pct > 0).map(([name, pct]) => `<span class="rarity-${name.toLowerCase()}">${name} ${pct}%</span>`).join("")}</div>${qtyStepperMarkup("box:" + type, b.price)}<button class="primary equip-btn" data-box-buy="${type}"${state.coins < b.price ? " disabled" : ""}>Buy · ${sicon("coin")}${b.price}</button></div>`).join("")}</div>${boxes.length ? `<div class="section-row" style="margin-top:14px"><h3>Your boxes (${boxes.length})</h3></div><div class="box-inventory">${boxes.map((bx) => `<button class="box-token" data-box-open="${bx.id}" title="Open ${MYSTERY_BOXES[bx.type]?.name || "box"}">${MYSTERY_BOXES[bx.type]?.emoji || sicon("gift")}</button>`).join("")}</div><p class="muted">Tap a box to open it. Rewards land straight in your account.</p>` : '<p class="muted" style="margin-top:10px">No boxes yet — buy one above and test your luck.</p>'}</div>`;
+  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Mystery boxes</h2><span class="tag">luck</span></div>${freeBoxMarkup()}<div class="grid two">${Object.entries(MYSTERY_BOXES).map(([type, b]) => `<div class="box-card box-${type}"><div class="box-emoji">${b.emoji}</div><h3>${b.name}</h3><p class="muted" style="font-size:12px">${b.blurb}</p><div class="odds-row">${b.odds.filter(([, pct]) => pct > 0).map(([name, pct]) => `<span class="rarity-${name.toLowerCase()}">${name} ${pct}%</span>`).join("")}</div>${qtyStepperMarkup("box:" + type, b.price)}<button type="button" class="primary equip-btn" data-box-buy="${type}"${state.coins < b.price ? " disabled" : ""}>Buy · ${sicon("coin")}${b.price}</button></div>`).join("")}</div>${boxes.length ? `<div class="section-row" style="margin-top:14px"><h3>Your boxes (${boxes.length})</h3></div><div class="box-inventory">${boxes.map((bx) => `<button type="button" class="box-token" data-box-open="${bx.id}" title="Open ${MYSTERY_BOXES[bx.type]?.name || "box"}">${MYSTERY_BOXES[bx.type]?.emoji || sicon("gift")}</button>`).join("")}</div><p class="muted">Tap a box to open it. Rewards land straight in your account.</p>` : '<p class="muted" style="margin-top:10px">No boxes yet — buy one above and test your luck.</p>'}</div>`;
 }
 
 function openBox(boxId) {
@@ -1266,7 +1494,7 @@ function openBox(boxId) {
   const meta = MYSTERY_BOXES[box.type];
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
-  modal.innerHTML = `<div class="modal complete-card box-open-${box.type}"><div class="eyebrow">${meta.name}</div><div class="mystery-stage" data-stage><div class="mystery-boxart">${meta.emoji}</div></div><div class="freebox-badge" data-badge hidden></div><h2 data-box-title>Get ready…</h2><p class="muted" data-box-sub>Something good is coming.</p><div class="modal-actions" style="justify-content:center;margin-top:16px"><button class="ghost" data-box-cancel>Not yet</button><span data-box-actions hidden><button class="primary" data-box-collect>Collect</button></span></div></div>`;
+  modal.innerHTML = `<div class="modal complete-card box-open-${box.type}"><div class="eyebrow">${meta.name}</div><div class="mystery-stage" data-stage><div class="mystery-boxart">${meta.emoji}</div></div><div class="freebox-badge" data-badge hidden></div><h2 data-box-title>Get ready…</h2><p class="muted" data-box-sub>Something good is coming.</p><div class="modal-actions" style="justify-content:center;margin-top:16px"><button type="button" class="ghost" data-box-cancel>Not yet</button><span data-box-actions hidden><button type="button" class="primary" data-box-collect>Collect</button></span></div></div>`;
   $("#modal-root").append(modal);
   const timers = [];
   const later = (fn, ms) => timers.push(setTimeout(fn, ms));
@@ -1302,7 +1530,18 @@ function openBox(boxId) {
   });
   const reveal = () => {
     if (!alive()) return;
-    const reward = rollBoxReward(box.type);
+    // Sealed (cloud) boxes reveal the SERVER's stored roll — the reward was
+    // fixed and credited at purchase time. Unsealed (guest/legacy) boxes use
+    // the local roll and grant locally.
+    let reward;
+    if (box.sealed) {
+      const s = box.sealed;
+      reward = s.kind === "coins"
+        ? { kind: "coins", amount: s.amount, tier: s.rarity, emoji: s.rarity === "Legendary" ? sicon("coins") : sicon("coin"), name: `${s.amount} coins${s.rarity === "Legendary" ? " JACKPOT" : ""}` }
+        : { kind: "item", item: s.item, tier: s.rarity, emoji: s.item.emoji, name: s.item.name };
+    } else {
+      reward = rollBoxReward(box.type);
+    }
     const rank = { Common: 0, Rare: 1, Epic: 2, Legendary: 3 }[reward.tier] ?? 0;
     const badgeText = { Common: "COMMON", Rare: "RARE REWARD!", Epic: "EPIC REWARD!", Legendary: "LEGENDARY REWARD!" };
     stage.classList.remove("shake", "shake-fast", "glow");
@@ -1326,7 +1565,26 @@ function openBox(boxId) {
     if (actions) actions.hidden = false;
     $("[data-box-collect]", modal).onclick = () => {
       state.boxes = (state.boxes || []).filter((b) => b.id !== box.id);
-      grantReward(reward);
+      if (cloudRewards() && !box.sealed) {
+        // Members may only open server-sealed boxes. An unsealed token (guest
+        // era or tampered localStorage) carries no server payment — opening it
+        // with a client-side roll would mint value from nothing. Drop it.
+        persist();
+        modal.remove();
+        renderStore();
+        notify("That box wasn't issued by the server — it was removed. Buy a fresh one to play.");
+        return;
+      }
+      if (box.sealed) {
+        // Already credited server-side at purchase: mirror items locally so
+        // the collection shows them; coins need no further action.
+        if (reward.kind === "item" && reward.item) {
+          state.owned.push({ ...reward.item, owner: "me", boughtAt: Date.now() });
+          persist();
+        }
+      } else {
+        grantReward(reward);
+      }
       celebrate(reward.tier === "Common" ? false : true);
       modal.remove();
       renderStore();
@@ -1377,7 +1635,7 @@ function openFreeBoxReveal() {
   const burstN = [70, 130, 220, 340][rank];
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
-  modal.innerHTML = `<div class="modal complete-card freebox-modal tier-${p.tier.toLowerCase()}"><div class="eyebrow">Free daily box · reward sealed at claim</div><div class="mystery-stage freebox-anticipate" data-stage><div class="mystery-boxart" data-boxart>${sicon("gift")}</div><div class="freebox-flash" data-flash hidden></div></div><div class="freebox-badge" data-badge hidden></div><h2 data-box-title>Something stirs inside…</h2><p class="muted" data-box-sub>No rerolls, no funny business — what was sealed is what you get.</p><div class="modal-actions" style="justify-content:center;margin-top:16px"><button class="ghost" data-box-cancel>Not yet</button><span data-box-actions hidden><button class="primary" data-box-collect>Collect</button></span></div></div>`;
+  modal.innerHTML = `<div class="modal complete-card freebox-modal tier-${p.tier.toLowerCase()}"><div class="eyebrow">Free daily box · reward sealed at claim</div><div class="mystery-stage freebox-anticipate" data-stage><div class="mystery-boxart" data-boxart>${sicon("gift")}</div><div class="freebox-flash" data-flash hidden></div></div><div class="freebox-badge" data-badge hidden></div><h2 data-box-title>Something stirs inside…</h2><p class="muted" data-box-sub>No rerolls, no funny business — what was sealed is what you get.</p><div class="modal-actions" style="justify-content:center;margin-top:16px"><button type="button" class="ghost" data-box-cancel>Not yet</button><span data-box-actions hidden><button type="button" class="primary" data-box-collect>Collect</button></span></div></div>`;
   $("#modal-root").append(modal);
   const timers = [];
   const later = (fn, ms) => timers.push(setTimeout(fn, ms));
@@ -1471,13 +1729,53 @@ function openFreeBoxReveal() {
   );
 }
 
+let dealBusy = false;
+
+async function buyDealCloud(id, qty) {
+  const deal = activeDeals().find((d) => d.item.id === id);
+  if (!deal) return notify("That deal is no longer available");
+  for (let k = 0; k < qty; k++) {
+    const res = await secureDeal({ rewardId: id, fallbackPrice: deal.price });
+    if (!res.ok) {
+      notify(res.error || "Deal purchase failed.");
+      renderStore();
+      return;
+    }
+    state.owned.push({ ...deal.item, owner: "me", boughtAt: Date.now() });
+    recordTransaction({
+      itemId: id,
+      name: deal.item.name,
+      qty: 1,
+      unitPrice: res.total,
+      total: res.total,
+      ts: Date.now(),
+      recipient: "me",
+    });
+  }
+  clearItemQty("deal:" + id);
+  persist();
+  renderStore();
+  notify(`Deal snagged: ${qty > 1 ? qty + " × " : ""}${deal.item.name} (−${deal.pct}%)`);
+}
+
 function buyDeal(id, qty) {
-  const deal = dailyDeals().find((d) => d.item.id === id);
+  const deal = activeDeals().find((d) => d.item.id === id);
   if (!deal) return;
   if (ownsMine(id) && !isStackable(id)) return notify("Already in your collection");
   qty = isStackable(id)
     ? Math.min(MAX_QTY, Math.max(1, Math.floor(Number(qty) || 1)))
     : 1;
+  if (cloudRewards()) {
+    if (!requireAuth("grab deals")) return;
+    // One tap = one attempt: each attempt mints a fresh idempotency key, so
+    // a second concurrent run would record a SECOND purchase. Guard it.
+    if (dealBusy) return;
+    dealBusy = true;
+    buyDealCloud(id, qty).finally(() => {
+      dealBusy = false;
+    });
+    return;
+  }
   const total = deal.price * qty;
   if ((state.coins || 0) < total)
     return notify(`You need ${total - state.coins} more coins.`);
@@ -1503,7 +1801,6 @@ function buyDeal(id, qty) {
       });
       clearItemQty("deal:" + id);
       persist();
-      recordPurchasesCloud([{ item: deal.item, qty, line: total }]);
       renderStore();
       notify(`Deal snagged: ${qty > 1 ? qty + " × " : ""}${deal.item.name} (−${deal.pct}%)`);
     },
@@ -1692,7 +1989,7 @@ function renderGiftCenter() {
   if (!giftSelected) {
     const friends = matchLocalFriends(giftQuery);
     const dir = giftResults;
-    modal.innerHTML = `<div class="modal"><div class="eyebrow">Send a gift · step 1 of 2</div><h2>Who are you gifting to?</h2><div class="song-search" style="margin-top:12px"><span class="song-search-ico" aria-hidden="true">${sicon("search")}</span><input class="input" id="gift-search" placeholder="Search by username" value="${esc(giftQuery)}" aria-label="Search users" autocomplete="off"></div><div class="eyebrow" style="margin:10px 0 6px">Friends</div><div class="gift-list">${friends.map((p) => giftPersonRow(p, null)).join("") || '<p class="muted">No friends match — add some from the Friends tab.</p>'}</div><div class="eyebrow" style="margin:12px 0 6px">Registered users</div><div class="gift-list" data-gift-dir>${giftSearching ? '<p class="muted">Searching…</p>' : dir.length ? dir.map((p) => giftPersonRow(p, null)).join("") : `<p class="muted">${backendConfigured && state.user ? "Type 2+ letters to search the directory." : "Sign in to search every registered user."}</p>`}</div><div class="modal-actions" style="margin-top:16px"><button class="ghost" data-gift-cancel>Cancel</button></div></div>`;
+    modal.innerHTML = `<div class="modal"><div class="eyebrow">Send a gift · step 1 of 2</div><h2>Who are you gifting to?</h2><div class="song-search" style="margin-top:12px"><span class="song-search-ico" aria-hidden="true">${sicon("search")}</span><input class="input" id="gift-search" placeholder="Search by username" value="${esc(giftQuery)}" aria-label="Search users" autocomplete="off"></div><div class="eyebrow" style="margin:10px 0 6px">Friends</div><div class="gift-list">${friends.map((p) => giftPersonRow(p, null)).join("") || '<p class="muted">No friends match — add some from the Friends tab.</p>'}</div><div class="eyebrow" style="margin:12px 0 6px">Registered users</div><div class="gift-list" data-gift-dir>${giftSearching ? '<p class="muted">Searching…</p>' : dir.length ? dir.map((p) => giftPersonRow(p, null)).join("") : `<p class="muted">${backendConfigured && state.user ? "Type 2+ letters to search the directory." : "Sign in to search every registered user."}</p>`}</div><div class="modal-actions" style="margin-top:16px"><button type="button" class="ghost" data-gift-cancel>Cancel</button></div></div>`;
     $("#modal-root").append(modal);
     $("[data-gift-cancel]", modal).onclick = () => closeGiftCenter();
     modal.addEventListener("click", (e) => {
@@ -1717,7 +2014,7 @@ function renderGiftCenter() {
   }
   const items = shopItems().filter((i) => state.selectedStore.includes(i.id));
   const total = items.reduce((a, i) => a + i.price, 0);
-  modal.innerHTML = `<div class="modal"><div class="eyebrow">Send a gift · step 2 of 2</div><h2>${sicon("gift")} You're sending a gift!</h2><div class="gift-summary"><div class="gift-summary-row"><span class="muted">To</span><strong>${sicon("user")} ${esc(giftSelected.name)}</strong></div><div class="gift-summary-row"><span class="muted">Items</span><span>${items.length ? items.map((i) => `${i.emoji} ${esc(i.name)}`).join(", ") : "<em>Cart is empty</em>"}</span></div><div class="gift-summary-row"><span class="muted">Total</span><strong>${sicon("coin")}${total}</strong></div></div><label class="field-label">Personal message (optional)<textarea class="input autogrow" id="gift-msg" rows="2" placeholder="Keep crushing your studies!"></textarea></label><div class="modal-actions" style="margin-top:16px"><button class="ghost" data-gift-back>Back</button><button class="primary" data-gift-continue${items.length ? "" : " disabled"}>Continue to Checkout</button></div></div>`;
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Send a gift · step 2 of 2</div><h2>${sicon("gift")} You're sending a gift!</h2><div class="gift-summary"><div class="gift-summary-row"><span class="muted">To</span><strong>${sicon("user")} ${esc(giftSelected.name)}</strong></div><div class="gift-summary-row"><span class="muted">Items</span><span>${items.length ? items.map((i) => `${i.emoji} ${esc(i.name)}`).join(", ") : "<em>Cart is empty</em>"}</span></div><div class="gift-summary-row"><span class="muted">Total</span><strong>${sicon("coin")}${total}</strong></div></div><label class="field-label">Personal message (optional)<textarea class="input autogrow" id="gift-msg" rows="2" placeholder="Keep crushing your studies!"></textarea></label><div class="modal-actions" style="margin-top:16px"><button type="button" class="ghost" data-gift-back>Back</button><button type="button" class="primary" data-gift-continue${items.length ? "" : " disabled"}>Continue to Checkout</button></div></div>`;
   $("#modal-root").append(modal);
   modal.addEventListener("click", (e) => {
     if (e.target === modal) closeGiftCenter();
@@ -1883,7 +2180,7 @@ async function checkoutGiftFlow(message) {
   const friendChat = target.kind === "friend";
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
-  modal.innerHTML = `<div class="modal complete-card"><div class="complete-emoji">${sicon("gift")}</div><div class="eyebrow">Gift sent!</div><h2>You're awesome.</h2><p class="muted"><strong>To:</strong> ${esc(target.name)}<br><strong>Items:</strong> ${items.length ? items.map((i) => `${i.emoji} ${esc(i.name)}`).join(", ") : "—"}${message ? `<br><strong>Message:</strong> “${esc(message)}”` : ""}</p><p class="muted">${res.cloud ? "Delivered to their inbox " + sicon("check") + " and notification sent." : friendChat ? "Posted in your chat — they'll see it here." : "Saved to your records."}</p><div class="modal-actions" style="justify-content:center;margin-top:16px"><button class="primary" data-gift-done>Done</button></div></div>`;
+  modal.innerHTML = `<div class="modal complete-card"><div class="complete-emoji">${sicon("gift")}</div><div class="eyebrow">Gift sent!</div><h2>You're awesome.</h2><p class="muted"><strong>To:</strong> ${esc(target.name)}<br><strong>Items:</strong> ${items.length ? items.map((i) => `${i.emoji} ${esc(i.name)}`).join(", ") : "—"}${message ? `<br><strong>Message:</strong> “${esc(message)}”` : ""}</p><p class="muted">${res.cloud ? "Delivered to their inbox " + sicon("check") + " and notification sent." : friendChat ? "Posted in your chat — they'll see it here." : "Saved to your records."}</p><div class="modal-actions" style="justify-content:center;margin-top:16px"><button type="button" class="primary" data-gift-done>Done</button></div></div>`;
   $("#modal-root").append(modal);
   $("[data-gift-done]", modal).onclick = () => modal.remove();
   modal.addEventListener("click", (e) => {
@@ -1892,8 +2189,49 @@ async function checkoutGiftFlow(message) {
   celebrate(false);
 }
 
+// Cross-device catch-up: anything the server inventory holds that this
+// device hasn't mirrored into the collection yet gets a local mirror.
+// Additive only (never deletes) so guest-era items are never wiped.
+let lastInventoryMerge = 0;
+async function mergeCloudInventory() {
+  if (!cloudRewards()) return false;
+  if (Date.now() - lastInventoryMerge < 60000) return false;
+  lastInventoryMerge = Date.now();
+  let rows = null;
+  try {
+    const res = await loadInventory();
+    if (res.error || !Array.isArray(res.data)) return false;
+    rows = res.data;
+  } catch {
+    return false;
+  }
+  let touched = false;
+  for (const row of rows) {
+    if (!row || (row.qty || 0) <= 0) continue;
+    const item = findStoreItem(row.reward_id);
+    if (!item) continue;
+    const have = (state.owned || []).filter(
+      (o) => o && o.id === item.id && (!o.owner || o.owner === "me"),
+    ).length;
+    const want = isStackable(item.id) ? Math.min(row.qty, MAX_QTY) : 1;
+    for (let k = have; k < want; k++) {
+      state.owned.push({ ...item, owner: "me", boughtAt: Date.now() });
+      touched = true;
+    }
+  }
+  if (touched) persist();
+  return touched;
+}
+
 function renderStore() {
   const t = $("#tab-store");
+  if (!t) return;
+  refreshCloudDeals(); // async: re-renders the deals section when ready
+  mergeCloudInventory()
+    .then((changed) => {
+      if (changed && state.tab === "store") renderStore();
+    })
+    .catch(() => {});
   if (giftTarget.type !== "me" && !giftTarget.id) {
     giftTarget = { type: "me", id: "me", name: "Buy for myself" };
     giftRecipient = "me";
@@ -1902,7 +2240,7 @@ function renderStore() {
     state.storeCategory === "All"
       ? shopItems()
       : shopItems().filter((x) => x.category === state.storeCategory);
-  t.innerHTML = `${viewHead("Rewards store", "Spend the coins you earn from focused sessions on themes, sounds, boosts, badges, and profile identities.")}${earnMarkup()}${topupMarkup()}${dealsMarkup()}${mysteryMarkup()}<div class="filter-bar">${["All", "Themes", "Sounds", "Boosts", "Badges", "Avatars"].map((x) => `<button class="filter ${state.storeCategory === x ? "active" : ""}" data-store-filter="${x}">${x}</button>`).join("")}</div><div class="grid three">${visible.map((i) => `<article class="card store-item ${state.selectedStore.includes(i.id) ? "selected" : ""}" data-store-item="${i.id}"><button class="info-btn" data-info="${i.id}" data-tip="${esc(rewardInfo(i))}" title="About this reward" aria-label="About ${esc(i.name)}">i</button><div class="emoji">${i.emoji}</div><div class="price">${sicon("coin")} ${i.price}</div>${isStackable(i.id) ? qtyStepperMarkup(i.id, i.price) : ""}<h3>${esc(i.name)}</h3><p class="muted">${esc(i.description)}</p><span class="tag">${i.category}</span>${i.season ? `<span class="tag limited-tag">limited · ${seasonDaysLeft(i)}d left</span>` : ""}</article>`).join("")}</div><div class="store-footer"><span><strong id="cart-count">${cartUnits()}</strong> units · <b id="cart-total">${cartTotal()}</b> coins</span><span class="recipient-wrap" data-recipient-wrap><button type="button" class="recipient-btn" data-recipient-btn aria-haspopup="listbox" aria-expanded="false">${giftBtnInner()}<svg class="recipient-chev" width="12" height="8" viewBox="0 0 12 8" fill="none"><path d="M1 1l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="recipient-pop" data-recipient-pop role="listbox" aria-label="Buy for" hidden>${recipientOptions().map((o) => `<button type="button" role="option" aria-selected="${o.id === giftRecipient}" class="recipient-opt${o.id === giftRecipient ? " selected" : ""}" data-recipient-pick="${o.id}">${o.initial ? `<span class="recipient-avatar sm">${esc(o.initial)}</span>` : `<span class="recipient-emoji">${o.icon}</span>`}<span class="recipient-txt"><strong>${esc(o.name)}</strong><small>${esc(o.sub)}</small></span><span class="recipient-check">${sicon("check")}</span></button>`).join("")}</div></span><button class="primary" id="checkout">Buy selected</button></div>${collectionMarkup()}`;
+  t.innerHTML = `${viewHead("Rewards store", "Spend the coins you earn from focused sessions on themes, sounds, boosts, badges, and profile identities.")}${earnMarkup()}${topupMarkup()}${dealsMarkup()}${mysteryMarkup()}<div class="filter-bar">${["All", "Themes", "Sounds", "Boosts", "Badges", "Avatars"].map((x) => `<button type="button" class="filter ${state.storeCategory === x ? "active" : ""}" data-store-filter="${x}">${x}</button>`).join("")}</div><div class="grid three">${visible.map((i) => `<article class="card store-item ${state.selectedStore.includes(i.id) ? "selected" : ""}" data-store-item="${i.id}"><button type="button" class="info-btn" data-info="${i.id}" data-tip="${esc(rewardInfo(i))}" title="About this reward" aria-label="About ${esc(i.name)}">i</button><div class="emoji">${i.emoji}</div><div class="price">${sicon("coin")} ${i.price}</div>${isStackable(i.id) ? qtyStepperMarkup(i.id, i.price) : ""}<h3>${esc(i.name)}</h3><p class="muted">${esc(i.description)}</p><span class="tag">${i.category}</span>${i.season ? `<span class="tag limited-tag">limited · ${seasonDaysLeft(i)}d left</span>` : ""}</article>`).join("")}</div><div class="store-footer"><span><strong id="cart-count">${cartUnits()}</strong> units · <b id="cart-total">${cartTotal()}</b> coins</span><span class="recipient-wrap" data-recipient-wrap><button type="button" class="recipient-btn" data-recipient-btn aria-haspopup="listbox" aria-expanded="false">${giftBtnInner()}<svg class="recipient-chev" width="12" height="8" viewBox="0 0 12 8" fill="none"><path d="M1 1l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="recipient-pop" data-recipient-pop role="listbox" aria-label="Buy for" hidden>${recipientOptions().map((o) => `<button type="button" role="option" aria-selected="${o.id === giftRecipient}" class="recipient-opt${o.id === giftRecipient ? " selected" : ""}" data-recipient-pick="${o.id}">${o.initial ? `<span class="recipient-avatar sm">${esc(o.initial)}</span>` : `<span class="recipient-emoji">${o.icon}</span>`}<span class="recipient-txt"><strong>${esc(o.name)}</strong><small>${esc(o.sub)}</small></span><span class="recipient-check">${sicon("check")}</span></button>`).join("")}</div></span><button type="button" class="primary" id="checkout">Buy selected</button></div>${collectionMarkup()}`;
   $$("[data-store-filter]", t).forEach(
     (b) =>
       (b.onclick = () => {
@@ -2008,49 +2346,50 @@ function renderStore() {
   $$("[data-activate-shield]", t).forEach(
     (b) =>
       (b.onclick = () => {
-        const item = removeOwnedAt(+b.dataset.activateShield);
-        if (!item) return;
-        state.boosts.shields++;
-        persist();
-        renderStore();
-        notify(sicon("shield") + " Shield armed — your next missed day is forgiven");
+        consumeOne("shield", () => {
+          state.boosts.shields++;
+          persist();
+          renderStore();
+          notify(sicon("shield") + " Shield armed — your next missed day is forgiven");
+        }, { reason: "Streak Shield activated" });
       }),
   );
   $$("[data-activate-multiplier]", t).forEach(
     (b) =>
       (b.onclick = () => {
-        const item = removeOwnedAt(+b.dataset.activateMultiplier);
-        if (!item) return;
-        state.boosts.multiplierUntil =
-          Math.max(Date.now(), state.boosts.multiplierUntil || 0) +
-          24 * 60 * 60 * 1000;
-        persist();
-        renderStore();
-        notify(sicon("sparkle") + " +25% coins for the next 24 hours");
+        consumeOne("multiplier", () => {
+          state.boosts.multiplierUntil =
+            Math.max(Date.now(), state.boosts.multiplierUntil || 0) +
+            24 * 60 * 60 * 1000;
+          persist();
+          renderStore();
+          notify(sicon("sparkle") + " +25% coins for the next 24 hours");
+        }, { reason: "Coin Multiplier activated" });
       }),
   );
   $$("[data-activate-double]", t).forEach(
     (b) =>
       (b.onclick = () => {
         if (state.boosts.doubleArmed) return;
-        const item = removeOwnedAt(+b.dataset.activateDouble);
-        if (!item) return;
-        state.boosts.doubleArmed = true;
-        persist();
-        renderStore();
-        notify(sicon("target") + " Armed — your next focus reward is doubled");
+        consumeOne("double", () => {
+          state.boosts.doubleArmed = true;
+          persist();
+          renderStore();
+          notify(sicon("target") + " Armed — your next focus reward is doubled");
+        }, { reason: "Double Dip armed" });
       }),
   );
   $$("[data-sell-idx]", t).forEach(
     (b) =>
       (b.onclick = () => {
-        const item = removeOwnedAt(+b.dataset.sellIdx);
-        if (!item) return;
-        addCoins(Math.floor(item.price * 0.6));
-        persist();
-        applyEquippedTheme();
-        notify("Reward traded for coins");
-        renderStore();
+        const preview = state.owned[+b.dataset.sellIdx];
+        if (!preview) return;
+        consumeOne(preview.id, () => {
+          persist();
+          applyEquippedTheme();
+          notify("Reward traded for coins");
+          renderStore();
+        }, { sellBack: true });
       }),
   );
 }
@@ -2107,6 +2446,15 @@ function checkout(onConfirmed, onCancelled) {
     `${rows}<br><br><strong>Total: ${total} coins</strong>`,
     () => {
       if (checkoutBusy) return;
+      // Cloud members check out through the secure RPCs (authoritative
+      // catalog price, atomic debit + inventory, idempotent per line).
+      if (cloudRewards()) {
+        checkoutBusy = true;
+        checkoutCloud(fresh, onConfirmed, onCancelled).finally(() => {
+          checkoutBusy = false;
+        });
+        return;
+      }
       checkoutBusy = true;
       let ok = false;
       try {
@@ -2155,7 +2503,6 @@ function checkout(onConfirmed, onCancelled) {
         state.selectedStore = [];
         fresh.forEach(({ item }) => clearItemQty(item.id));
         persist();
-        recordPurchasesCloud(fresh);
         notify(
           recipient === "me" ? "Rewards purchased" : "Gift sent to your friend",
         );
@@ -2171,4 +2518,60 @@ function checkout(onConfirmed, onCancelled) {
   );
 }
 
-export { storeItems, equippedAvatarEmoji, equippedBadgeEmoji, checkinReward, earnMarkup, claimCheckin, removeOwnedAt, collectionRow, collectionMarkup, purchaseHistoryMarkup, inSeason, seasonDaysLeft, normItem, findStoreItem, migrateOwned, shopItems, MYSTERY_BOXES, dailyDeals, dealCountdown, boxItemsByRarity, rollBoxReward, grantReward, boxBusy, buyBox, FREE_BOX_ODDS, hash01, rollFreeBox, claimBusy, claimFreeBox, collectFreeReward, freeBoxCountdown, freeBoxMarkup, freeBoxState, isStackable, ownsMine, MAX_QTY, itemQty, setItemQty, clearItemQty, qtyStepperMarkup, qtyLineText, refreshQtyDom, changeQty, bindQtySteppers, cartLines, cartTotal, cartUnits, refreshCartFooter, afterCardQty, afterStoreQty, recordTransaction, recordPurchasesCloud, dealsMarkup, mysteryMarkup, openBox, openFreeBoxReveal, buyDeal, giftRecipient, giftTarget, giftView, giftSelected, giftQuery, giftResults, giftSearching, giftSearchTimer, giftSearchToken, recipientOptions, matchLocalFriends, giftBtnInner, bindRecipient, openGiftCenter, closeGiftCenter, giftPersonRow, renderGiftCenter, bindGiftPicks, runGiftSearch, deliverGiftCloud, checkoutGiftFlow, renderStore, checkoutBusy, checkout };
+// Secure cart checkout: one idempotent RPC per line at the authoritative
+// price. Any failure aborts the rest — completed lines stay completed (each
+// is its own atomic purchase), the balance is reconciled, and the user gets
+// an honest error instead of a false success.
+async function checkoutCloud(fresh, onConfirmed, onCancelled) {
+  const recipient = giftRecipient;
+  const isUserGift = recipient !== "me" && giftTarget.type === "user" && giftTarget.id === recipient;
+  const ts = Date.now();
+  const doneLines = [];
+  for (const { item, qty } of fresh) {
+    const res = isUserGift
+      ? await secureGift({ rewardId: item.id, qty, recipientId: recipient, fallbackPrice: item.price })
+      : await securePurchase({ rewardId: item.id, qty, fallbackPrice: item.price });
+    if (!res.ok) {
+      notify(res.error || "Purchase failed.");
+      if (!doneLines.length && onCancelled) onCancelled();
+      if (doneLines.length && onConfirmed) onConfirmed();
+      renderStore();
+      return;
+    }
+    // Mirror what the server now owns so the collection is instant.
+    if (!isUserGift) {
+      for (let k = 0; k < qty; k++)
+        state.owned.push({ ...item, owner: recipient, boughtAt: ts });
+    }
+    recordTransaction({
+      itemId: item.id,
+      name: item.name,
+      qty,
+      unitPrice: Math.round(res.total / qty),
+      total: res.total,
+      ts,
+      recipient: isUserGift ? recipient : "me",
+    });
+    doneLines.push(item.id);
+  }
+  state.lastGiftItems = recipient === "me" ? [] : fresh.map((l) => l.item.id);
+  if (recipient !== "me" && state.friends.some((f) => f.id === recipient)) {
+    state.messages[recipient] = [
+      ...(state.messages[recipient] || []),
+      {
+        id: uid(),
+        me: true,
+        text: `${sicon("gift")} I sent you ${fresh.map((l) => (l.qty > 1 ? `${l.qty} × ${l.item.name}` : l.item.name)).join(", ")}`,
+        ts: Date.now(),
+      },
+    ];
+  }
+  state.selectedStore = [];
+  fresh.forEach(({ item }) => clearItemQty(item.id));
+  persist();
+  notify(recipient === "me" ? "Rewards purchased" : "Gift sent");
+  renderStore();
+  if (onConfirmed) onConfirmed();
+}
+
+export { storeItems, equippedAvatarEmoji, equippedBadgeEmoji, checkinReward, earnMarkup, claimCheckin, removeOwnedAt, collectionRow, collectionMarkup, purchaseHistoryMarkup, inSeason, seasonDaysLeft, normItem, findStoreItem, migrateOwned, shopItems, MYSTERY_BOXES, dailyDeals, dealCountdown, boxItemsByRarity, rollBoxReward, grantReward, boxBusy, buyBox, FREE_BOX_ODDS, hash01, rollFreeBox, claimBusy, claimFreeBox, collectFreeReward, freeBoxCountdown, freeBoxMarkup, freeBoxState, isStackable, ownsMine, MAX_QTY, itemQty, setItemQty, clearItemQty, qtyStepperMarkup, qtyLineText, refreshQtyDom, changeQty, bindQtySteppers, cartLines, cartTotal, cartUnits, refreshCartFooter, afterCardQty, afterStoreQty, recordTransaction, dealsMarkup, mysteryMarkup, openBox, openFreeBoxReveal, buyDeal, giftRecipient, giftTarget, giftView, giftSelected, giftQuery, giftResults, giftSearching, giftSearchTimer, giftSearchToken, recipientOptions, matchLocalFriends, giftBtnInner, bindRecipient, openGiftCenter, closeGiftCenter, giftPersonRow, renderGiftCenter, bindGiftPicks, runGiftSearch, deliverGiftCloud, checkoutGiftFlow, renderStore, checkoutBusy, checkout, activeDeals, refreshCloudDeals };

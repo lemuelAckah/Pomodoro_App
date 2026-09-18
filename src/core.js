@@ -260,6 +260,8 @@ const state = {
   bookProgress: get("sf-book-progress", {}),
   bookFavorites: get("sf-book-favorites", []),
   bookLocal: get("sf-book-local", {}),
+  bookRecent: get("sf-book-recent", []),
+  bookStats: get("sf-book-stats", { opened: {}, completed: [], seconds: 0, pages: 0 }),
   purchases: get("sf-purchases", []),
   selectedStore: [],
   storeQty: get("sf-store-qty", {}),
@@ -352,6 +354,8 @@ function persistNow() {
   save("sf-book-progress", state.bookProgress || {});
   save("sf-book-favorites", state.bookFavorites || []);
   save("sf-book-local", state.bookLocal || {});
+  save("sf-book-recent", (state.bookRecent || []).slice(0, 12));
+  save("sf-book-stats", state.bookStats || { opened: {}, completed: [], seconds: 0, pages: 0 });
   save("sf-privacy", state.privacy);
   save("sf-streak", state.streak);
   save("sf-tech-uses", state.techUses || {});
@@ -473,6 +477,11 @@ function dragLock(on) {
 }
 function makeDraggable(el, handle) {
   if (!el || !handle) return;
+  // Idempotent: callers re-render often (every render re-invokes this), and
+  // stacking duplicate pointerdown/capture listeners on the same node starts
+  // several competing drag sessions per press.
+  if (handle.dataset && handle.dataset.sfDragBound) return;
+  if (handle.dataset) handle.dataset.sfDragBound = "1";
   let dragging = false, startX, startY, origX, origY, pid = null;
   const onMove = (e) => {
     if (!dragging || e.pointerId !== pid) return;
@@ -544,7 +553,11 @@ function cloudSnapshot() {
   return {
     tasks: state.tasks,
     techCheck: state.techCheck,
-    coins: state.coins,
+    // NOTE (Phase 4): coins are deliberately EXCLUDED — user_balances plus
+    // the coin_transactions ledger are authoritative, and pullRewards()
+    // reconciles state.coins from them. Letting the generic snapshot echo a
+    // stale client-written balance back over the reconciled one would
+    // corrupt cross-device displays.
     sessions: state.sessions,
     favorites: state.favorites,
     owned: state.owned,
@@ -569,17 +582,36 @@ function cloudSnapshot() {
 
 let cloudSyncTimer;
 
+// Highest user_state version written or applied on this device. Supabase
+// realtime echoes our own writes back to us; without this guard every local
+// persist rebuilds the entire app ~1s later (destroying drags, modals, input
+// focus and scroll position — feels like a phantom refresh).
+let lastCloudVersion = 0;
+
 function scheduleCloudSync() {
   if (!backendConfigured || !state.user) return;
   clearTimeout(cloudSyncTimer);
   cloudSyncTimer = setTimeout(async () => {
     const snapshot = cloudSnapshot();
     const result = await syncUserState(state.user.id, snapshot);
+    if (!result.error && result.data && Number.isFinite(+result.data.version)) {
+      lastCloudVersion = Math.max(lastCloudVersion, +result.data.version);
+    }
     await syncProgress(state.user.id, {
       coins: state.coins,
       sessions: state.sessions,
     });
-    if (result.error) notify("Saved locally; cloud sync failed");
+    // Background outcome updates the status pill — never a blocking dialog.
+    // Offline persists simply keep working locally; the pill says so once.
+    if (result.error) {
+      try {
+        setSyncStatus(navigator.onLine === false ? "offline" : "online");
+      } catch {
+        /* ignore */
+      }
+    } else {
+      setSyncStatus("online");
+    }
   }, 500);
 }
 
@@ -740,6 +772,7 @@ async function hydrateCloudState(user) {
   const result = await loadUserState(user.id);
   if (result.error) return notify("Cloud sync could not be loaded");
   if (result.data?.state) {
+    if (Number.isFinite(+result.data.version)) lastCloudVersion = +result.data.version;
     Object.assign(state, result.data.state);
     save("sf-tasks", state.tasks);
     save("sf-coins", state.coins);
@@ -775,7 +808,10 @@ async function hydrateCloudState(user) {
     }
     shell();
   } else {
-    await syncUserState(user.id, cloudSnapshot());
+    const fresh = await syncUserState(user.id, cloudSnapshot());
+    if (!fresh.error && fresh.data && Number.isFinite(+fresh.data.version)) {
+      lastCloudVersion = Math.max(lastCloudVersion, +fresh.data.version);
+    }
     await syncProgress(user.id, {
       coins: state.coins,
       sessions: state.sessions,
@@ -790,8 +826,16 @@ async function hydrateCloudState(user) {
     pushUserSettings();
   }
   cloudStateSubscription?.unsubscribe();
-  cloudStateSubscription = subscribeToUserState(user.id, (remoteState) => {
+  cloudStateSubscription = subscribeToUserState(user.id, (remote) => {
+    const remoteState = remote?.state ?? null;
+    const remoteVersion = +(remote?.version ?? 0);
     if (!remoteState) return;
+    // Skip our own echoes and stale writes: applying them would rebuild the
+    // whole app (shell) for zero new information, nuking in-progress drags,
+    // modals, inputs and scroll. Only genuinely newer cross-device writes
+    // go through.
+    if (remoteVersion <= lastCloudVersion) return;
+    lastCloudVersion = remoteVersion;
     Object.assign(state, remoteState);
     save("sf-tasks", state.tasks);
     save("sf-coins", state.coins);
@@ -825,11 +869,12 @@ async function hydrateCloudState(user) {
 export function setCloudSubscription(sub) {
   cloudStateSubscription = sub;
 }
-const STATE_ARRAYS = ["tasks", "favorites", "owned", "friends", "customGroups", "songs", "posts", "books", "bookFavorites", "stories", "challenges", "events", "sprints", "sprintInvites", "eventInvites", "garden", "focusLog", "notifications", "purchases", "boxes", "achievements", "decks", "mindmaps", "feynmanNotes", "duckChat", "cornellNotes", "reports"];
+const STATE_ARRAYS = ["tasks", "favorites", "owned", "friends", "customGroups", "songs", "posts", "books", "bookFavorites", "bookRecent", "stories", "challenges", "events", "sprints", "sprintInvites", "eventInvites", "garden", "focusLog", "notifications", "purchases", "boxes", "achievements", "decks", "mindmaps", "feynmanNotes", "duckChat", "cornellNotes", "reports"];
 const STATE_OBJECT_DEFAULTS = {
   messages: {}, pins: {}, statusSeen: {}, focusDays: {}, techUses: {},
   techStats: {}, techTime: {}, storeQty: {}, soundMix: {}, blocks: {}, mutedChats: {},
   bookProgress: {}, bookLocal: {},
+  bookStats: { opened: {}, completed: [], seconds: 0, pages: 0 },
   equipped: { theme: null, avatar: null, badge: null },
   boosts: { shields: 0, multiplierUntil: 0, doubleArmed: false },
   checkin: { last: "" },
@@ -935,11 +980,18 @@ if (!window.__sfGrowBound) {
 }
 
 function notify(text) {
+  const msg = String(text ?? "");
+  // Identical back-to-back popups (e.g. a flapping sync retry) collapse into
+  // one: a blocking dialog must never spam.
+  const now = Date.now();
+  if (msg && msg === notify._lastText && now - notify._lastAt < 3000) return;
+  notify._lastText = msg;
+  notify._lastAt = now;
   const existing = document.querySelector(".notify-dialog");
   if (existing) existing.remove();
   const backdrop = document.createElement("div");
   backdrop.className = "modal-backdrop notify-dialog";
-  backdrop.innerHTML = `<div class="modal notify-modal"><div class="notify-icon">${sicon("bell")}</div><p class="notify-text">${text}</p><button class="primary notify-ok">OK</button></div>`;
+  backdrop.innerHTML = `<div class="modal notify-modal"><div class="notify-icon">${sicon("bell")}</div><p class="notify-text">${text}</p><button type="button" class="primary notify-ok">OK</button></div>`;
   document.body.append(backdrop);
   const close = () => backdrop.remove();
   backdrop.querySelector(".notify-ok").onclick = close;
@@ -947,6 +999,127 @@ function notify(text) {
     if (e.target === backdrop) close();
   });
   backdrop.querySelector(".notify-ok").focus();
+}
+notify._lastText = "";
+notify._lastAt = 0;
+
+// Non-blocking toast for routine feedback (saved, copied, playback status,
+// validation that doesn't need a decision). Never steals focus, never stacks
+// duplicates: repeats refresh the existing toast's timer instead.
+const toastTimers = new Map();
+function toast(text) {
+  try {
+    const msg = String(text ?? "").slice(0, 180);
+    if (!msg) return;
+    let stack = document.querySelector(".toast-stack");
+    if (!stack) {
+      stack = document.createElement("div");
+      stack.className = "toast-stack";
+      stack.setAttribute("aria-live", "polite");
+      document.body.append(stack);
+    }
+    let el = stack.querySelector(`[data-toast-key="${toastKey(msg)}"]`);
+    if (!el) {
+      while (stack.children.length >= 3) stack.firstChild.remove();
+      el = document.createElement("div");
+      el.className = "toast";
+      el.dataset.toastKey = toastKey(msg);
+      el.innerHTML = `<span class="toast-text"></span>`;
+      stack.append(el);
+    }
+    el.querySelector(".toast-text").innerHTML = msg;
+    el.classList.remove("toast-out");
+    clearTimeout(toastTimers.get(msg));
+    toastTimers.set(msg, setTimeout(() => {
+      toastTimers.delete(msg);
+      try {
+        el.classList.add("toast-out");
+        setTimeout(() => el.remove(), 300);
+      } catch {
+        /* ignore */
+      }
+    }, 2800));
+  } catch {
+    /* non-DOM environment */
+  }
+}
+function toastKey(msg) {
+  let h = 0;
+  for (let i = 0; i < msg.length; i++) h = (Math.imul(h, 31) + msg.charCodeAt(i)) | 0;
+  return "t" + (h >>> 0).toString(36);
+}
+
+// Persistent sync-status pill (body-level, never re-rendered away).
+// The single controlled surface for offline state — background sync outcomes
+// update THIS instead of popping blocking dialogs.
+let syncMode = "online";
+let syncHideT = 0;
+function setSyncStatus(mode) {
+  const next = mode === "offline" ? "offline" : mode === "syncing" ? "syncing" : "online";
+  if (next === syncMode && next !== "online") return; // no DOM churn
+  const was = syncMode;
+  syncMode = next;
+  clearTimeout(syncHideT);
+  let pill = null;
+  try {
+    pill = document.querySelector("#sync-status");
+  } catch {
+    return;
+  }
+  if (next === "online") {
+    // Only speak when recovering from a degraded state; routine saves stay silent.
+    if (was === "online" || !pill) {
+      if (pill) pill.hidden = true;
+      return;
+    }
+    pill.hidden = false;
+    pill.dataset.state = "synced";
+    pill.innerHTML = `<span class="sync-dot"></span><span>Synced</span>`;
+    syncHideT = setTimeout(() => {
+      try {
+        const p = document.querySelector("#sync-status");
+        if (p) p.hidden = true;
+      } catch {
+        /* ignore */
+      }
+    }, 2200);
+    return;
+  }
+  try {
+    if (!pill) {
+      pill = document.createElement("div");
+      pill.id = "sync-status";
+      document.body.append(pill);
+    }
+    pill.hidden = false;
+    pill.dataset.state = next;
+    pill.innerHTML = next === "offline"
+      ? `<span class="sync-dot"></span><span>Offline · Saved on this device</span>`
+      : `<span class="sync-dot"></span><span>Back online · Syncing…</span>`;
+    if (next === "syncing") {
+      // Transient by design: services reconcile on their own listeners; never
+      // leave a stale "syncing" pill if nothing reports back.
+      syncHideT = setTimeout(() => {
+        if (syncMode === "syncing") {
+          syncMode = "online";
+          try {
+            const p = document.querySelector("#sync-status");
+            if (p) p.hidden = true;
+          } catch {
+            /* ignore */
+          }
+        }
+      }, 4000);
+    }
+  } catch {
+    /* non-DOM environment */
+  }
+}
+
+if (!window.__sfSyncWatch) {
+  window.__sfSyncWatch = true;
+  window.addEventListener("online", () => setSyncStatus("syncing"));
+  window.addEventListener("offline", () => setSyncStatus("offline"));
 }
 
 function notifOn(key) {
@@ -1053,7 +1226,7 @@ function avatarMarkup(photo, fallback) {
 }
 
 function iconStar(id) {
-  return `<button class="favorite ${state.favorites.includes(id) ? "on" : ""}" data-fav="${id}" title="Favorite">${state.favorites.includes(id) ? sicon("star") : sicon("starOutline")}</button>`;
+  return `<button type="button" class="favorite ${state.favorites.includes(id) ? "on" : ""}" data-fav="${id}" title="Favorite">${state.favorites.includes(id) ? sicon("star") : sicon("starOutline")}</button>`;
 }
 
 const THEME_SKINS = {
@@ -1289,7 +1462,7 @@ function confirmBox(title, message, yes, opt) {
   modal.className = "modal-backdrop";
   modal.setAttribute("role", "dialog");
   modal.setAttribute("aria-modal", "true");
-  modal.innerHTML = `<div class="modal"><div class="eyebrow">${esc(opt.eyebrow || "Confirmation")}</div><h2>${title}</h2><p class="muted">${message}</p><div style="display:flex;justify-content:flex-end;gap:8px"><button class="ghost" data-no>${esc(opt.noLabel || "Cancel")}</button><button class="primary" data-yes>${esc(opt.yesLabel || "Confirm")}</button></div></div>`;
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">${esc(opt.eyebrow || "Confirmation")}</div><h2>${title}</h2><p class="muted">${message}</p><div style="display:flex;justify-content:flex-end;gap:8px"><button type="button" class="ghost" data-no>${esc(opt.noLabel || "Cancel")}</button><button type="button" class="primary" data-yes>${esc(opt.yesLabel || "Confirm")}</button></div></div>`;
   $("#modal-root").append(modal);
   let closed = false;
   const close = (cancelled) => {
@@ -1350,7 +1523,7 @@ function openWhatsNew() {
   const overlay = document.createElement("div");
   overlay.className = "modal-backdrop";
   overlay.id = "whatsnew-modal";
-  overlay.innerHTML = `<div class="modal"><div class="eyebrow">What's new · v${WHATS_NEW.v}</div><h2>${WHATS_NEW.title}</h2><ul class="detail-steps">${WHATS_NEW.items.map((i) => `<li>${i}</li>`).join("")}</ul><div class="modal-actions" style="margin-top:16px"><button class="primary" data-whatsnew-close>Let's go</button></div></div>`;
+  overlay.innerHTML = `<div class="modal"><div class="eyebrow">What's new · v${WHATS_NEW.v}</div><h2>${WHATS_NEW.title}</h2><ul class="detail-steps">${WHATS_NEW.items.map((i) => `<li>${i}</li>`).join("")}</ul><div class="modal-actions" style="margin-top:16px"><button type="button" class="primary" data-whatsnew-close>Let's go</button></div></div>`;
   ($("#modal-root") || document.body).append(overlay);
   $("[data-whatsnew-close]", overlay).onclick = () => {
     whatsNewShown = true;
@@ -1537,7 +1710,7 @@ function requireAuth(feature) {
   modal.setAttribute("role", "dialog");
   modal.setAttribute("aria-modal", "true");
   modal.setAttribute("aria-label", "Sign up required");
-  modal.innerHTML = `<div class="modal auth-gate-card"><div class="auth-gate-crest" aria-hidden="true">${sicon("lock")}</div><div class="eyebrow">Members only</div><h2>Sign up to ${esc(what)}</h2><p class="muted">This one belongs to your account. Creating one takes under a minute — and everything you make afterwards is saved to the cloud and never lost.</p><ul class="auth-gate-perks"><li>${sicon("check")} Progress, coins &amp; purchases kept safe</li><li>${sicon("check")} Syncs across your phone and laptop</li><li>${sicon("check")} Gift friends, join sprints &amp; the community</li></ul><div class="modal-actions" style="justify-content:center;margin-top:18px"><button class="ghost" data-gate-later>Maybe later</button><button class="primary" data-gate-signup>${sicon("sparkle")} Create free account</button></div><p class="auth-gate-signin">Already a member? <button class="text-button" data-gate-signin>Sign in instead</button></p></div>`;
+  modal.innerHTML = `<div class="modal auth-gate-card"><div class="auth-gate-crest" aria-hidden="true">${sicon("lock")}</div><div class="eyebrow">Members only</div><h2>Sign up to ${esc(what)}</h2><p class="muted">This one belongs to your account. Creating one takes under a minute — and everything you make afterwards is saved to the cloud and never lost.</p><ul class="auth-gate-perks"><li>${sicon("check")} Progress, coins &amp; purchases kept safe</li><li>${sicon("check")} Syncs across your phone and laptop</li><li>${sicon("check")} Gift friends, join sprints &amp; the community</li></ul><div class="modal-actions" style="justify-content:center;margin-top:18px"><button type="button" class="ghost" data-gate-later>Maybe later</button><button type="button" class="primary" data-gate-signup>${sicon("sparkle")} Create free account</button></div><p class="auth-gate-signin">Already a member? <button type="button" class="text-button" data-gate-signin>Sign in instead</button></p></div>`;
   $("#modal-root").append(modal);
   const close = () => {
     modal.remove();
@@ -1588,4 +1761,4 @@ function celebrate(big) {
 
 
 
-export { $, $$, uid, get, save, esc, SICON_PATHS, sicon, stripIcon, haltPersist, isPersistHalted, collectUserSettings, applyUserSettings, pushUserSettings, pullCloudProfile, state, sanitizeState, persistFailed, persist, persistNow, refreshCoinDisplays, updateBarPadding, makeDraggable, addCoins, spendCoins, cloudSnapshot, cloudSyncTimer, scheduleCloudSync, hydrateCloudState, cloudStateSubscription, fitTextarea, notify, notifOn, ensureNotifyPermission, browserNotify, dayKey, formatHeaderDate, serverOffsetMs, refreshServerTime, serverNow, serverDayKey, addNotification, avatarMarkup, iconStar, bindFavorites, THEME_SKINS, isDarkPaper, NIGHT_BASE, NIGHT_SHADOW, accentLuminance, onAccentText, applyEquippedTheme, toggleNight, syncThemeToggle, applyMotion, applyDisplay, viewHead, fmt, fmtDur, fmtClock, fmtSize, confirmBox, checkReminder, whatsNewShown, WHATS_NEW, openWhatsNew, closeWhatsNew, maybeWhatsNew, confettiPieces, confettiRunning, confettiCanvas, confettiBurst, confettiLoop, celebrate, requireAuth, archiveStateForSignOut, restoreArchivedState };
+export { $, $$, uid, get, save, esc, SICON_PATHS, sicon, stripIcon, haltPersist, isPersistHalted, collectUserSettings, applyUserSettings, pushUserSettings, pullCloudProfile, state, sanitizeState, persistFailed, persist, persistNow, refreshCoinDisplays, updateBarPadding, makeDraggable, dragLock, toast, addCoins, spendCoins, cloudSnapshot, cloudSyncTimer, scheduleCloudSync, hydrateCloudState, cloudStateSubscription, fitTextarea, notify, notifOn, ensureNotifyPermission, browserNotify, dayKey, formatHeaderDate, serverOffsetMs, refreshServerTime, serverNow, serverDayKey, addNotification, avatarMarkup, iconStar, bindFavorites, THEME_SKINS, isDarkPaper, NIGHT_BASE, NIGHT_SHADOW, accentLuminance, onAccentText, applyEquippedTheme, toggleNight, syncThemeToggle, applyMotion, applyDisplay, viewHead, fmt, fmtDur, fmtClock, fmtSize, confirmBox, checkReminder, whatsNewShown, WHATS_NEW, openWhatsNew, closeWhatsNew, maybeWhatsNew, confettiPieces, confettiRunning, confettiCanvas, confettiBurst, confettiLoop, celebrate, requireAuth, archiveStateForSignOut, restoreArchivedState };

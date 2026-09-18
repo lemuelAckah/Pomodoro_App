@@ -8,6 +8,8 @@ import {
 } from "./core.js";
 import { getCurrentUser, onAuthStateChange } from "./services/backend.js";
 import { pullProductivity } from "./services/productivity-sync.js";
+import { pullRewards } from "./services/rewards-sync.js";
+import { pullMusic } from "./services/music-sync.js";
 import { migrateSongs, sounds, renderNowPlaying, initAudioState } from "./audio.js";
 import { renderTimer, renderMiniTimer, toggleTimer, toggleBoss, closeFocusView, initTimerState, resetFocusSession, openFocusView } from "./timer.js";
 import { renderTechniques, renderFavorites, openTechniqueGuide, techniques, TECH_DETAILS } from "./techniques.js";
@@ -16,7 +18,7 @@ import {
   renderCommunity, renderCall, pruneExpiredStories, openStatus, allGroups, askDeleteStatus,
 } from "./community.js";
 import { renderStore, migrateOwned, shopItems, normItem, storeItems, closeGiftCenter, equippedAvatarEmoji } from "./store.js";
-import { renderLibrary, searchBooks } from "./books.js";
+import { renderLibrary, searchBooks, syncBooksLibrary } from "./books.js";
 import {
   renderLanding, renderAccount, renderSettings, openProfile, openNotifications, startTour,
 } from "./account.js";
@@ -139,7 +141,7 @@ function renderSearchResults(q) {
     ? searchHits
         .map(
           (h, i) =>
-            `<button class="search-row" data-hit="${i}"><span class="search-ico">${h.icon}</span><span class="search-txt"><strong>${esc(h.title)}</strong><small>${esc(h.sub)}</small></span></button>`,
+            `<button type="button" class="search-row" data-hit="${i}"><span class="search-ico">${h.icon}</span><span class="search-txt"><strong>${esc(h.title)}</strong><small>${esc(h.sub)}</small></span></button>`,
         )
         .join("")
     : '<p class="muted">Nothing found. Try “focus”, a subject, or a friend’s name.</p>';
@@ -212,11 +214,11 @@ function shell() {
     ]
       .map(
         ([id, ico, label]) =>
-          `<button data-tab="${id}" class="${state.tab === id ? "active" : ""}"><span>${ico}</span>${label}</button>`,
+          `<button type="button" data-tab="${id}" class="${state.tab === id ? "active" : ""}"><span>${ico}</span>${label}</button>`,
       )
       .join(
         "",
-      )}</nav></div><div class="sidebar-note"><div class="eyebrow">Today’s intention</div><p>Small focused sessions become remarkable progress.</p></div></aside><main class="main"><header class="topbar"><div><div class="mobile-brand"><span class="brand-mark">◷</span><strong>StudyFlow</strong></div><div class="eyebrow"><span data-header-date data-header-full>${formatHeaderDate(new Date(), false)}</span><span data-header-date data-header-short>${formatHeaderDate(new Date(), true)}</span></div></div><div class="top-actions"><button class="top-icon" data-search title="Search (Ctrl K)">${sicon("search")}</button><button class="top-icon" data-notifications title="Notifications">${sicon("gem")}<span class="notification-dot">${state.notifications.filter((n) => !n.read).length || ""}</span></button><button class="coins" data-go-topup title="Top up coins with MoMo">${sicon("coin")} <span id="coin-count" data-coin="header">${state.coins}</span></button><button class="theme-toggle${state.night ? " night" : ""}" data-theme-toggle role="switch" aria-checked="${Boolean(state.night)}" title="${state.night ? "Switch to day mode" : "Switch to night mode"}" aria-label="Toggle day and night mode"><span class="tt-icons">${sicon("sun")}${sicon("moon")}</span><span class="tt-thumb"></span></button><button class="avatar" data-profile title="Open profile">${avatarMarkup(state.profile.photo, equippedAvatarEmoji() || state.profile.avatar)}</button></div></header><div class="content"><div id="view"></div></div></main></div><div id="mini-timer-root"></div><div id="modal-root"></div>`;
+      )}</nav></div><div class="sidebar-note"><div class="eyebrow">Today’s intention</div><p>Small focused sessions become remarkable progress.</p></div></aside><main class="main"><header class="topbar"><div><div class="mobile-brand"><span class="brand-mark">◷</span><strong>StudyFlow</strong></div><div class="eyebrow"><span data-header-date data-header-full>${formatHeaderDate(new Date(), false)}</span><span data-header-date data-header-short>${formatHeaderDate(new Date(), true)}</span></div></div><div class="top-actions"><button type="button" class="top-icon" data-search title="Search (Ctrl K)">${sicon("search")}</button><button type="button" class="top-icon" data-notifications title="Notifications">${sicon("gem")}<span class="notification-dot">${state.notifications.filter((n) => !n.read).length || ""}</span></button><button type="button" class="coins" data-go-topup title="Top up coins with MoMo">${sicon("coin")} <span id="coin-count" data-coin="header">${state.coins}</span></button><button type="button" class="theme-toggle${state.night ? " night" : ""}" data-theme-toggle role="switch" aria-checked="${Boolean(state.night)}" title="${state.night ? "Switch to day mode" : "Switch to night mode"}" aria-label="Toggle day and night mode"><span class="tt-icons">${sicon("sun")}${sicon("moon")}</span><span class="tt-thumb"></span></button><button type="button" class="avatar" data-profile title="Open profile">${avatarMarkup(state.profile.photo, equippedAvatarEmoji() || state.profile.avatar)}</button></div></header><div class="content"><div id="view"></div></div></main></div><div id="mini-timer-root"></div><div id="modal-root"></div>`;
   bindShell();
   render();
   renderMiniTimer();
@@ -290,7 +292,7 @@ function render() {
     console.error(`[studyflow] tab "${state.tab}" failed to render:`, err);
     const panel = $(`#tab-${state.tab}`);
     if (panel) {
-      panel.innerHTML = `<div class="card empty-state"><div class="emoji">${sicon("warn")}</div><h3>This section hit a snag</h3><p class="muted">${esc(err?.message || "Something went wrong here. The rest of the app is fine.")}</p><div style="display:flex;gap:8px;justify-content:center"><button class="ghost" data-tab-retry>Try again</button><button class="primary" data-tab-home>Back to Focus</button></div></div>`;
+      panel.innerHTML = `<div class="card empty-state"><div class="emoji">${sicon("warn")}</div><h3>This section hit a snag</h3><p class="muted">${esc(err?.message || "Something went wrong here. The rest of the app is fine.")}</p><div style="display:flex;gap:8px;justify-content:center"><button type="button" class="ghost" data-tab-retry>Try again</button><button type="button" class="primary" data-tab-home>Back to Focus</button></div></div>`;
       $("[data-tab-retry]", panel).onclick = () => render();
       $("[data-tab-home]", panel).onclick = () => {
         state.tab = "timer";
@@ -472,7 +474,7 @@ function showUpdateToast(reg) {
   if ($("#update-toast")) return;
   const bar = document.createElement("div");
   bar.id = "update-toast";
-  bar.innerHTML = `<span>${sicon("sparkle")} A fresh StudyFlow is ready</span><button data-update-now>Refresh</button>`;
+  bar.innerHTML = `<span>${sicon("sparkle")} A fresh StudyFlow is ready</span><button type="button" data-update-now>Refresh</button>`;
   document.body.append(bar);
   $("[data-update-now]", bar).onclick = () => {
     try {
@@ -526,6 +528,12 @@ getCurrentUser()
     await hydrateCloudState(user);
     // Phase 3: tasks, notes and technique data follow the account.
     await pullProductivity();
+    // Phase 4: authoritative coins, inventory, achievements, streak, boxes.
+    pullRewards().catch(() => {});
+    // Phase 5: music metadata + playlists follow the account (audio stays local).
+    pullMusic().catch(() => {});
+    // Phase 6: book metadata rows follow the account (files stay local).
+    syncBooksLibrary().catch(() => {});
   })
   .catch(() => {
     /* offline or unreachable backend — local mode continues */
@@ -555,6 +563,9 @@ onAuthStateChange((user) => {
     }
     hydrateCloudState(user);
     pullProductivity();
+    pullRewards().catch(() => {});
+    pullMusic().catch(() => {});
+    syncBooksLibrary().catch(() => {});
   }
   if (state.tab === "account" || state.tab === "settings") render();
 });

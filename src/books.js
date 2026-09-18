@@ -1,15 +1,185 @@
 /* books.js — book library: catalog, upload, details, favorites, download, reports */
 import {
-  state, $, $$, uid, esc, sicon, persist, notify, confirmBox, viewHead, fitTextarea, requireAuth,
+  state, $, $$, esc, sicon, persist, notify, toast, confirmBox, viewHead, fitTextarea, requireAuth,
+  save,
 } from "./core.js";
 import {
   backendConfigured, uploadBookFile, getBookFileUrl, downloadBookFile, removeBookFile,
-  createBook, updateBook, deleteBook, listMyBooks, getBook,
+  createBook, deleteBook, listMyBooks, getBook, cloudUpsertBook,
   toggleBookFavorite as toggleBookFavoriteRemote, listBookFavorites, saveBookProgress, listBookProgress,
   listBookBookmarks, addBookBookmark, removeBookBookmark,
   listBookHighlights, addBookHighlight, updateBookHighlight, removeBookHighlight,
 } from "./services/backend.js";
 import { openReader, readerOpenId, repaintReader } from "./books-reader.js";
+import { mirrorBooks, deleteBookEverywhere, pullBooks, BOOK_UUID_RE } from "./services/books-sync.js";
+
+export function newBookId() {
+  try {
+    if (crypto?.randomUUID) return crypto.randomUUID();
+  } catch {
+    /* fall through */
+  }
+  // Fallback stays uuid-SHAPED so the id remains valid for books.id even
+  // where crypto.randomUUID is unavailable (non-secure contexts).
+  const h = () => Math.floor(Math.random() * 65536).toString(16).padStart(4, "0");
+  return `${h()}${h()}-${h()}-4${h().slice(1)}-${[8, 9, "a", "b"][Math.floor(Math.random() * 4)]}${h().slice(1)}-${h()}${h()}${h()}`;
+}
+
+// Stable duplicate identity: filename can change, content rarely does, so the
+// fingerprint hashes size + head/tail slices (fast, no full-file read). Two
+// different books with identical bytes intentionally share it.
+export async function bookFingerprintOf(file) {
+  const size = Number(file?.size || 0);
+  try {
+    const parts = [];
+    if (size > 0 && typeof file.slice === "function") {
+      const n = 32768;
+      parts.push(file.slice(0, Math.min(n, size)));
+      if (size > n) parts.push(file.slice(Math.max(0, size - n), size));
+    }
+    let h1 = 0x811c9dc5, h2 = 0x01000193;
+    const mixStr = (str) => {
+      for (let i = 0; i < str.length; i++) {
+        h1 = Math.imul(h1 ^ str.charCodeAt(i), 16777619) >>> 0;
+        h2 = Math.imul(h2 + str.charCodeAt(i), 2246822519) >>> 0;
+      }
+    };
+    const mixBytes = (buf) => {
+      const step = Math.max(1, Math.floor(buf.length / 4096));
+      for (let i = 0; i < buf.length; i += step) {
+        h1 = Math.imul(h1 ^ buf[i], 16777619) >>> 0;
+        h2 = Math.imul(h2 + buf[i], 2246822519) >>> 0;
+      }
+    };
+    mixStr(`size:${size}|type:${String(file?.type || "")}`);
+    for (const part of parts) mixBytes(new Uint8Array(await part.arrayBuffer()));
+    return `fp${size.toString(36)}${h1.toString(16)}${h2.toString(16)}`.slice(0, 160);
+  } catch {
+    return "";
+  }
+}
+
+export function findDuplicateBook(file, fingerprint) {
+  const fp = fingerprint || "";
+  const nm = String(file?.name || "").toLowerCase();
+  const sz = Number(file?.size || 0);
+  return (state.books || []).find((b) => {
+    if (!b) return false;
+    if (fp && b.fingerprint && b.fingerprint === fp) return true;
+    return nm && String(b.fileName || "").toLowerCase() === nm && Number(b.fileSize || 0) === sz && sz > 0;
+  }) || null;
+}
+
+// Re-key one book (legacy text id → server-compatible UUID), moving its
+// IndexedDB blobs and every local reference. Returns true on success;
+// on any failure the old id stays untouched.
+export async function rekeyBook(oldId, newId) {
+  const book = (state.books || []).find((b) => b && b.id === oldId);
+  if (!book || !newId || newId === oldId) return false;
+  try {
+    for (const kind of ["file:", "text:"]) {
+      const blob = await bookBlobGet(kind + oldId);
+      if (blob) {
+        const ok = await bookBlobPut(kind + newId, blob);
+        if (!ok) return false;
+      }
+    }
+    for (const kind of ["file:", "text:"]) await bookBlobDelete(kind + oldId);
+    book.id = newId;
+    book.fileKey = newId;
+    book.updatedAt = Date.now();
+    const prog = { ...(state.bookProgress || {}) };
+    if (oldId in prog) {
+      prog[newId] = prog[oldId];
+      delete prog[oldId];
+      state.bookProgress = prog;
+    }
+    if (Array.isArray(state.bookFavorites)) {
+      state.bookFavorites = state.bookFavorites.map((x) => (x === oldId ? newId : x));
+    }
+    const local = { ...(state.bookLocal || {}) };
+    if (local[oldId]) {
+      local[newId] = local[oldId];
+      delete local[oldId];
+      state.bookLocal = local;
+    }
+    if (Array.isArray(state.bookRecent)) {
+      state.bookRecent = state.bookRecent.map((x) => (x === oldId ? newId : x));
+    }
+    const stats = state.bookStats && typeof state.bookStats === "object" ? state.bookStats : null;
+    if (stats) {
+      if (stats.opened && stats.opened[oldId]) {
+        stats.opened[newId] = stats.opened[oldId];
+        delete stats.opened[oldId];
+      }
+      if (Array.isArray(stats.completed)) stats.completed = stats.completed.map((x) => (x === oldId ? newId : x));
+      save("sf-book-stats", stats);
+    }
+    persist();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+let bookIdsMigrated = false;
+// One-time, guarded: legacy text ids can't sync (books.id is uuid), so move
+// each legacy book to a fresh UUID. Never wipes: failures keep the old id.
+export async function migrateBookIds() {
+  if (bookIdsMigrated) return false;
+  bookIdsMigrated = true;
+  const legacy = (state.books || []).filter((b) => b && !BOOK_UUID_RE.test(String(b.id || "")));
+  if (!legacy.length) return false;
+  let moved = 0;
+  for (const b of legacy) {
+    let nid = null;
+    try {
+      nid = crypto?.randomUUID ? crypto.randomUUID() : null;
+    } catch {
+      nid = null;
+    }
+    if (!nid) break;
+    if (await rekeyBook(b.id, nid)) moved++;
+  }
+  if (moved) {
+    persist();
+    mirrorBooks();
+  }
+  return moved > 0;
+}
+
+// Twin adoption for cloud pull: same file on another device (matched by
+// fingerprint, else filename + size) takes the cloud id instead of
+// duplicating the shelf. Only legacy (non-uuid) locals are eligible.
+export async function adoptCloudTwin(cloud) {
+  if (!cloud || !cloud.id) return null;
+  const cfp = String(cloud.fingerprint || "");
+  const cnm = String(cloud.fileName || "").toLowerCase();
+  const csz = Number(cloud.fileSize || 0);
+  const twin = (state.books || []).find((b) => {
+    if (!b || BOOK_UUID_RE.test(String(b.id || ""))) return false;
+    if (cfp && b.fingerprint && b.fingerprint === cfp) return true;
+    return !!cnm && String(b.fileName || "").toLowerCase() === cnm && Number(b.fileSize || 0) === csz && csz > 0;
+  });
+  if (!twin) return null;
+  const ok = await rekeyBook(twin.id, cloud.id);
+  return ok ? (state.books || []).find((b) => b && b.id === cloud.id) || null : null;
+}
+
+// Boot/login entry: migrate legacy ids, then pull cloud rows (with twin
+// adoption so two devices converge instead of duplicating).
+export async function syncBooksLibrary() {
+  try {
+    await migrateBookIds();
+  } catch {
+    /* local library stands */
+  }
+  try {
+    return await pullBooks(adoptCloudTwin);
+  } catch {
+    return { ok: false };
+  }
+}
 
 export const BOOK_CATEGORIES = [
   { group: "Academic & Education", items: ["Engineering", "Telecommunication Engineering", "Electrical & Electronic Engineering", "Computer Science", "Mathematics", "Physics", "Chemistry", "Biology", "Medicine", "Economics", "Business", "Accounting", "Law", "Psychology", "Sociology", "History", "Geography"] },
@@ -89,8 +259,21 @@ function bookObjectUrl(id, blob) {
   if (!url) {
     url = URL.createObjectURL(blob);
     bookUrlCache.set(id, url);
+    // Bound the cache: evict oldest first so opening many books never leaks.
+    while (bookUrlCache.size > 5) {
+      const oldest = bookUrlCache.keys().next().value;
+      if (oldest === id) break;
+      try { URL.revokeObjectURL(bookUrlCache.get(oldest)); } catch { /* ignore */ }
+      bookUrlCache.delete(oldest);
+    }
   }
   return url;
+}
+export function revokeBookUrl(id) {
+  const url = bookUrlCache.get(id);
+  if (!url) return;
+  try { URL.revokeObjectURL(url); } catch { /* ignore */ }
+  bookUrlCache.delete(id);
 }
 
 function myUserKey() {
@@ -165,13 +348,8 @@ async function syncMyBooksFromBackend() {
 async function pushBookRow(book) {
   if (!backendConfigured || !state.user) return;
   try {
-    await updateBook(book.id, {
-      title: book.title, author: book.author, description: book.description,
-      category: book.category, tags: book.tags, isbn: book.isbn || "",
-      publisher: book.publisher || "", published_year: book.year ?? null,
-      page_count: book.pageCount ?? null, word_count: book.wordCount ?? null,
-      visibility: book.visibility, allow_download: Boolean(book.allowDownload),
-    });
+    // Upsert (not update): offline-first books may never have a remote row.
+    await cloudUpsertBook(book);
   } catch {
     /* local copy is authoritative for UX */
   }
@@ -210,7 +388,10 @@ export async function getBookText(book) {
   }
 }
 function estimatePdfPages(blob) {
-  return blob.text().then((t) => {
+  // Read only the head: page markers live near the start, and pulling a full
+  // 50 MB file into a JS string would jank or crash the tab.
+  const probe = typeof blob.slice === "function" ? blob.slice(0, 2 * 1024 * 1024) : blob;
+  return probe.text().then((t) => {
     try {
       const m = t.match(/\/Type\s*\/Page[^s]/g);
       return m ? m.length : null;
@@ -229,8 +410,15 @@ function monogram(title) {
   return words.map((w) => (w[0] || "?").toUpperCase()).join("");
 }
 
-let bookHome = { q: "", cat: "All", page: 0 };
+let bookHome = { q: "", cat: "All", filter: "all", page: 0 };
 const BOOK_PAGE_SIZE = 24;
+const BOOK_FILTERS = [
+  ["all", "All"],
+  ["favorites", "Favorites"],
+  ["reading", "Reading"],
+  ["completed", "Completed"],
+  ["recent", "Recent"],
+];
 // Re-render guards: bookView starts unset, so post-fetch .then chains must only
 // repaint when fresh data actually arrived — otherwise they re-render forever
 // (infinite microtask loop) and freeze the page.
@@ -250,6 +438,9 @@ function libOnHome() {
 }
 function libSignature() {
   return `${(state.books || []).length}|${(state.bookFavorites || []).length}|${Object.keys(state.bookProgress || {}).length}`;
+}
+function libFiltering() {
+  return bookHome.filter !== "all" || !!bookHome.q || bookHome.cat !== "All";
 }
 const coverSignedCache = new Map();
 
@@ -290,9 +481,80 @@ function bookProgressPct(id) {
 function bookCard(b) {
   const pct = bookProgressPct(b.id);
   const fav = isBookFav(b.id);
-  return `<article class="book-card"><button class="book-cover" data-book-open="${b.id}" title="Open ${esc(b.title)}">${coverImg(b)}${pct > 0 ? `<span class="book-progressbar"><i style="width:${pct}%"></i></span>` : ""}</button><div class="book-meta"><strong>${esc(b.title)}</strong><small>${esc(b.author || "Unknown author")}</small><span class="tag">${esc(b.category || "General")}</span></div><div class="book-actions"><button class="ghost" data-book-open="${b.id}">${pct > 0 && pct < 100 ? "Continue" : "Read"}</button><button class="icon-btn book-fav${fav ? " on" : ""}" data-book-fav="${b.id}" title="${fav ? "Remove favorite" : "Add favorite"}" aria-label="Favorite" aria-pressed="${fav}">${sicon("star")}</button></div></article>`;
+  return `<article class="book-card"><button type="button" class="book-cover" data-book-open="${b.id}" title="Open ${esc(b.title)}">${coverImg(b)}${pct > 0 ? `<span class="book-progressbar"><i style="width:${pct}%"></i></span>` : ""}</button><div class="book-meta"><strong>${esc(b.title)}</strong><small>${esc(b.author || "Unknown author")}</small><span class="tag">${esc(b.category || "General")}</span></div><div class="book-actions"><button type="button" class="ghost" data-book-open="${b.id}">${pct > 0 && pct < 100 ? "Continue" : "Read"}</button><button type="button" class="icon-btn book-fav${fav ? " on" : ""}" data-book-fav="${b.id}" title="${fav ? "Remove favorite" : "Add favorite"}" aria-label="Favorite" aria-pressed="${fav}">${sicon("star")}</button><button class="ghost book-menu-btn" data-book-menu="${b.id}" title="More actions" aria-label="More actions for ${esc(b.title)}" aria-haspopup="menu" type="button">⋯</button></div></article>`;
 }
-function bookRowMatches(b, q, cat) {
+
+function readingStatsStrip() {
+  const books = allBooks();
+  const stats = bookStatsOf();
+  const done = books.filter((b) => isBookCompleted(b.id)).length;
+  const mins = Math.round((Number(stats.seconds) || 0) / 60);
+  const hrs = Math.floor(mins / 60);
+  const time = hrs ? `${hrs}h ${mins % 60}m` : `${mins}m`;
+  return `<div class="card book-stats"><div><strong>${books.length}</strong><span>books</span></div><div><strong>${done}</strong><span>finished</span></div><div><strong>${time}</strong><span>reading</span></div><div><strong>${Number(stats.pages) || 0}</strong><span>pages</span></div></div>`;
+}
+
+function categorySelect(selected, books) {
+  const cats = [...new Set((books || []).map((b) => b.category || "General"))].sort((a, b) => a.localeCompare(b));
+  return `<select class="select" id="book-cat" aria-label="Filter by category"><option value="All">All categories</option>${cats.map((c) => `<option value="${esc(c)}"${c === selected ? " selected" : ""}>${esc(c)}</option>`).join("")}</select>`;
+}
+function bookStatsOf() {
+  const s = state.bookStats && typeof state.bookStats === "object" ? state.bookStats : {};
+  if (!s.opened || typeof s.opened !== "object") s.opened = {};
+  if (!s.lastOpened || typeof s.lastOpened !== "object") s.lastOpened = {};
+  if (!Array.isArray(s.completed)) s.completed = [];
+  if (!Number.isFinite(+s.seconds)) s.seconds = 0;
+  if (!Number.isFinite(+s.pages)) s.pages = 0;
+  state.bookStats = s;
+  return s;
+}
+
+export function recordBookOpen(id) {
+  const stats = bookStatsOf();
+  stats.opened[id] = (Number(stats.opened[id]) || 0) + 1;
+  stats.lastOpened[id] = Date.now();
+  state.bookRecent = [id, ...(state.bookRecent || []).filter((x) => x !== id)].slice(0, 12);
+  persist();
+}
+
+export function recordBookTime(id, seconds, pages) {
+  if (!id) return;
+  const stats = bookStatsOf();
+  stats.seconds = (Number(stats.seconds) || 0) + Math.max(0, Math.round(Number(seconds) || 0));
+  if (Number(pages) > 0) stats.pages = (Number(stats.pages) || 0) + Math.round(Number(pages));
+  persist();
+}
+
+export function markBookCompleted(id, done = true) {
+  const stats = bookStatsOf();
+  const has = stats.completed.includes(id);
+  if (done && !has) stats.completed.push(id);
+  if (!done && has) stats.completed = stats.completed.filter((x) => x !== id);
+  if (done) {
+    state.bookProgress = { ...(state.bookProgress || {}), [id]: 1 };
+    if (backendConfigured && state.user) saveBookProgress(id, 1).catch(() => {});
+  } else if (bookProgressOf(id) >= 0.995) {
+    // Reopening must be visible: progress alone would still read "finished".
+    state.bookProgress = { ...(state.bookProgress || {}), [id]: 0.99 };
+    if (backendConfigured && state.user) saveBookProgress(id, 0.99).catch(() => {});
+  }
+  persist();
+}
+
+export function isBookCompleted(id) {
+  const stats = bookStatsOf();
+  if (stats.completed.includes(id)) return true;
+  return bookProgressOf(id) >= 0.995;
+}
+
+function bookRowMatches(b, q, cat, filter) {
+  if (filter === "favorites" && !isBookFav(b.id)) return false;
+  if (filter === "reading") {
+    const p = bookProgressOf(b.id);
+    if (!(p > 0 && p < 0.995)) return false;
+  }
+  if (filter === "completed" && !isBookCompleted(b.id)) return false;
+  if (filter === "recent" && !(state.bookRecent || []).includes(b.id)) return false;
   if (cat && cat !== "All" && (b.category || "General") !== cat) return false;
   if (!q) return true;
   const hay = `${b.title || ""} ${b.author || ""} ${b.category || ""} ${(b.tags || []).join(" ")} ${b.isbn || ""} ${b.description || ""}`.toLowerCase();
@@ -301,6 +563,7 @@ function bookRowMatches(b, q, cat) {
 export function renderLibrary() {
   const t = $("#tab-books");
   if (!t) return;
+  closeBookMenu();
   try {
     purgeLegacySeedBooks();
     const view = state.bookView || { name: "home" };
@@ -319,37 +582,62 @@ export function renderLibrary() {
 }
 function paintLibError(t, err) {
   console.error("[studyflow] book library failed:", err);
-  t.innerHTML = `${viewHead("Book Library", "Your personal shelves — upload, discover, read, and study.")}<div class="card empty-state"><div class="emoji">${sicon("bookOpen")}</div><h3>Book Library hit a snag</h3><p class="muted">${esc(err?.message || "Something went wrong loading your shelves. Your books are safe.")}</p><button class="primary" data-lib-retry>Try again</button></div>`;
+  t.innerHTML = `${viewHead("Book Library", "Your personal shelves — upload, discover, read, and study.")}<div class="card empty-state"><div class="emoji">${sicon("bookOpen")}</div><h3>Book Library hit a snag</h3><p class="muted">${esc(err?.message || "Something went wrong loading your shelves. Your books are safe.")}</p><button type="button" class="primary" data-lib-retry>Try again</button></div>`;
   $("[data-lib-retry]", t).onclick = () => renderLibrary();
 }
 function renderLibraryHome(t) {
   const books = allBooks();
+  const lastOpened = (state.bookStats && state.bookStats.lastOpened) || {};
+  const byRecentOpen = (a, b) => (Number(lastOpened[b.id]) || 0) - (Number(lastOpened[a.id]) || 0);
+  const started = books.filter((b) => { const p = bookProgressOf(b.id); return p > 0 && p < 0.995; }).sort(byRecentOpen);
+  const finished = books.filter((b) => isBookCompleted(b.id)).sort(byRecentOpen);
   const favs = books.filter((b) => isBookFav(b.id));
-  const started = books.filter((b) => { const p = bookProgressOf(b.id); return p > 0 && p < 1; });
-  const finished = books.filter((b) => bookProgressOf(b.id) >= 1);
   const recent = [...books].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 6);
-  const cats = ["All", ...ALL_CATEGORY_NAMES.filter((c) => books.some((b) => (b.category || "General") === c))];
-  if (!cats.includes(bookHome.cat)) bookHome.cat = "All";
+  const filtering = bookHome.filter !== "all" || bookHome.q || bookHome.cat !== "All";
   t.innerHTML = `${viewHead("Book Library", "Your personal shelves — upload, discover, read, and study.")}
-  <div class="card" style="margin-bottom:18px"><div class="input-row" style="margin-bottom:0"><input class="input" id="book-search" placeholder="Search title, author, category, ISBN…" aria-label="Search books" value="${esc(bookHome.q)}"><button class="primary" data-book-upload>Upload Book</button></div>
-  <div class="filter-bar" style="margin:12px 0 0">${cats.slice(0, 14).map((c) => `<button class="filter ${bookHome.cat === c ? "active" : ""}" data-book-cat="${esc(c)}">${esc(c)}</button>`).join("")}</div></div>
+  <div class="card" style="margin-bottom:18px"><div class="input-row" style="margin-bottom:0"><input class="input" id="book-search" placeholder="Search title, author, category, ISBN…" aria-label="Search books" value="${esc(bookHome.q)}"><button type="button" class="primary" data-book-upload>Upload Book</button></div>
+  <div class="filter-bar" style="margin:12px 0 0">${BOOK_FILTERS.map(([v, label]) => `<button type="button" class="filter ${bookHome.filter === v ? "active" : ""}" data-book-filter="${v}">${label}</button>`).join("")}</div>
+  <div class="book-catrow">${categorySelect(bookHome.cat, books)}</div></div>
+  ${readingStatsStrip()}
   <div id="book-results"></div>
-  ${started.length ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Continue Reading</h2><span class="tag">${started.length}</span></div><div class="book-grid">${started.slice(0, 6).map(safeBookCard).join("")}</div></div>` : ""}
-  ${finished.length ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Finished</h2><span class="tag">${finished.length}</span></div><div class="book-grid">${finished.slice(0, 6).map(safeBookCard).join("")}</div></div>` : ""}
+  ${!books.length && !filtering ? `<div class="card empty-state"><div class="emoji">${sicon("bookOpen")}</div><h3>Your library is empty</h3><p class="muted">Import your first book to start reading.</p><button type="button" class="primary" data-book-upload>Import a Book</button></div>` : ""}
+  ${filtering ? "" : `${started.length ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Continue Reading</h2><span class="tag">${started.length}</span></div><div class="book-grid">${started.slice(0, 6).map(safeBookCard).join("")}</div></div>` : ""}
+  ${finished.length ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Completed</h2><span class="tag">${finished.length}</span></div><div class="book-grid">${finished.slice(0, 6).map(safeBookCard).join("")}</div></div>` : ""}
   ${favs.length ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>My Favorites</h2><span class="tag">${favs.length}</span></div><div class="book-grid">${favs.slice(0, 6).map(safeBookCard).join("")}</div></div>` : ""}
-  ${recent.length ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Recently Added</h2><span class="tag">yours</span></div><div class="book-grid">${recent.map(safeBookCard).join("")}</div></div>` : ""}`;
+  ${recent.length ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Recently Added</h2><span class="tag">yours</span></div><div class="book-grid">${recent.map(safeBookCard).join("")}</div></div>` : ""}`}`;
   renderBookResults();
   const input = $("#book-search", t);
+  let searchT = null;
   input.oninput = () => {
-    bookHome.q = input.value.trim().toLowerCase();
-    bookHome.page = 0;
-    renderBookResults();
+    clearTimeout(searchT);
+    searchT = setTimeout(() => {
+      const wasFiltering = libFiltering();
+      bookHome.q = input.value.trim().toLowerCase();
+      bookHome.page = 0;
+      if (wasFiltering === libFiltering()) {
+        renderBookResults(); // targeted: the input itself survives typing
+      } else {
+        // Sections appear/disappear — full rebuild, then hand focus back.
+        renderLibraryHome(t);
+        const si = $("#book-search", t);
+        if (si) {
+          si.focus();
+          try { si.setSelectionRange(si.value.length, si.value.length); } catch { /* ignore */ }
+        }
+      }
+    }, 150);
   };
-  $$("[data-book-cat]", t).forEach((b) => (b.onclick = () => {
-    bookHome.cat = b.dataset.bookCat;
+  $$("[data-book-filter]", t).forEach((b) => (b.onclick = () => {
+    bookHome.filter = b.dataset.bookFilter;
     bookHome.page = 0;
     renderLibrary();
   }));
+  const catSel = $("#book-cat", t);
+  if (catSel) catSel.onchange = () => {
+    bookHome.cat = catSel.value;
+    bookHome.page = 0;
+    renderLibrary();
+  };
   $$("[data-book-upload]", t).forEach((b) => (b.onclick = openUploadBook));
   bindBookCards(t);
   // Post-fetch repaints below are token-guarded: repaint ONLY when fresh data
@@ -380,9 +668,19 @@ function safeBookCard(b) {
 function renderBookResults() {
   const box = $("#book-results");
   if (!box) return;
+  const filtering = libFiltering();
+  if (!filtering) {
+    // Home sections render below instead.
+    box.innerHTML = "";
+    return;
+  }
   let list = [];
   try {
-    list = allBooks().filter((b) => bookRowMatches(b, bookHome.q, bookHome.cat));
+    list = allBooks().filter((b) => bookRowMatches(b, bookHome.q, bookHome.cat, bookHome.filter));
+    if (bookHome.filter === "recent") {
+      const order = new Map((state.bookRecent || []).map((id, i) => [id, i]));
+      list.sort((a, b) => (order.get(a.id) ?? 1e9) - (order.get(b.id) ?? 1e9));
+    }
   } catch (err) {
     console.error("[studyflow] book filter failed:", err);
   }
@@ -393,7 +691,9 @@ function renderBookResults() {
   // Paginate: metadata renders first, covers resolve lazily, content loads on open.
   const shown = list.slice(0, (bookHome.page + 1) * BOOK_PAGE_SIZE);
   const rest = list.length - shown.length;
-  box.innerHTML = `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>${bookHome.q || bookHome.cat !== "All" ? "Results" : "All Books"}</h2><span class="tag">${list.length}</span></div><div class="book-grid">${shown.map(safeBookCard).join("")}</div>${rest > 0 ? `<div style="margin-top:12px;text-align:center"><button class="ghost" data-book-more>Show more (${rest} remaining)</button></div>` : ""}</div>`;
+  const filterLabel = bookHome.filter === "all" ? null : BOOK_FILTERS.find(([v]) => v === bookHome.filter)?.[1];
+  const title = filterLabel || (bookHome.q || bookHome.cat !== "All" ? "Results" : "All Books");
+  box.innerHTML = `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>${title}</h2><span class="tag">${list.length}</span></div><div class="book-grid">${shown.map(safeBookCard).join("")}</div>${rest > 0 ? `<div style="margin-top:12px;text-align:center"><button type="button" class="ghost" data-book-more>Show more (${rest} remaining)</button></div>` : ""}</div>`;
   bindBookCards(box);
   const more = $("[data-book-more]", box);
   if (more) more.onclick = () => {
@@ -410,6 +710,70 @@ function bindBookCards(root) {
     e.stopPropagation();
     toggleBookFavorite(b.dataset.bookFav);
   }));
+  $$("[data-book-menu]", root).forEach((b) => (b.onclick = (e) => {
+    e.stopPropagation();
+    openBookMenu(b.dataset.bookMenu, b);
+  }));
+}
+
+function closeBookMenu() {
+  document.querySelectorAll(".book-menu-pop").forEach((m) => m.remove());
+  document.removeEventListener("pointerdown", closeBookMenuOutside, true);
+  document.removeEventListener("keydown", closeBookMenuKeys, true);
+}
+
+function closeBookMenuOutside(e) {
+  if (!e.target.closest?.(".book-menu-pop") && !e.target.closest?.("[data-book-menu]")) {
+    closeBookMenu();
+  }
+}
+
+function closeBookMenuKeys(e) {
+  if (e.key === "Escape") closeBookMenu();
+}
+
+function openBookMenu(id, anchor) {
+  closeBookMenu();
+  const book = findBook(id);
+  if (!book) return;
+  const pct = bookProgressPct(id);
+  const fav = isBookFav(id);
+  const pop = document.createElement("div");
+  pop.className = "book-menu-pop";
+  pop.setAttribute("role", "menu");
+  const item = (action, icon, label) =>
+    `<button type="button" class="book-menu-item" data-book-act="${action}" role="menuitem">${sicon(icon)}<span>${label}</span></button>`;
+  pop.innerHTML =
+    item("open", "bookOpen", pct > 0 && pct < 100 ? "Continue Reading" : "Open")
+    + item("details", "doc", "View Details")
+    + item("fav", "star", fav ? "Remove Favorite" : "Add to Favorites")
+    + (isOwnBook(book) ? item("edit", "memo", "Edit Details") : "")
+    + (canDownloadBook(book) ? item("download", "download", "Download") : "")
+    + (isOwnBook(book) ? item("delete", "trash", "Delete") : "");
+  document.body.append(pop);
+  try {
+    const r = anchor.getBoundingClientRect();
+    const w = 220;
+    pop.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w)) + "px";
+    pop.style.top = Math.min(window.innerHeight - pop.offsetHeight - 12, r.bottom + 6) + "px";
+  } catch {
+    /* falls back to CSS default position */
+  }
+  document.addEventListener("pointerdown", closeBookMenuOutside, true);
+  document.addEventListener("keydown", closeBookMenuKeys, true);
+  pop.onclick = (e) => {
+    const btn = e.target.closest?.("[data-book-act]");
+    if (!btn) return;
+    const act = btn.dataset.bookAct;
+    closeBookMenu();
+    if (act === "open") openReader(id);
+    else if (act === "details") openBookDetails(id);
+    else if (act === "fav") toggleBookFavorite(id);
+    else if (act === "edit") openEditBook(id);
+    else if (act === "download") downloadBook(id);
+    else if (act === "delete") askDeleteBook(id);
+  };
+  pop.querySelector(".book-menu-item")?.focus();
 }
 export async function toggleBookFavorite(id) {
   const favs = new Set(state.bookFavorites || []);
@@ -421,9 +785,9 @@ export async function toggleBookFavorite(id) {
   if (backendConfigured && state.user) {
     try {
       const { error } = await toggleBookFavoriteRemote(id, on);
-      if (error) notify("Favorite saved on this device; cloud sync failed");
+      if (error) toast("Favorite saved on this device; will sync when connected");
     } catch {
-      notify("Favorite saved on this device; cloud sync failed");
+      toast("Favorite saved on this device; will sync when connected");
     }
   }
   renderLibrary();
@@ -457,7 +821,7 @@ async function renderBookDetails(t, id) {
     }
   }
   if (!book || !canReadBook(book)) {
-    t.innerHTML = `${viewHead("Book Library", "Your personal shelves.")}<div class="card empty-state"><div class="emoji">${sicon("lock")}</div><h3>Book unavailable</h3><p class="muted">It may have been removed or is private.</p><button class="primary" data-book-home>Back to library</button></div>`;
+    t.innerHTML = `${viewHead("Book Library", "Your personal shelves.")}<div class="card empty-state"><div class="emoji">${sicon("lock")}</div><h3>Book unavailable</h3><p class="muted">It may have been removed or is private.</p><button type="button" class="primary" data-book-home>Back to library</button></div>`;
     $("[data-book-home]", t).onclick = () => {
       state.bookView = { name: "home" };
       persist();
@@ -469,9 +833,11 @@ async function renderBookDetails(t, id) {
   const fav = isBookFav(book.id);
   const own = isOwnBook(book);
   const canDl = canDownloadBook(book);
-  const isEpub = bookKindOf(book.fileName, book.fileType) === "epub";
+  const done = isBookCompleted(book.id);
+  const stats = bookStatsOf();
+  const lastOpened = stats.lastOpened?.[book.id] || null;
   t.innerHTML = `${viewHead("Book Library", "Your personal shelves.")}
-  <button class="ghost" data-book-home style="margin-bottom:14px">← All books</button>
+  <button type="button" class="ghost" data-book-home style="margin-bottom:14px">← All books</button>
   <div class="card"><div class="book-detail">
     <div class="book-cover-lg">${coverImg(book)}</div>
     <div class="book-detail-main">
@@ -489,11 +855,14 @@ async function renderBookDetails(t, id) {
         ${own ? `<span class="tag">private</span>` : ""}
       </div>
       ${(book.tags || []).length ? `<p class="muted">Tags: ${(book.tags || []).map((x) => `#${esc(x)}`).join(" ")}</p>` : ""}
+      ${lastOpened ? `<p class="muted">Last opened ${new Date(lastOpened).toLocaleDateString()}${done ? " · Finished" : ""}</p>` : ""}
       <div class="book-detail-actions">
-        ${isEpub && !canDl ? `<p class="muted" style="margin:0">EPUB preview is not supported in this version, and downloads are disabled for this book.</p>` : `<button class="primary" data-book-read="${book.id}">Read Now</button>`}
-        ${canDl ? `<button class="ghost" data-book-dl="${book.id}">${sicon("download")} Download</button>` : ""}
-        <button class="ghost" data-book-fav="${book.id}">${sicon("star")} ${fav ? "Favorited" : "Favorite"}</button>
-        ${own ? `<button class="ghost" data-book-edit="${book.id}">Edit</button><button class="danger-button" data-book-delete="${book.id}">Delete</button>` : ""}
+        <button type="button" class="primary" data-book-read="${book.id}">${pct > 0 && pct < 100 ? "Continue Reading" : "Read Now"}</button>
+        ${pct > 0 ? `<button type="button" class="ghost" data-book-restart="${book.id}">Start Over</button>` : ""}
+        ${canDl ? `<button type="button" class="ghost" data-book-dl="${book.id}">${sicon("download")} Download</button>` : ""}
+        <button type="button" class="ghost" data-book-fav="${book.id}">${sicon("star")} ${fav ? "Favorited" : "Favorite"}</button>
+        <button type="button" class="ghost" data-book-finish="${book.id}">${done ? "Reopen (unfinish)" : "Mark Finished"}</button>
+        ${own ? `<button type="button" class="ghost" data-book-edit="${book.id}">Edit</button><button type="button" class="danger-button" data-book-delete="${book.id}">Delete</button>` : ""}
       </div>
     </div>
   </div></div>`;
@@ -504,6 +873,15 @@ async function renderBookDetails(t, id) {
   };
   const readBtn = $("[data-book-read]", t);
   if (readBtn) readBtn.onclick = () => openReader(book.id);
+  const restartBtn = $("[data-book-restart]", t);
+  if (restartBtn) restartBtn.onclick = () => openReader(book.id, { fromStart: true });
+  const finishBtn = $("[data-book-finish]", t);
+  if (finishBtn) finishBtn.onclick = () => {
+    const nowDone = !isBookCompleted(book.id);
+    markBookCompleted(book.id, nowDone);
+    if (nowDone) notify("Book marked as finished");
+    renderLibrary();
+  };
   const favBtn = $("[data-book-fav]", t);
   if (favBtn) favBtn.onclick = () => toggleBookFavorite(book.id);
   const dlBtn = $("[data-book-dl]", t);
@@ -635,7 +1013,7 @@ function openUploadBook() {
   <label class="field-label">Visibility<select class="select" data-up-vis disabled><option value="private" selected>Private — only I can see this book</option></select></label></div>
   <label class="toggle-row book-up-rights"><span><strong>I have the right to share this</strong><small>Required to upload</small></span><input type="checkbox" data-up-rights></label>
   <p class="st-confirm-err" data-up-err hidden></p>
-  <div class="modal-actions"><button class="ghost" data-up-cancel>Cancel</button><button class="primary" data-up-save>Upload</button></div></div>`;
+  <div class="modal-actions"><button type="button" class="ghost" data-up-cancel>Cancel</button><button type="button" class="primary" data-up-save>Upload</button></div></div>`;
   $("#modal-root").append(modal);
   const err = modal.querySelector("[data-up-err]");
   const saveBtn = modal.querySelector("[data-up-save]");
@@ -705,6 +1083,10 @@ function openUploadBook() {
     saveBtn.textContent = "Reading file…";
     try {
       const kind = bookKindOf(file.name, file.type);
+      const fingerprint = await bookFingerprintOf(file);
+      const dupe = findDuplicateBook(file, fingerprint);
+      if (dupe) return fail(`“${dupe.title}” is already in your library.`);
+      if ((state.books || []).length >= 300) return fail("Library is full (300 books) — remove something first.");
       const customCat = modal.querySelector("[data-up-custom]").value.trim().slice(0, 120);
       const selCat = modal.querySelector("[data-up-cat]").value;
       const author = modal.querySelector("[data-up-author]").value.trim().slice(0, 200);
@@ -738,7 +1120,7 @@ function openUploadBook() {
         saveBtn.textContent = "Optimizing cover…";
         coverData = await resizeCover(coverFile).catch(() => "");
       }
-      const fileKey = uid();
+      const fileKey = newBookId();
       const entry = {
         id: fileKey, fileKey, ownerId: myUserKey(), title,
         author: author || "Unknown author", description,
@@ -746,7 +1128,7 @@ function openUploadBook() {
         publisher: "", year: null, pageCount, wordCount,
         coverPath: "", coverData, filePath: "", fileName: file.name,
         fileType: file.type || "", fileSize: file.size, textContent: "",
-        visibility, allowDownload, source: "upload",
+        fingerprint, visibility, allowDownload, source: "upload",
         createdAt: Date.now(), updatedAt: Date.now(),
       };
       saveBtn.textContent = "Saving…";
@@ -764,6 +1146,7 @@ function openUploadBook() {
             if (!upc.error) coverPath = upc.data.path;
           }
           const created = await createBook({
+            id: entry.id,
             title: entry.title, author: entry.author, description: entry.description,
             category: entry.category, tags: entry.tags, isbn: entry.isbn,
             publisher: "", published_year: null,
@@ -773,15 +1156,14 @@ function openUploadBook() {
             visibility: entry.visibility, allow_download: entry.allowDownload,
           });
           if (created.error) throw created.error;
-          entry.id = created.data.id;
           entry.coverPath = coverPath;
-          await bookBlobPut("file:" + entry.id, file);
         } catch (e) {
-          notify("Saved on this device; cloud upload failed — " + (e?.message || "try again later"));
+          toast("Saved on this device; cloud upload failed — " + (e?.message || "try again later"));
         }
       }
       state.books = [entry, ...(state.books || [])];
       persist();
+      mirrorBooks();
       modal.remove();
       state.bookView = { name: "details", id: entry.id };
       renderLibrary();
@@ -839,7 +1221,7 @@ function openEditBook(id) {
   <label class="field-label" style="display:none">Visibility<select class="select" data-ed-vis><option value="private" selected>Private — only I can see this book</option></select></label>
   <label class="toggle-row"><span><strong>Allow downloads</strong><small>Export the file when reading your book</small></span><input type="checkbox" data-ed-dl${book.allowDownload ? " checked" : ""}></label>
   <p class="st-confirm-err" data-ed-err hidden></p>
-  <div class="modal-actions"><button class="ghost" data-ed-cancel>Cancel</button><button class="primary" data-ed-save>Save changes</button></div></div>`;
+  <div class="modal-actions"><button type="button" class="ghost" data-ed-cancel>Cancel</button><button type="button" class="primary" data-ed-save>Save changes</button></div></div>`;
   $("#modal-root").append(modal);
   const err = modal.querySelector("[data-ed-err]");
   const saveBtn = modal.querySelector("[data-ed-save]");
@@ -888,6 +1270,7 @@ function openEditBook(id) {
         }
       }
       await pushBookRow(book);
+      mirrorBooks();
       persist();
       modal.remove();
       renderLibrary();
@@ -905,7 +1288,7 @@ function askDeleteBook(id) {
   if (!book || !isOwnBook(book)) return notify("You can only delete your own books");
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
-  modal.innerHTML = `<div class="modal"><div class="eyebrow">Delete book</div><h2>Delete “${esc(book.title)}”?</h2><p class="muted">The file, cover, progress, bookmarks, highlights, and notes for this book will be permanently removed. This cannot be undone.</p><p class="st-confirm-err" data-del-err hidden></p><div class="modal-actions"><button class="ghost" data-del-cancel>Cancel</button><button class="danger-button" data-del-go>Delete</button></div></div>`;
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Delete book</div><h2>Delete “${esc(book.title)}”?</h2><p class="muted">The file, cover, progress, bookmarks, highlights, and notes for this book will be permanently removed. This cannot be undone.</p><p class="st-confirm-err" data-del-err hidden></p><div class="modal-actions"><button type="button" class="ghost" data-del-cancel>Cancel</button><button type="button" class="danger-button" data-del-go>Delete</button></div></div>`;
   $("#modal-root").append(modal);
   const err = modal.querySelector("[data-del-err]");
   const go = modal.querySelector("[data-del-go]");
@@ -920,18 +1303,9 @@ function askDeleteBook(id) {
     try {
       const fresh = findBook(id);
       if (!fresh || !isOwnBook(fresh)) throw new Error("That book is already gone or is not yours.");
-      if (backendConfigured && state.user && fresh.source !== "seed") {
-        try {
-          const { error } = await deleteBook(fresh.id);
-          if (error) throw error;
-        } catch (e) {
-          throw new Error("Server delete failed — " + (e?.message || "try again later"));
-        }
-        try {
-          if (fresh.filePath) await removeBookFile(fresh.filePath);
-          if (fresh.coverPath) await removeBookFile(fresh.coverPath);
-        } catch { /* files best-effort */ }
-      }
+      // Local-first: the library, blobs, annotations, refs and URLs go away
+      // NOW, online or not. The cloud follows via attempt + durable outbox.
+      const wasSynced = Boolean(fresh.filePath) || BOOK_UUID_RE.test(String(fresh.id || ""));
       await bookBlobDelete("file:" + (fresh.fileKey || fresh.id));
       await bookBlobDelete("text:" + (fresh.fileKey || fresh.id));
       bookUrlCache.delete(fresh.fileKey || fresh.id);
@@ -948,11 +1322,42 @@ function askDeleteBook(id) {
       const local = { ...(state.bookLocal || {}) };
       delete local[id];
       state.bookLocal = local;
+      state.bookRecent = (state.bookRecent || []).filter((x) => x !== id);
+      const stats = state.bookStats && typeof state.bookStats === "object" ? state.bookStats : null;
+      if (stats) {
+        if (stats.opened) delete stats.opened[id];
+        if (stats.lastOpened) delete stats.lastOpened[id];
+        if (Array.isArray(stats.completed)) stats.completed = stats.completed.filter((x) => x !== id);
+      }
+      deleteBookEverywhere(id);
       persist();
       modal.remove();
-      state.bookView = { name: "home" };
+      if (state.bookView?.name !== "home") state.bookView = { name: "home" };
       renderLibrary();
-      notify("Book deleted");
+      if (!state.user) {
+        notify("Book deleted from this device");
+        return;
+      }
+      if (!wasSynced) {
+        notify("Book deleted");
+        return;
+      }
+      // Signed in with a possibly-synced book: try the server now, otherwise
+      // the outbox finishes the job on reconnect. Never resurrect locally.
+      try {
+        const { error } = await deleteBook(fresh.id);
+        if (error) throw error;
+        try {
+          if (fresh.filePath) await removeBookFile(fresh.filePath);
+          if (fresh.coverPath) await removeBookFile(fresh.coverPath);
+        } catch { /* files best-effort */ }
+        notify("Book deleted");
+      } catch (e) {
+        const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+        toast(offline
+          ? "Deleted on this device — will sync when you reconnect"
+          : "Deleted on this device; cloud delete failed — will retry automatically");
+      }
     } catch (e) {
       err.textContent = e?.message || "Delete failed. Try again.";
       err.hidden = false;
@@ -964,7 +1369,7 @@ function askDeleteBook(id) {
 export async function downloadBook(book) {
   const b = typeof book === "string" ? findBook(book) : book;
   if (!b || !canDownloadBook(b)) return notify("Download is not available for this book");
-  notify("Preparing download…");
+  toast("Preparing download…");
   try {
     if (b.textContent) {
       const blob = new Blob([b.textContent], { type: "text/markdown" });
@@ -972,11 +1377,11 @@ export async function downloadBook(book) {
       return;
     }
     const blob = await getBookBlob(b);
-    if (!blob) return notify("File unavailable — try again later");
+    if (!blob) return toast("File unavailable — try again later");
     const ext = (b.fileName || "").split(".").pop() || (b.fileType.includes("pdf") ? "pdf" : b.fileType.includes("epub") ? "epub" : "txt");
     triggerBlobDownload(blob, safeBookFilename(b, ext));
   } catch {
-    notify("Download failed — try again later");
+    toast("Download failed — try again later");
   }
 }
 function safeBookFilename(b, ext) {
@@ -995,4 +1400,4 @@ function triggerBlobDownload(blob, filename) {
     a.remove();
   }, 4000);
 }
-export { findBook, openBookDetails, openUploadBook, openEditBook, askDeleteBook, bookProgressOf, isBookFav, isOwnBook, canReadBook, canDownloadBook };
+export { findBook, openBookDetails, openUploadBook, openEditBook, askDeleteBook, bookProgressOf, isBookFav, isOwnBook, canReadBook, canDownloadBook, bookKindOf, resizeCover };

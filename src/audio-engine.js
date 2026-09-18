@@ -19,12 +19,20 @@ import {
   cycleSpeed,
   setVolume,
   toggleMute,
+  saveResumePos,
+  getResumePos,
+  clearResumePos,
 } from "./audio-state.js";
 
 let audioEl = null;
 let endedGuard = false;
 let sourceResolver = null;
 let playbackListener = null;
+// Generation counter: overlapping startPlayback calls (rapid Next clicks,
+// ended+manual overlap) must not let a STALE play() rejection clobber the
+// new track's flags or toast a phantom "blocked" message. Only the latest
+// generation may touch UI state from async continuations.
+let playToken = 0;
 
 export function setSourceResolver(fn) {
   sourceResolver = fn;
@@ -60,31 +68,57 @@ function ensureAudio() {
 }
 
 function onTimeUpdate() {
-  const bar = $("#now-playing");
-  if (!bar) return;
+  // Real playback progress proves the track is healthy — this is what clears
+  // the consecutive-failure streak (NOT play() success: a doomed source can
+  // resolve play() and then fail to load, which must still count).
+  if (audioEl && !audioEl.paused && !audioEl.ended) errorSkipStreak = 0;
   const audio = audioEl;
   if (!audio || audio.ended) return;
-  const seek = $("[data-np-seek]", bar);
-  const time = $("[data-np-current]", bar);
-  if (time) time.textContent = fmtClock(audio.currentTime);
-  if (seek && !seek.dataset.scrub && audio.duration > 0) {
-    seek.value = Math.round((audio.currentTime / audio.duration) * 1000);
+  const bar = $("#now-playing");
+  if (bar) {
+    const seek = $("[data-np-seek]", bar);
+    const time = $("[data-np-current]", bar);
+    if (time) time.textContent = fmtClock(audio.currentTime);
+    if (seek && !seek.dataset.scrub && audio.duration > 0) {
+      seek.value = Math.round((audio.currentTime / audio.duration) * 1000);
+    }
+  }
+  const mini = document.querySelector("#np-mini");
+  if (mini) {
+    const time = mini.querySelector("[data-np-mini-current]");
+    if (time) time.textContent = fmtClock(audio.currentTime);
+    const seek = mini.querySelector("[data-np-mini-seek]");
+    if (seek && !seek.dataset.scrub && audio.duration > 0) {
+      seek.value = Math.round((audio.currentTime / audio.duration) * 1000);
+    }
   }
 }
 
 function onMetaLoaded() {
   const bar = $("#now-playing");
-  if (!bar) return;
-  const dur = $("[data-np-duration]", bar);
-  if (dur) dur.textContent = fmtClock(audioEl?.duration);
+  if (bar) {
+    const dur = $("[data-np-duration]", bar);
+    if (dur) dur.textContent = fmtClock(audioEl?.duration);
+  }
+  const mini = document.querySelector("#np-mini");
+  if (mini) {
+    const dur = mini.querySelector("[data-np-mini-duration]");
+    if (dur) dur.textContent = fmtClock(audioEl?.duration);
+  }
 }
 
 let lastErrorRetriedId = null;
+
+// Consecutive give-ups (decode failures, not missing files — those are
+// skipped silently by advance()). Caps the skip storm when a whole stretch
+// of the library is unplayable so the player stops instead of spinning.
+let errorSkipStreak = 0;
 
 function onEnded() {
   if (endedGuard) return;
   endedGuard = true;
   setTimeout(() => { endedGuard = false; }, 300);
+  clearResumePos();
   const p = getPlayerState();
   if (p.repeat === "one") {
     restartCurrent();
@@ -114,6 +148,13 @@ function onError() {
   lastErrorRetriedId = null;
   const name = song ? `"${song.title || song.name || "Unknown"}"` : "This track";
   notify(`${name} cannot be played by your browser — skipping`);
+  errorSkipStreak++;
+  if (errorSkipStreak >= 5) {
+    errorSkipStreak = 0;
+    pausePlayback();
+    notify("Stopped — several tracks in a row failed to play");
+    return;
+  }
   advance(1);
 }
 
@@ -180,6 +221,15 @@ export async function startPlayback(songId, options = {}) {
   const audio = ensureAudio();
   const song = (state.songs || []).find((s) => s.id === songId);
   if (!song) return null;
+  const token = ++playToken;
+  // A new track is a fresh slate for error recovery: only consecutive errors
+  // on the SAME track escalate (retry once, then skip). Resetting on play
+  // success instead would let a persistently broken track retry forever when
+  // the success continuation lands before its load error.
+  if (lastErrorRetriedId && lastErrorRetriedId !== songId) lastErrorRetriedId = null;
+  // A saved pause position belongs to its own track — starting anything
+  // else discards it (callers read it before invoking us when resuming).
+  if (getResumePos(songId) <= 0) clearResumePos();
   let url = getBlobUrl(songId);
   if (!url) url = await resolveUrl(songId);
   if (!url) {
@@ -200,14 +250,18 @@ export async function startPlayback(songId, options = {}) {
       // currentTime can only be set reliably once metadata is loaded for a
       // brand-new source; seek right after load() is silently ignored.
       const seekOnce = () => {
-        audio.removeEventListener("loadedmetadata", seekOnce);
+        // A newer selection may have taken over while metadata was loading —
+        // never seek a stale position onto it.
+        if (token !== playToken) return;
         try {
           audio.currentTime = startPos;
         } catch {
           /* ignore */
         }
       };
-      audio.addEventListener("loadedmetadata", seekOnce);
+      // `once` guarantees no listener pile-up if metadata never arrives
+      // (the manual remove is a belt-and-braces backup for old engines).
+      audio.addEventListener("loadedmetadata", seekOnce, { once: true });
     }
   } else if (audio.ended) {
     audio.currentTime = 0;
@@ -241,8 +295,10 @@ export async function startPlayback(songId, options = {}) {
   emitPlaybackChange();
   try {
     await audio.play();
-    lastErrorRetriedId = null;
   } catch {
+    // Stale generation (a newer track took over and this play() was
+    // interrupted): stay silent so we don't clear the new track's state.
+    if (token !== playToken) return null;
     state.songs.forEach((s) => (s.playing = false));
     emitPlaybackChange();
     notify("Playback was blocked — tap play again");
@@ -253,6 +309,13 @@ export async function startPlayback(songId, options = {}) {
 export function pausePlayback() {
   const audio = ensureAudio();
   if (!audio.paused) {
+    try {
+      if (state.playerTrack && Number.isFinite(audio.currentTime)) {
+        saveResumePos(state.playerTrack, audio.currentTime);
+      }
+    } catch {
+      /* position save is best-effort */
+    }
     audio.pause();
     emitPlaybackChange();
   }
@@ -267,18 +330,22 @@ export function resumePlayback() {
   }
   if (audio.paused) {
     // Fresh session, revoked URL, or cleared source: nothing usable is loaded.
-    // Reload the current track from its (possibly stale) URL — the resolver in
-    // audio.js re-mints it from IndexedDB when needed.
+    // Reload the current track — from the saved pause position when we have
+    // one, so resume-after-pause survives even a page reload.
     if (!audio.currentSrc) {
       const trackId = state.playerTrack || getCurrentQueueTrack()?.id;
       if (!trackId) return;
-      startPlayback(trackId, { startInQueue: false, startPos: 0 });
+      startPlayback(trackId, { startInQueue: false, startPos: getResumePos(trackId) });
       return;
     }
+    // Resume is a continuation, not a new selection: if a newer track took
+    // over meanwhile, its state wins and this outcome stays silent.
+    const token = playToken;
     audio
       .play()
-      .then(() => emitPlaybackChange())
+      .then(() => { if (token === playToken) emitPlaybackChange(); })
       .catch(() => {
+        if (token !== playToken) return;
         notify("Playback was blocked — tap play again");
       });
   }
