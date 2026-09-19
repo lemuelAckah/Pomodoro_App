@@ -24,6 +24,8 @@ Vanilla-JS Vite app (no React runtime code despite the scaffolding deps). Entry:
 
 ## Notes
 
+- **THE USER RUNS THEIR OWN DEV SERVER ON 8443.** Before starting any preview server, check `netstat -ano | grep :8443` first. If something already listens there, it is likely the user's own `npm run dev` — do NOT kill it and do NOT start a second one; just register `http://localhost:8443/` with that existing pid. Only kill a port holder when it is a stale Freebuff-launched preview server (verify via the pid recorded in this thread's preview registration).
+- Port conflict error `Port 8443 is already in use`: `vite.config.ts` sets `strictPort: true`, so Vite fails instead of falling back. Freebuff preview servers left running detached are the usual cause — stop the recorded preview (Stop-Process on its pid), which frees the port for the user.
 - The injected `PORT` varies per Freebuff session (observed: 8443, then 5173) — never hardcode it; always read the port from the Vite banner in the log.
 - The PowerShell `Start-Process` launcher can take longer than 30s to return the pid (slow OneDrive path): run it with a generous timeout, or treat a launcher timeout as *unknown* state — check the log file for the Vite banner and `netstat -ano | grep :<port>` for the listening pid before starting another server (strictPort would otherwise make the second instance die).
 
