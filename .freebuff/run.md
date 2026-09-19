@@ -14,7 +14,7 @@ Vanilla-JS Vite app (no React runtime code despite the scaffolding deps). Entry:
 ## Run the dev server
 
 - Default dev script: `npm run dev` → `vite --host 0.0.0.0`.
-- Port: `vite.config.ts` uses `parseInt(process.env.PORT || '8443')` with `strictPort: true`. **The Freebuff client environment injects `PORT` (e.g. 57116), which wins over 8443** — read the actual port from the Vite startup banner in the log file, and use `http://localhost:<that port>/` for verification.
+- Port: `vite.config.ts` uses `parseInt(process.env.PORT || '8443')` with `strictPort: true`. **8443 is the user's canonical preview port** — prefer it when choosing a port for a new server; only fall back if it's already taken (then `netstat -ano | grep :8443` to find the existing server and consider registering that instead of starting a second one). If the Freebuff client injects a different `PORT` and it wins, read the actual port from the Vite startup banner in the log file and verify against `http://localhost:<that port>/`.
 - Detached start on Windows (PowerShell, stdout/stderr to separate files):
   ```powershell
   (Start-Process -FilePath 'npm.cmd' -ArgumentList 'run','dev' -RedirectStandardOutput '.freebuff\preview.log' -RedirectStandardError '.freebuff\preview.log.err' -WindowStyle Hidden -PassThru).Id

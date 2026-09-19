@@ -278,9 +278,6 @@ function bindShell() {
 function render() {
   const view = $("#view");
   if (!view) return;
-  // Leaving Community must never leave the mobile Messages full-screen
-  // overlay stuck over the new tab (nav jumps, notification deep-links…).
-  if (state.tab !== "community") document.body.classList.remove("chat-takeover");
   view.innerHTML = `${["timer", "techniques", "sounds", "community", "books", "store", "favorites", "account", "settings"].map((tab) => `<section id="tab-${tab}" class="tab-panel ${state.tab === tab ? "active" : ""}"></section>`).join("")}`;
   const views = {
     timer: renderTimer,

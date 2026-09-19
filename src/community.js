@@ -852,9 +852,6 @@ function ensureSprintTicker() {
 
 function renderCommunity() {
   clearSprintTicker();
-  // Re-rendering the Community tab (tab switch, subtab change, ambient
-  // refresh) always drops the mobile chat takeover + scroll lock.
-  document.body.classList.remove("chat-takeover");
   const t = $("#tab-community");
   t.innerHTML = `${viewHead("Community", "Find people who are learning what you are learning, make a group, and keep the conversation moving.")}<div class="subnav">${[
     ["discover", "Discover"],
@@ -3882,54 +3879,17 @@ function renderNotifications(body) {
     notify("All caught up");
   };
 }
-// On phones, "Messages" is a full-screen experience: the conversation list
-// gets its own header (title + back to Community), matching WhatsApp's
-// chats-overview. On desktop (≥761px) the header is hidden via CSS and the
-// classic two-pane layout stays.
-function mobileListHeader() {
-  return `<div class="msg-list-head"><button type="button" class="icon-btn msg-list-back" data-msgs-back title="Back to Community" aria-label="Back to Community">${sicon("chevron-up")}</button><strong>Messages</strong><span class="msg-list-count">${chatsForList().length}</span></div>`;
-}
-
-// Leaving full-screen Messages: restore the Community desk beneath the list.
-function goBackFromMobileMessages() {
-  const panel = $("#community-body");
-  if (!panel) return;
-  state.subtab = "discover"; // matches the subnav default users see after
-  state.activeChat = null; // leaving, so nothing looks out of place
-  renderCommunity();
-  requestAnimationFrame(() => {
-    try {
-      $("#tab-community")?.scrollIntoView({ block: "start" });
-    } catch {
-      /* older browsers */
-    }
-  });
-}
-
-function chatsForList() {
+function renderMessages(body) {
   const cloudConns = cloudFriends
     .filter((f) => !cloudBlocked.has(f.id))
     .map((f) => ({ id: f.id, username: f.handle, name: f.name, cloud: true }));
-  return [
+  const chats = [
     ...allGroups().filter((g) => get("sf-joined", []).includes(g.id)),
     ...(state.friends || []).filter((f) => !isBlockedKey(f.id)),
     ...cloudConns.filter((c) => !(state.friends || []).some((f) => f.id === c.id)),
   ];
-}
-
-function renderMessages(body) {
-  const chats = chatsForList();
   if (state.activeChat && (isBlockedKey(state.activeChat) || cloudBlocked.has(state.activeChat))) state.activeChat = null;
-  body.innerHTML = `<div class="card messages">${mobileListHeader()}<div class="conversation">${chats.map((c) => `<button type="button" class="${state.activeChat === c.id ? "active" : ""}" data-select-chat="${c.id}">${c.emoji || "●"} ${esc(c.name || "@" + c.username)}${isChatMuted(c.id) ? ` <span class="mute-ico" title="Muted">${sicon("mute")}</span>` : ""}</button>`).join("") || '<span class="muted">No conversations yet.</span>'}</div><div class="chat">${state.activeChat ? (groupSearch && groupSearch.id === state.activeChat ? groupSearchMarkup(state.activeChat) : chatMarkup(state.activeChat)) : '<div style="margin:auto" class="muted">Select a group or friend to start messaging.</div>'}</div></div>`;
-  // On phones the whole Messages subtab becomes a full-screen experience
-  // (WhatsApp-style): the shell, topbar and Community subnav hide via CSS
-  // keyed on this body class — the conversation list when no chat is open,
-  // the conversation itself when one is. Closing the chat (back button /
-  // picking a subtab) drops the class and unlocks page scroll.
-  document.body.classList.toggle(
-    "chat-takeover",
-    state.tab === "community" && state.subtab === "messages",
-  );
+  body.innerHTML = `<div class="card messages"><div class="conversation">${chats.map((c) => `<button type="button" class="${state.activeChat === c.id ? "active" : ""}" data-select-chat="${c.id}">${c.emoji || "●"} ${esc(c.name || "@" + c.username)}${isChatMuted(c.id) ? ` <span class="mute-ico" title="Muted">${sicon("mute")}</span>` : ""}</button>`).join("") || '<span class="muted">No conversations yet.</span>'}</div><div class="chat">${state.activeChat ? (groupSearch && groupSearch.id === state.activeChat ? groupSearchMarkup(state.activeChat) : chatMarkup(state.activeChat)) : '<div style="margin:auto" class="muted">Select a group or friend to start messaging.</div>'}</div></div>`;
   $$("[data-select-chat]", body).forEach(
     (b) =>
       (b.onclick = () => {
@@ -3950,32 +3910,6 @@ function renderMessages(body) {
     if (chatBody) chatBody.scrollTop = chatBody.scrollHeight;
   }
   paintGroupAvatars(body);
-  // Escape backs out of the full-screen messages experience on phones:
-  // from a conversation to the list, from the list back to Community.
-  if (!window.__sfMsgsEsc) {
-    window.__sfMsgsEsc = true;
-    document.addEventListener("keydown", (e) => {
-      if (e.key !== "Escape" || state.tab !== "community" || state.subtab !== "messages") return;
-      if (userIsBusy()) return;
-      if (state.activeChat) closeMobileChat();
-      else goBackFromMobileMessages();
-    });
-  }
-  const back = $("[data-msgs-back]", body);
-  if (back) back.onclick = goBackFromMobileMessages;
-}
-
-// Back arrow inside the mobile full-screen chat: close the conversation and
-// reveal the conversation list again (renders only the messages panel, so
-// drafts and scroll in the list survive).
-function closeMobileChat() {
-  const panel = $("#community-body");
-  if (!panel) return;
-  state.activeChat = null;
-  renderMessages(panel);
-  panel
-    .querySelector(".conversation")
-    ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
 function chatKey() {
@@ -4255,7 +4189,7 @@ function chatMarkup(id) {
   const nav = groupNav && groupNav.id === id && groupNav.matches.length
     ? `<div class="msg-nav"><button type="button" data-gnav="prev" aria-label="Previous match">‹</button><span>${groupNav.pos + 1} / ${groupNav.matches.length}</span><button type="button" data-gnav="next" aria-label="Next match">›</button><button type="button" data-gnav="close" aria-label="Close search navigation">×</button></div>`
     : "";
-  return `<div class="chat-head"><button type="button" class="icon-btn chat-head-back" data-chat-back title="Back to messages" aria-label="Back to messages">${sicon("chevron-up")}</button><div class="chat-head-who">${isGroup ? groupAvatarMarkup(allGroups().find((g) => g.id === id)) : ""}<div><strong>${esc(target?.name || "@" + (target?.username || target?.handle || "?"))}</strong>${mutedTag}${typing}${presence}</div></div><span class="friend-actions"><button type="button" class="icon-btn chat-head-act" data-start-call="${id}" title="Video call" aria-label="Start a video call">${sicon("film")}</button>${isFriendChat ? `<span class="post-menu-wrap"><button type="button" class="icon-btn" data-chat-menu="${id}" title="Conversation options" aria-label="Conversation options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden><button type="button" data-chat-block="${id}">Block user</button></span></span>` : ""}${isGroup && !isFriendChat ? `<span class="post-menu-wrap"><button type="button" class="icon-btn" data-chat-menu="${id}" title="Group options" aria-label="Group options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden>${groupMenuMarkup(id)}</span></span>` : ""}</span></div>${pinbar}${nav}<div class="chat-body">${msgs.map((m, i) => `<div class="bubble ${m.me ? "me" : ""}" data-midx="${i}">${messageHtml(m)}</div>`).join("") || '<span class="muted">No messages yet. Start the conversation.</span>'}</div>${reply}${rec}<div class="chat-input"><textarea class="input autogrow chat-textarea" id="chat-text" rows="1" data-grow-max="150" placeholder="Type a message (Shift + Enter for a new line)" aria-label="Type a message"></textarea><div class="chat-extras-wrap"><button type="button" class="icon-btn chat-extras-toggle" data-chat-extras title="Add to your message" aria-label="Add to your message" aria-haspopup="true" aria-expanded="false"><span class="chat-extras-plus">${sicon("plus")}</span></button><div class="chat-extras-menu" data-chat-extras-pop hidden role="dialog" aria-label="Add to your message"><div class="chat-extras-head"><strong>Add to chat</strong><button type="button" class="icon-btn chat-extras-close" data-chat-extras-close title="Close" aria-label="Close menu">${sicon("x")}</button></div><div class="chat-extras-grid"><label class="chat-extras-item" title="Attach a file up to 3 MB"><input type="file" id="chat-file" hidden><span class="chat-extras-ic file">${sicon("clip")}</span><span>File</span></label><button type="button" class="chat-extras-item" id="poll-button" title="Create a poll"><span class="chat-extras-ic poll">${sicon("chart")}</span><span>Poll</span></button><button type="button" class="chat-extras-item" id="voice-button" title="Record a voice note"><span class="chat-extras-ic voice">${sicon("mic")}</span><span>Voice</span></button></div><div class="chat-extras-foot">Files up to 3 MB. Attach documents, start a poll, or record a voice note.</div></div></div><button type="button" class="primary" id="send-message">Send</button></div>`;
+  return `<div class="chat-head"><div class="chat-head-who">${isGroup ? groupAvatarMarkup(allGroups().find((g) => g.id === id)) : ""}<div><strong>${esc(target?.name || "@" + (target?.username || target?.handle || "?"))}</strong>${mutedTag}${typing}${presence}</div></div><span class="friend-actions"><button type="button" class="primary" data-start-call="${id}" style="padding:8px 12px;font-size:11px">Video call</button>${isFriendChat ? `<span class="post-menu-wrap"><button type="button" class="icon-btn" data-chat-menu="${id}" title="Conversation options" aria-label="Conversation options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden><button type="button" data-chat-block="${id}">Block user</button></span></span>` : ""}${isGroup && !isFriendChat ? `<span class="post-menu-wrap"><button type="button" class="icon-btn" data-chat-menu="${id}" title="Group options" aria-label="Group options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden>${groupMenuMarkup(id)}</span></span>` : ""}</span></div>${pinbar}${nav}<div class="chat-body">${msgs.map((m, i) => `<div class="bubble ${m.me ? "me" : ""}" data-midx="${i}">${messageHtml(m)}</div>`).join("") || '<span class="muted">No messages yet. Start the conversation.</span>'}</div>${reply}${rec}<div class="chat-input"><textarea class="input autogrow chat-textarea" id="chat-text" rows="1" data-grow-max="150" placeholder="Type a message (Shift + Enter for a new line)" aria-label="Type a message"></textarea><div class="chat-extras-wrap"><button type="button" class="icon-btn chat-extras-toggle" data-chat-extras title="Add to your message" aria-label="Add to your message" aria-haspopup="true" aria-expanded="false"><span class="chat-extras-plus">${sicon("plus")}</span></button><div class="chat-extras-menu" data-chat-extras-pop hidden role="dialog" aria-label="Add to your message"><div class="chat-extras-head"><strong>Add to chat</strong><button type="button" class="icon-btn chat-extras-close" data-chat-extras-close title="Close" aria-label="Close menu">${sicon("x")}</button></div><div class="chat-extras-grid"><label class="chat-extras-item" title="Attach a file up to 3 MB"><input type="file" id="chat-file" hidden><span class="chat-extras-ic file">${sicon("clip")}</span><span>File</span></label><button type="button" class="chat-extras-item" id="poll-button" title="Create a poll"><span class="chat-extras-ic poll">${sicon("chart")}</span><span>Poll</span></button><button type="button" class="chat-extras-item" id="voice-button" title="Record a voice note"><span class="chat-extras-ic voice">${sicon("mic")}</span><span>Voice</span></button></div><div class="chat-extras-foot">Files up to 3 MB. Attach documents, start a poll, or record a voice note.</div></div></div><button type="button" class="primary" id="send-message">Send</button></div>`;
 }
 
 function closeChatExtras(root) {
@@ -4271,8 +4205,6 @@ function bindChat(root, id) {
   subscribeToChat(id);
   subscribePresenceFor(id);
   loadCloudHistory(id, root).catch(() => {});
-  // Mobile full-screen chat: back arrow returns to the conversation list.
-  $("[data-chat-back]", root)?.addEventListener("click", closeMobileChat);
   $("#send-message", root).onclick = () => {
     const input = $("#chat-text", root);
     const value = input.value;
