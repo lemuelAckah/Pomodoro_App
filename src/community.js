@@ -2,7 +2,7 @@
 import {
   state, $, $$, uid, get, save, esc, sicon, stripIcon, persist, notify, confirmBox, viewHead,
   addCoins, addNotification, browserNotify, celebrate, fmt, fmtSize, avatarMarkup, dayKey, notifOn,
-  setGroupLookup, fitTextarea, requireAuth,
+  setGroupLookup, fitTextarea, requireAuth, fmtClock,
 } from "./core.js";
 import {
   sendCloudMessage, markMessageRead, subscribeToConversation, subscribeToPresence,
@@ -276,6 +276,108 @@ let chatTypingSentAt = 0;
 const typingTimeouts = {};
 
 let voiceRec = null;
+
+/* Seeded pseudo-random waveform bars — every voice message gets a unique but
+   stable voiceprint-like shape (deterministic per message id). */
+function waveSeed(id) {
+  let h = 2166136261;
+  for (const ch of String(id)) {
+    h ^= ch.charCodeAt(0);
+    h = Math.imul(h, 16777619);
+  }
+  return () => {
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
+  };
+}
+const VMSG_BARS = 36;
+const vmsgWave = (id) => {
+  const rnd = waveSeed(id);
+  let out = "";
+  for (let i = 0; i < VMSG_BARS; i++) {
+    const peak = 22 + Math.round(rnd() * 68);
+    out += `<i style="height:${peak}%"></i>`;
+  }
+  return out;
+};
+
+/* One shared <audio> element — opening a new voice message stops the previous
+   one, exactly like WhatsApp. `activeVoice` tracks the message id, and the
+   widget is re-resolved from the live DOM on every paint: ambient re-renders
+   replace bubble elements, so a held element reference would go stale. */
+let activeVoice = null;
+const liveWidget = (id) =>
+  [...document.querySelectorAll("[data-vmsg]")].find(
+    (w) => w.dataset.vid === id,
+  ) || null;
+function stopActiveVoice() {
+  if (!activeVoice) return;
+  try {
+    activeVoice.audio.pause();
+    activeVoice.audio.currentTime = 0;
+  } catch {
+    /* ignore */
+  }
+  const widget = liveWidget(activeVoice.id);
+  widget?.classList.remove("playing");
+  paintVoice(activeVoice.id, 0);
+  stopVoiceEngine();
+  activeVoice = null;
+}
+function paintVoice(id, frac) {
+  const widget = liveWidget(id);
+  if (!widget) return;
+  const wave = widget.querySelector("[data-vmsg-wave]");
+  if (!wave) return;
+  if (activeVoice?.id === id) {
+    widget.classList.toggle("playing", !activeVoice.audio.paused);
+  }
+  const bars = wave.children;
+  const played = frac * bars.length;
+  for (let i = 0; i < bars.length; i++) {
+    bars[i].classList.toggle("on", i < played);
+  }
+  const now = widget.querySelector("[data-vmsg-now]");
+  if (now) {
+    now.textContent = fmtClock(
+      Math.round(frac * (Number(widget.dataset.dur) || 0)),
+    );
+  }
+}
+function ensureActiveVoice() {
+  if (activeVoice?.audio) return activeVoice;
+  const audio = new Audio();
+  audio.preload = "metadata";
+  // Paint loop instead of relying on `timeupdate`: some browsers throttle or
+  // skip that event, and the loop doubles as the ended-detector.
+  activeVoice = {
+    audio,
+    id: null,
+    raf: setInterval(() => {
+      if (!activeVoice || audio !== activeVoice.audio) return;
+      if (audio.paused && !audio.ended) return;
+      const widget = liveWidget(activeVoice.id);
+      const dur = Number(widget?.dataset.dur) || audio.duration || 1;
+      if (audio.ended || (!audio.paused && dur > 0 && audio.currentTime >= dur - 0.05)) {
+        audio.pause();
+        try {
+          audio.currentTime = 0;
+        } catch {
+          /* ignore */
+        }
+        paintVoice(activeVoice.id, 0);
+        widget?.classList.remove("playing");
+        activeVoice = null;
+        return;
+      }
+      paintVoice(activeVoice.id, Math.min(1, audio.currentTime / dur));
+    }, 80),
+  };
+  return activeVoice;
+}
+function stopVoiceEngine() {
+  if (activeVoice?.raf) clearInterval(activeVoice.raf);
+}
 
 let presenceSub = null;
 
@@ -3853,7 +3955,9 @@ function messageHtml(m) {
   const key = chatKey();
   let body = "";
   if (m.kind === "voice" && m.audio) {
-    body = `<audio controls preload="metadata" src="${m.audio}" class="voice-player"></audio><div class="muted" style="font-size:11px">Voice message · ${m.dur || 0}s</div>`;
+    const dur = Math.max(1, Math.round(m.dur || 0));
+    const label = m.me ? "You" : "Voice message";
+    body = `<div class="vmsg" data-vmsg data-vid="${esc(m.id)}" data-dur="${dur}"><button type="button" class="vmsg-play" data-vmsg-play title="Play voice message" aria-label="Play voice message">${sicon("play")}${sicon("pause")}</button><div class="vmsg-main"><div class="vmsg-wave" data-vmsg-wave aria-hidden="true">${vmsgWave(m.id)}</div><div class="vmsg-meta"><span class="vmsg-label">${esc(label)}</span><span class="vmsg-time"><span data-vmsg-now>0:00</span> / ${fmtClock(dur)}</span></div></div><a class="vmsg-dl" href="${m.audio}" download="voice-note.webm" title="Save voice note" aria-label="Save voice note">${sicon("download")}</a></div>`;
   } else if (m.kind === "poll" && m.options) {
     const counts = pollVotes(m);
     const cast = counts.reduce((a, b) => a + b, 0);
@@ -4076,7 +4180,7 @@ function chatMarkup(id) {
       ? `<div class="reply-strip"><div><strong>Replying to ${esc(chatReply.author)}</strong><span>${escSnippet(chatReply.text, 80)}</span></div><button type="button" data-reply-cancel title="Cancel reply">×</button></div>`
       : "";
   const rec = voiceRec
-    ? `<div class="rec-bar" role="status" aria-label="Recording voice note"><button type="button" class="icon-btn rec-btn" data-rec-cancel title="Discard recording" aria-label="Discard recording">${sicon("trash")}</button><span class="rec-dot" aria-hidden="true"></span><span class="rec-wave" data-rec-wave aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="rec-time" data-rec-time>00:00</span><span class="rec-hint">Recording… tap Send when done</span><button type="button" class="primary rec-send" data-rec-send>${sicon("check")} <span>Send</span></button></div>`
+    ? `<div class="rec-bar${voiceRec.paused ? " paused" : ""}" role="status" aria-label="Recording voice note"><button type="button" class="icon-btn rec-btn" data-rec-cancel title="Discard recording" aria-label="Discard recording">${sicon("trash")}</button><span class="rec-dot" aria-hidden="true"></span><button type="button" class="icon-btn rec-pause" data-rec-pause title="Pause recording" aria-label="Pause or resume recording">${sicon("pause")}${sicon("play")}</button><span class="rec-wave" data-rec-wave aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="rec-time" data-rec-time>00:00</span><span class="rec-hint">Recording… tap Send when done</span><button type="button" class="primary rec-send" data-rec-send>${sicon("check")} <span>Send</span></button></div>`
     : "";
   const isFriendChat = (state.friends || []).some((f) => f.id === id) || cloudFriends.some((f) => f.id === id);
   const isGroup = allGroups().some((g) => g.id === id);
@@ -4289,6 +4393,74 @@ function bindChat(root, id) {
     if (voiceRec) stopRecording("send");
     else startRecording(id, root);
   };
+  // --- Voice message player (delegated: bubbles survive re-renders) ---
+  root.addEventListener("click", (e) => {
+    const playBtn = e.target.closest?.("[data-vmsg-play]");
+    if (playBtn) {
+      const widget = playBtn.closest("[data-vmsg]");
+      const vid = widget?.dataset.vid;
+      const src = widget?.querySelector(".vmsg-dl")?.getAttribute("href");
+      if (!vid || !src) return;
+      if (activeVoice && activeVoice.id === vid) {
+        if (activeVoice.audio.paused) activeVoice.audio.play();
+        else activeVoice.audio.pause();
+        widget.classList.toggle("playing", !activeVoice.audio.paused);
+        return;
+      }
+      stopActiveVoice();
+      const av = ensureActiveVoice();
+      av.id = vid;
+      av.audio.src = src;
+      av.audio.play().catch(() => notify("Couldn't play this voice note"));
+      widget.classList.add("playing");
+    }
+  });
+  // Scrub: press on the waveform and drag to move through the message.
+  root.addEventListener("pointerdown", (e) => {
+    const wave = e.target.closest?.("[data-vmsg-wave]");
+    if (!wave) return;
+    const widget = wave.closest("[data-vmsg]");
+    const vid = widget?.dataset.vid;
+    const seek = (ev) => {
+      const r = wave.getBoundingClientRect();
+      const frac = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+      if (activeVoice?.id === vid) {
+        const dur = Number(widget.dataset.dur) || activeVoice.audio.duration || 1;
+        try {
+          activeVoice.audio.currentTime = frac * dur;
+        } catch {
+          /* ignore */
+        }
+        paintVoice(vid, frac);
+      } else {
+        stopActiveVoice();
+        paintVoice(vid, frac);
+      }
+    };
+    seek(e);
+    const move = (ev) => seek(ev);
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  });
+  // Recorder pause / resume.
+  $("[data-rec-pause]", root)?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!voiceRec) return;
+    if (voiceRec.paused) {
+      voiceRec.rec.resume();
+      voiceRec.paused = false;
+      // Shift the clock origin so speech time continues from where it froze.
+      voiceRec.startedAt = Date.now() - (voiceRec.tickerAt - voiceRec.startedAt);
+    } else {
+      voiceRec.rec.pause();
+      voiceRec.paused = true;
+    }
+    $(".rec-bar", root)?.classList.toggle("paused", voiceRec.paused);
+  });
   $("[data-rec-send]", root)?.addEventListener("click", () =>
     stopRecording("send"),
   );
@@ -5398,13 +5570,15 @@ function startRecording(id, root) {
         if (voiceRec?.timer) clearInterval(voiceRec.timer);
         const action = voiceRec?.action || "cancel";
         const startedAt = voiceRec?.startedAt || Date.now();
+        // Speech time only — paused stretches never count toward length.
+        const speechMs = Math.max(1000, (voiceRec?.tickerAt || Date.now()) - startedAt);
         voiceRec = null;
         renderMessages(root);
         if (action === "send") {
           const blob = new Blob(chunks, {
             type: rec.mimeType || "audio/webm",
           });
-          if (blob.size) saveVoice(id, blob, startedAt, root);
+          if (blob.size) saveVoice(id, blob, startedAt, root, speechMs);
         }
       };
       // Timeslice: data arrives every second, so the size hint stays live.
@@ -5413,9 +5587,14 @@ function startRecording(id, root) {
         rec,
         chunks,
         startedAt: Date.now(),
+        tickerAt: Date.now(),
+        paused: false,
         timer: setInterval(() => {
           if (!voiceRec) return;
-          const s = Math.floor((Date.now() - voiceRec.startedAt) / 1000);
+          // Speech clock: tickerAt freezes while paused, so elapsed speech
+          // time is simply tickerAt - startedAt across any number of pauses.
+          if (!voiceRec.paused) voiceRec.tickerAt = Date.now();
+          const s = Math.max(0, Math.floor((voiceRec.tickerAt - voiceRec.startedAt) / 1000));
           const label = $("[data-rec-time]");
           // Live clock, minutes:seconds — recordings can run as long as the
           // user wants; the only hard limit is the 5 MB message size,
@@ -5423,10 +5602,13 @@ function startRecording(id, root) {
           if (label) label.textContent = `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
           const hint = $(".rec-hint");
           if (hint) {
-            const size = chunks.reduce((a, c) => a + (c.size || 0), 0) / (1024 * 1024);
-            hint.textContent = size >= 4
-              ? `Storage almost full (${size.toFixed(1)} / 5 MB) — send soon`
-              : "Recording… tap Send when done";
+            if (voiceRec.paused) hint.textContent = "Paused — tap play to keep recording";
+            else {
+              const size = chunks.reduce((a, c) => a + (c.size || 0), 0) / (1024 * 1024);
+              hint.textContent = size >= 4
+                ? `Storage almost full (${size.toFixed(1)} / 5 MB) — send soon`
+                : "Recording… tap Send when done";
+            }
           }
         }, 250),
       };
@@ -5454,16 +5636,16 @@ function stopRecording(action) {
   }
 }
 
-function saveVoice(id, blob, startedAt, root) {
+function saveVoice(id, blob, startedAt, root, speechMs = 0) {
   if (isBlockedKey(id)) {
     renderCommunity();
     return notify("You have blocked this conversation");
   }
   if (blob.size > 5 * 1024 * 1024) return notify("Voice note too large");
-  const dur = Math.max(
-    1,
-    Math.round((Date.now() - startedAt) / 1000),
-  );
+  // Prefer the recorder's speech clock; fall back to wall-clock elapsed.
+  const dur = speechMs
+    ? Math.max(1, Math.round(speechMs / 1000))
+    : Math.max(1, Math.round((Date.now() - startedAt) / 1000));
   const reader = new FileReader();
   reader.onload = () => {
     state.messages[id] = [
