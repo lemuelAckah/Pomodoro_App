@@ -19,10 +19,14 @@ Vanilla-JS Vite app (no React runtime code despite the scaffolding deps). Entry:
   ```powershell
   (Start-Process -FilePath 'npm.cmd' -ArgumentList 'run','dev' -RedirectStandardOutput '.freebuff\preview.log' -RedirectStandardError '.freebuff\preview.log.err' -WindowStyle Hidden -PassThru).Id
   ```
-- Verify: `curl -s -o /dev/null -w "%{http_code}" http://localhost:8443/` returns `200` (index.html shell). A healthy server answers instantly; the title in the served HTML is `StudyFlow | Focus with intention`.
+- Verify: `curl -s -o /dev/null -w "%{http_code}" http://localhost:<banner-port>/` returns `200` (index.html shell). A healthy server answers instantly; the title in the served HTML is `StudyFlow | Focus with intention`.
 - Production preview alternative: `npm run build` then `npm run preview` (also port 8443).
 
 ## Notes
 
+- The injected `PORT` varies per Freebuff session (observed: 8443, then 5173) — never hardcode it; always read the port from the Vite banner in the log.
+- The PowerShell `Start-Process` launcher can take longer than 30s to return the pid (slow OneDrive path): run it with a generous timeout, or treat a launcher timeout as *unknown* state — check the log file for the Vite banner and `netstat -ano | grep :<port>` for the listening pid before starting another server (strictPort would otherwise make the second instance die).
+
 - `supabase/migrations/*.sql` are the backend schema; the app runs fully without them (local-only mode).
 - Service worker (`public/sw.js`) only registers on `https:` or `localhost` — harmless in preview.
+- Confirm the pid survived with `powershell -NoProfile -Command "Get-Process -Id <pid>"` before registering.
