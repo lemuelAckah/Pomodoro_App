@@ -352,6 +352,20 @@ html[data-night="1"] .box-legendary {
   font-size: 12px;
 }
 
+/* Showcased badges lined up next to a display name (profile, session card).
+   Token-driven; caps naturally via the MAX_SHOWCASE_BADGES limit. */
+.showcase-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  vertical-align: -3px;
+  margin-left: 2px;
+}
+.showcase-badges .sicon {
+  width: 17px;
+  height: 17px;
+}
+
 .store-item {
   position: relative;
   cursor: pointer;

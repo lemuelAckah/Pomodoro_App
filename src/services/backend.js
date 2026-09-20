@@ -554,6 +554,19 @@ export async function listMyBooks() {
   return supabase.from("books").select("*").eq("owner_id", userId).order("created_at", { ascending: false }).limit(200);
 }
 
+// Cheap reachability probe for the Book Library pill: a head-only count query
+// transfers zero rows — PostgREST just answers with a status.
+export async function probeBooksBackend() {
+  if (!supabase)
+    return { error: new Error("Backend is not configured") };
+  try {
+    const { error } = await supabase.from("books").select("id", { count: "exact", head: true });
+    return error ? { error } : { error: null };
+  } catch (err) {
+    return { error: err };
+  }
+}
+
 export async function listPublicBooks(limit = 60) {
   if (!supabase)
     return { data: [], error: new Error("Backend is not configured") };

@@ -1760,6 +1760,29 @@ function requireAuth(feature) {
   $("[data-gate-signup]", modal).onclick = () => goAuth("create");
   $("[data-gate-signin]", modal).onclick = () => goAuth("welcome");
   return false;
+}// --- Backend status pills ----------------------------------------------------
+// Shared painter for the small per-surface health pills (Discover, Friends,
+// Sprints, Rewards store, Book Library). Each feature module registers a
+// resolver that maps its surface name to {cls,label,title,retryable}; the
+// painter paints whatever pill exists in the DOM, so a background refresh
+// finishing after render still updates the label without re-rendering a tab.
+const pillResolvers = new Map();
+export function registerBackendPillResolver(surface, resolve) {
+  pillResolvers.set(surface, resolve);
+}
+export function paintBackendPill(surface, root) {
+  const pill = (root || document).querySelector(`[data-backend-status="${surface}"]`);
+  if (!pill) return;
+  const info =
+    (pillResolvers.get(surface) || (() => ({ cls: "local", label: "Local data", title: "", retryable: false })))();
+  pill.className = `backend-pill ${info.cls}`;
+  pill.title = info.title;
+  pill.setAttribute("aria-label", info.title);
+  pill.innerHTML = `<i></i><span>${info.label}</span>`;
+}
+// Initial probing-state markup for a pill — callers embed this, then paint.
+export function backendPillMarkup(surface) {
+  return `<button type="button" class="backend-pill probing" data-backend-status="${surface}" data-backend-retry title="Checking the backend…" aria-label="Backend status — click to retry"><i></i><span>Connecting…</span></button>`;
 }
 
 function celebrate(big) {

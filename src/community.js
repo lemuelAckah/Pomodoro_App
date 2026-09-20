@@ -2,7 +2,7 @@
 import {
   state, $, $$, uid, get, save, esc, sicon, stripIcon, persist, notify, confirmBox, viewHead,
   addCoins, addNotification, browserNotify, celebrate, fmt, fmtSize, avatarMarkup, dayKey, notifOn,
-  setGroupLookup, fitTextarea, requireAuth, fmtClock,
+  setGroupLookup, fitTextarea, requireAuth, fmtClock, paintBackendPill, registerBackendPillResolver,
 } from "./core.js";
 import {
   sendCloudMessage, markMessageRead, subscribeToConversation, subscribeToPresence,
@@ -39,6 +39,10 @@ let cloudGroupsSig = "";
 let groupsBackendStatus = null;
 let groupsBackendStatusAt = 0;
 let groupsBackendInflight = false;
+// Same contract for the Friends tab's friendships probe. Signed-out users
+// never probe (friends are local-only there) — the pill shows "local".
+let friendsBackendStatus = null;
+let friendsBackendStatusAt = 0;
 // Cloud identity caches (in-memory only — never persisted; handles refresh).
 let cloudFriends = []; // accepted connections: { id, handle, name, avatar, bio }
 let cloudFriendReqs = []; // { id, incoming, handle, name, otherId, ts }
@@ -239,15 +243,29 @@ async function refreshCloudSocial(force) {
   if (!signedIn()) return;
   if (!force && Date.now() - cloudFriendsAt < 60000 && cloudFriendsAt) return;
   try {
-    const [{ data: ships }, { data: blocks }] = await Promise.all([
-      listFriendships().catch(() => ({ data: [] })),
-      listBlocks().catch(() => ({ data: [] })),
-    ]);
-    const rows = Array.isArray(ships) ? ships : [];
+    // allSettled instead of per-call catch: a transient failure must NOT
+    // silently wipe the connections list to empty — keep the stale cache
+    // and surface the failure on the status pill instead.
+    const results = await Promise.allSettled([listFriendships(), listBlocks()]);
+    const shipsFail = results[0].status === "rejected";
+    const ships = shipsFail ? null : results[0].value;
+    const blocks = results[1].status === "fulfilled" ? results[1].value : { data: [] };
+    if (shipsFail) {
+      friendsBackendStatus = /fetch|network/i.test(String(results[0].reason)) ? "offline" : "down";
+      friendsBackendStatusAt = Date.now();
+      return; // stale cache stands
+    }
+    const rows = Array.isArray(ships?.data) ? ships.data : [];
     const me = state.user.id;
     const others = [...new Set(rows.map((r) => (r.user_id === me ? r.friend_id : r.user_id)).filter(Boolean))];
-    const { data: profiles } = await getPublicProfiles(others).catch(() => ({ data: [] }));
-    const byId = new Map((profiles || []).map((p) => [p.id, p]));
+    const profRes = await Promise.allSettled([getPublicProfiles(others)]);
+    const profFail = profRes[0].status === "rejected";
+    const profiles = profFail ? { data: [] } : profRes[0].value;
+    const byId = new Map((profiles?.data || []).map((p) => [p.id, p]));
+    // Profiles are cosmetic (fallback handle exists) — a profiles-only
+    // failure reads as "degraded", not "down".
+    friendsBackendStatus = profFail ? "degraded" : "ok";
+    friendsBackendStatusAt = Date.now();
     cloudFriends = rows
       .filter((r) => r.status === "accepted")
       .map((r) => {
@@ -267,6 +285,8 @@ async function refreshCloudSocial(force) {
     cloudFriendsAt = Date.now();
   } catch {
     /* offline — keep stale cache */
+    friendsBackendStatus = "offline";
+    friendsBackendStatusAt = Date.now();
   }
 }
 async function refreshCloudNotifCount(force) {
@@ -340,6 +360,13 @@ function stopActiveVoice() {
   } catch {
     /* ignore */
   }
+  // The 80ms paint loop belongs to this session — clear it so finished
+  // sessions don't leave orphaned intervals ticking forever.
+  try {
+    clearInterval(activeVoice.raf);
+  } catch {
+    /* ignore */
+  }
   const widget = liveWidget(activeVoice.id);
   widget?.classList.remove("playing");
   paintVoice(activeVoice.id, 0);
@@ -389,6 +416,7 @@ function ensureActiveVoice() {
         }
         paintVoice(activeVoice.id, 0);
         widget?.classList.remove("playing");
+        clearInterval(activeVoice.raf);
         activeVoice = null;
         return;
       }
@@ -957,7 +985,7 @@ function renderCommunity() {
   }).catch(() => {});
   // Social caches + notification badge refresh silently; repaint only the badge.
   if (signedIn()) {
-    refreshCloudSocial(false).catch(() => {});
+    refreshCloudSocial(false).then(() => paintBackendPill("friends")).catch(() => {});
     refreshCloudNotifCount(false).then((n) => {
       if (!n) return;
       const btn = t.querySelector('[data-subtab="notifications"]');
@@ -991,7 +1019,10 @@ function groupCardWithReason(g, hits) {
 }
 
 function renderSprints(body) {
-  body.innerHTML = `${leaderboardMarkup()}${sprintBoardMarkup()}${challengeMarkup()}${eventMarkup()}`;
+  // Sprints/challenges are device-only — the pill says so honestly instead
+  // of pretending to report backend health there is no dependency to probe.
+  body.innerHTML = `<div class="backend-pill-row"><button type="button" class="backend-pill local" data-backend-status="sprints" title="Sprints and challenges live entirely on this device — nothing to fetch." aria-label="Sprints are stored locally"><i></i><span>Local data</span></button></div>${leaderboardMarkup()}${sprintBoardMarkup()}${challengeMarkup()}${eventMarkup()}`;
+  paintBackendPill("sprints", body);
   bindSprints(body);
 }
 
@@ -3020,27 +3051,36 @@ function statusPointerCancel() {
 // Discover's backend status pill — paints the CURRENT probe outcome onto
 // whatever pill exists in the DOM, so a background refresh finishing after
 // render still updates the label without re-rendering the tab.
-function paintBackendStatus(root) {
-  const pill = (root || document).querySelector("[data-backend-status]");
-  if (!pill) return;
-  const s = groupsBackendStatus;
-  const stateClass = s === "ok" ? "ok" : s === "degraded" ? "degraded" : s ? "down" : "probing";
+// Per-surface pill info. "local" = the surface has no backend dependency
+// (sprints are device-only; friends are local when signed out) — honest
+// gray pill, no retry.
+function surfacePillInfo(surface) {
+  const s = surface === "groups" ? (backendConfigured ? groupsBackendStatus || "probing" : "local")
+    : surface === "friends" ? (signedIn() ? friendsBackendStatus || "probing" : "local")
+    : "local"; // sprints: device-only by design
+  const cls = s === "ok" ? "ok" : s === "degraded" ? "degraded" : s === "local" ? "local" : s ? s : "probing";
   const label =
     s === "ok" ? "Live"
     : s === "degraded" ? "Live · reduced"
     : s === "down" ? "Backend error"
     : s === "offline" ? "Offline"
+    : s === "local" ? "Local data"
     : "Connecting…";
   const title =
-    s === "ok" ? "Group list is live from the backend"
-    : s === "degraded" ? "Groups load, but the server is partially degraded (member counts unavailable). Run migration 018 to fix."
+    s === "ok" ? (surface === "groups" ? "Group list is live from the backend" : "Connections are live from the backend")
+    : s === "degraded" ? (surface === "groups" ? "Groups load, but the server is partially degraded (member counts unavailable). Run migration 018 to fix." : "Connections load, but profile names couldn't be fetched — handles are shown instead.")
     : s === "down" ? "The server responded with an error. Retrying automatically."
-    : s === "offline" ? "Can't reach the server — showing cached groups. Check your connection."
+    : s === "offline" ? (surface === "groups" ? "Can't reach the server — showing cached groups. Check your connection." : "Can't reach the server — showing cached connections. Check your connection.")
+    : s === "local" ? (surface === "sprints" ? "Sprints and challenges live entirely on this device — nothing to fetch." : "Friends are stored on this device. Sign in to sync connections.")
     : "Checking the backend…";
-  pill.className = `backend-pill ${stateClass}`;
-  pill.title = title;
-  pill.setAttribute("aria-label", title);
-  pill.innerHTML = `<i></i><span>${label}</span>`;
+  return { cls, label, title, retryable: s !== "local" };
+}
+for (const s of ["groups", "friends", "sprints"]) registerBackendPillResolver(s, surfacePillInfo);
+// Discover's pill — paints the CURRENT probe outcome onto whatever pill
+// exists in the DOM, so a background refresh finishing after render still
+// updates the label without re-rendering the tab.
+function paintBackendStatus(root) {
+  paintBackendPill("groups", root);
 }
 
 function renderDiscover(body) {
@@ -3066,7 +3106,7 @@ function renderDiscover(body) {
   const recommendMarkup = recommended.length
     ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Recommended for you</h2><span class="tag">matched</span></div><div class="grid three">${recommended.map((x) => groupCardWithReason(x.group, x.hits)).join("")}</div></div>`
     : "";
-  body.innerHTML = `${storiesMarkup()}${recommendMarkup}<div class="community-layout"><div class="card"><div class="eyebrow" style="margin-bottom:10px">Subjects</div><div class="category-list">${subjects.map((subject) => `<button type="button" class="${activeSubject === subject ? "active" : ""}" data-group-category="${subject}">${subject}</button>`).join("")}</div></div><div><div class="input-row"><input class="input" id="group-search" placeholder="Search groups and topics" aria-label="Search groups and topics"><button type="button" class="backend-pill probing" data-backend-status data-backend-retry title="Checking the backend…" aria-label="Backend status — click to retry"><i></i><span>Connecting…</span></button></div><div class="grid three" id="groups-grid">${subjectGroups.map(groupCard).join("") || '<p class="muted">No groups match this subject yet.</p>'}</div></div></div>`;
+  body.innerHTML = `${storiesMarkup()}${recommendMarkup}<div class="community-layout"><div class="card"><div class="eyebrow" style="margin-bottom:10px">Subjects</div><div class="category-list">${subjects.map((subject) => `<button type="button" class="${activeSubject === subject ? "active" : ""}" data-group-category="${subject}">${subject}</button>`).join("")}</div></div><div><div class="input-row"><input class="input" id="group-search" placeholder="Search groups and topics" aria-label="Search groups and topics"><button type="button" class="backend-pill probing" data-backend-status="groups" data-backend-retry title="Checking the backend…" aria-label="Backend status — click to retry"><i></i><span>Connecting…</span></button></div><div class="grid three" id="groups-grid">${subjectGroups.map(groupCard).join("") || '<p class="muted">No groups match this subject yet.</p>'}</div></div></div>`;
   paintBackendStatus(body);
   $$("[data-group-category]", body).forEach(
     (button) =>
@@ -3580,6 +3620,7 @@ function bindCloudFriends(body) {
   // refresh-then-render cycle would loop forever.
   const before = cloudSocialSig();
   refreshCloudSocial(false).then(() => {
+    paintBackendPill("friends", body);
     if (state.tab === "community" && state.subtab === "friends" && cloudSocialSig() !== before) renderCommunity();
   }).catch(() => {});
   const input = $("#friend-search", body);
@@ -3652,7 +3693,19 @@ function bindCloudFriends(body) {
   }));
 }
 function renderFriends(body) {
-  body.innerHTML = `<div class="card" style="margin-bottom:18px"><h2>Invite study buddies</h2><p class="muted">Friends join with your username. Share this invite anywhere — anyone who installs StudyFlow can add you in seconds.</p><div class="input-row"><input class="input" id="invite-link" readonly value="${esc(inviteText())}"><button type="button" class="primary" id="copy-invite">Copy</button><button type="button" class="ghost" id="share-invite">Share</button></div></div>${signedIn() ? cloudFriendsMarkup() : ""}${referralMarkup()}<div class="card"><h2>Friends & gifting</h2><p class="muted">Add study partners here. They will also appear as gift recipients in the Rewards store.</p><div class="input-row"><input class="input" id="friend-name" placeholder="Username" aria-label="Friend username"><button type="button" class="primary" id="add-friend">Add friend</button></div><div class="grid">${state.friends.map((f) => `<div class="task"><div class="avatar">${f.username[0].toUpperCase()}</div><span class="task-text">@${esc(f.username)}</span><span class="friend-actions"><button type="button" class="ghost" data-chat-friend="${f.id}">Message</button><button type="button" class="ghost" data-block-friend="${f.id}">Block</button><button type="button" class="delete" data-remove-friend="${f.id}" title="Remove friend">×</button></span></div>`).join("") || '<p class="muted">Add a friend to send gifts and messages.</p>'}</div>${blockedSectionMarkup()}</div></div>`;
+  body.innerHTML = `<div class="card" style="margin-bottom:18px"><h2>Invite study buddies</h2><p class="muted">Friends join with your username. Share this invite anywhere — anyone who installs StudyFlow can add you in seconds.</p><div class="input-row"><input class="input" id="invite-link" readonly value="${esc(inviteText())}"><button type="button" class="primary" id="copy-invite">Copy</button><button type="button" class="ghost" id="share-invite">Share</button><button type="button" class="backend-pill probing" data-backend-status="friends" data-backend-retry title="Checking the backend…" aria-label="Backend status — click to retry"><i></i><span>Connecting…</span></button></div></div>${signedIn() ? cloudFriendsMarkup() : ""}${referralMarkup()}<div class="card"><h2>Friends & gifting</h2><p class="muted">Add study partners here. They will also appear as gift recipients in the Rewards store.</p><div class="input-row"><input class="input" id="friend-name" placeholder="Username" aria-label="Friend username"><button type="button" class="primary" id="add-friend">Add friend</button></div><div class="grid">${state.friends.map((f) => `<div class="task"><div class="avatar">${f.username[0].toUpperCase()}</div><span class="task-text">@${esc(f.username)}</span><span class="friend-actions"><button type="button" class="ghost" data-chat-friend="${f.id}">Message</button><button type="button" class="ghost" data-block-friend="${f.id}">Block</button><button type="button" class="delete" data-remove-friend="${f.id}" title="Remove friend">×</button></span></div>`).join("") || '<p class="muted">Add a friend to send gifts and messages.</p>'}</div>${blockedSectionMarkup()}</div></div>`;
+  paintBackendPill("friends", body);
+  // Click-to-retry: re-probe friendships, repaint the pill, and refresh the
+  // connections list — but never while the user is mid-action (a half-typed
+  // invite or open menu outlives the click; the next render picks it up).
+  body.querySelector('[data-backend-retry][data-backend-status="friends"]')?.addEventListener("click", async () => {
+    if (!signedIn()) return; // "Local data" pill — no backend to retry
+    friendsBackendStatus = null;
+    paintBackendPill("friends", body);
+    await refreshCloudSocial(true);
+    paintBackendPill("friends", body);
+    if (state.tab === "community" && !userIsBusy()) renderFriends(body);
+  });
   bindCloudFriends(body);
   $("#add-friend", body).onclick = () => {
     if (!requireAuth("add study buddies")) return;
@@ -4076,8 +4129,103 @@ function renderMessages(body) {
     // wherever the previous render left the scroll position.
     const chatBody = $(".chat-body", body);
     if (chatBody) chatBody.scrollTop = chatBody.scrollHeight;
+    bindEdgeSwipeBack(body);
   }
   paintGroupAvatars(body);
+}
+
+// Edge-swipe back (phones): swiping right from the left edge of an open chat
+// returns to the conversation list, iOS/WhatsApp-style. Pointer events cover
+// touch + mouse (mouse excluded — clicks aren't drags); the panel follows the
+// finger while a veil + "‹ Back" chip reveal beneath. Commit past ~96px of
+// travel, otherwise it settles back.
+function bindEdgeSwipeBack(root) {
+  const chat = $(".chat", root);
+  if (!chat || !state.activeChat) return;
+  if (chat.querySelector(":scope > .edge-swipe-veil")) return; // already bound to THIS DOM
+  if (groupSearch && groupSearch.id === state.activeChat) return; // search view has its own ‹ back
+  const veil = document.createElement("div");
+  veil.className = "edge-swipe-veil";
+  veil.innerHTML = `<span class="edge-swipe-chip"><b>‹</b> Back</span>`;
+  chat.appendChild(veil);
+  const EDGE = 32; // capture zone from the panel's left edge (px)
+  const COMMIT = 96; // travel that completes the gesture (px)
+  const VMAX = 140; // chip slide cap (px)
+  let startX = 0, startY = 0, active = false, tracking = false, settleT = 0;
+  const settle = (back) => {
+    chat.style.transition = "transform 200ms ease";
+    chat.style.transform = "translateX(0)";
+    veil.style.transition = "opacity 200ms ease";
+    veil.style.opacity = "0";
+    clearTimeout(settleT);
+    settleT = setTimeout(() => {
+      chat.style.transition = "";
+      chat.style.transform = "";
+      veil.style.transition = "";
+      chat.classList.remove("edge-swiping");
+    }, 210);
+    if (back) {
+      state.activeChat = null;
+      renderMessages(root);
+    }
+  };
+  chat.addEventListener(
+    "pointerdown",
+    (e) => {
+      if (e.pointerType === "mouse") return; // desktop: clicks, not drags
+      if (!state.activeChat) return;
+      const r = chat.getBoundingClientRect();
+      if (e.clientX - r.left > EDGE) return;
+      startX = e.clientX;
+      startY = e.clientY;
+      active = true;
+      tracking = false;
+    },
+    { passive: true },
+  );
+  chat.addEventListener("pointermove", (e) => {
+    if (!active) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    if (!tracking) {
+      if (Math.abs(dx) < 14 && Math.abs(dy) < 14) return;
+      if (dx <= 0 || Math.abs(dy) > Math.abs(dx) * 1.4) {
+        active = false;
+        return;
+      }
+      tracking = true;
+      clearTimeout(settleT);
+      chat.classList.add("edge-swiping");
+      veil.style.opacity = "";
+    }
+    if (e.cancelable) e.preventDefault();
+    const shift = Math.max(0, dx);
+    chat.style.transform = `translateX(${shift}px)`;
+    veil.style.opacity = String(Math.min(1, shift / COMMIT));
+    const chip = veil.firstElementChild;
+    if (chip) {
+      const slide = Math.min(VMAX, shift * 0.6) - 24;
+      const grow = Math.min(1, 0.82 + shift / (COMMIT * 2));
+      chip.style.transform = `translateX(${slide}px) scale(${grow})`;
+    }
+  });
+  const end = (e) => {
+    if (!active) return;
+    active = false;
+    if (!tracking) return;
+    tracking = false;
+    const x = e.changedTouches ? e.changedTouches[0].clientX : e.clientX;
+    settle(x - startX >= COMMIT);
+  };
+  chat.addEventListener("pointerup", end);
+  chat.addEventListener("pointercancel", () => {
+    if (!active) return;
+    active = false;
+    if (tracking) {
+      tracking = false;
+      settle(false);
+    }
+  });
 }
 
 function chatKey() {
@@ -4563,7 +4711,11 @@ function bindChat(root, id) {
     else startRecording(id, root);
   };
   // --- Voice message player (delegated: bubbles survive re-renders) ---
-  root.addEventListener("click", (e) => {
+  // Guarded: the chat root outlives re-renders, so without this every chat
+  // open would stack another play/scrub handler (tap = play+instant-pause).
+  if (!root.dataset.voiceDelegated) {
+    root.dataset.voiceDelegated = "1";
+    root.addEventListener("click", (e) => {
     const playBtn = e.target.closest?.("[data-vmsg-play]");
     if (playBtn) {
       const widget = playBtn.closest("[data-vmsg]");
@@ -4585,6 +4737,7 @@ function bindChat(root, id) {
     }
   });
   // Scrub: press on the waveform and drag to move through the message.
+  // (Inside the same once-only guard above.)
   root.addEventListener("pointerdown", (e) => {
     const wave = e.target.closest?.("[data-vmsg-wave]");
     if (!wave) return;
@@ -4615,6 +4768,7 @@ function bindChat(root, id) {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   });
+  }
   // Recorder pause / resume.
   $("[data-rec-pause]", root)?.addEventListener("click", (e) => {
     e.stopPropagation();

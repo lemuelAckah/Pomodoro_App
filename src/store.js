@@ -2,9 +2,9 @@
 import {
   state, $, $$, uid, get, save, esc, sicon, persist, pushUserSettings, notify, confirmBox, viewHead, requireAuth,
   spendCoins, addCoins, addNotification, dayKey, applyEquippedTheme, celebrate, confettiBurst,
-  refreshServerTime, serverDayKey, serverNow,
+  refreshServerTime, serverDayKey, serverNow, paintBackendPill, registerBackendPillResolver, backendPillMarkup,
 } from "./core.js";
-import { backendConfigured, searchUsers, sendCloudMessage, sendGiftNotification, loadInventory } from "./services/backend.js";
+import { backendConfigured, searchUsers, sendCloudMessage, sendGiftNotification, loadInventory, loadDailyDeals } from "./services/backend.js";
 import { SOUND_EQUIP, startLayer, stopLayer, playChime } from "./audio.js";
 import { shell } from "./app.js";
 import {
@@ -426,13 +426,49 @@ function freeBoxState() {
 }
 
 function equippedAvatarEmoji() {
-  const item = findStoreItem(state.equipped?.avatar);
+  const owned = (state.owned || []).find((o) => o && o.id === state.equipped?.avatar);
+  const item = (owned && owned.category === "Avatars" && owned) || findStoreItem(state.equipped?.avatar);
   return item && item.category === "Avatars" ? item.emoji : "";
 }
 
 function equippedBadgeEmoji() {
-  const item = findStoreItem(state.equipped?.badge);
-  return item && item.category === "Badges" ? item.emoji : "";
+  return equippedBadges()
+    .map((item) => item.emoji)
+    .join("");
+}
+// Showcased badge ids, newest first, max MAX_SHOWCASE_BADGES. Migrates the
+// legacy single-string shape (`state.equipped.badge = "id"`) on read.
+const MAX_SHOWCASE_BADGES = 3;
+function showcasedBadgeIds() {
+  const raw = state.equipped?.badges ?? state.equipped?.badge;
+  const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  return [...new Set(list.filter((id) => typeof id === "string" && id))].slice(0, MAX_SHOWCASE_BADGES);
+}
+function equippedBadges() {
+  // Resolve from the owned inventory first: shopItems() is season-filtered,
+  // so out-of-season and box-exclusive badges would otherwise vanish from
+  // the showcase the moment they leave the shop.
+  const ownedById = new Map(
+    (state.owned || [])
+      .filter((o) => o && o.id != null)
+      .map((o) => [o.id, o]),
+  );
+  return showcasedBadgeIds()
+    .map((id) => ownedById.get(id) || findStoreItem(id))
+    .filter((item) => item && item.category === "Badges");
+}
+function toggleShowcaseBadge(item) {
+  if (!item || item.category !== "Badges") return "not-badge";
+  const ids = showcasedBadgeIds();
+  if (ids.includes(item.id)) {
+    state.equipped.badges = ids.filter((x) => x !== item.id);
+  } else {
+    if (ids.length >= MAX_SHOWCASE_BADGES) return "full";
+    state.equipped.badges = [...ids, item.id];
+  }
+  // Legacy single-badge key is retired on first toggle.
+  if ("badge" in (state.equipped || {})) delete state.equipped.badge;
+  return ids.includes(item.id) ? "removed" : "added";
 }
 
 function checkinReward() {
@@ -678,7 +714,11 @@ function removeOwnedAt(idx) {
   if (!item) return null;
   if (state.equipped?.theme === item.id) state.equipped.theme = null;
   if (state.equipped?.avatar === item.id) state.equipped.avatar = null;
-  if (state.equipped?.badge === item.id) state.equipped.badge = null;
+  if (Array.isArray(state.equipped?.badges)) {
+    state.equipped.badges = state.equipped.badges.filter((x) => x !== item.id);
+  } else if (state.equipped?.badge === item.id) {
+    state.equipped.badge = null;
+  }
   state.owned.splice(idx, 1);
   return item;
 }
@@ -694,8 +734,10 @@ function collectionRow(i, idx) {
     const on = state.equipped?.avatar === i.id;
     action = `<button type="button" class="${on ? "ghost" : "primary"} ${btn}" data-equip-avatar="${idx}">${on ? "Wearing " + sicon("check") : "Wear"}</button>`;
   } else if (i.category === "Badges") {
-    const on = state.equipped?.badge === i.id;
-    action = `<button type="button" class="${on ? "ghost" : "primary"} ${btn}" data-equip-badge="${idx}">${on ? "Showcased " + sicon("check") : "Showcase"}</button>`;
+    const ids = showcasedBadgeIds();
+    const on = ids.includes(i.id);
+    const full = !on && ids.length >= MAX_SHOWCASE_BADGES;
+    action = `<button type="button" class="${on ? "ghost" : "primary"} ${btn}" data-equip-badge="${idx}"${full ? ` disabled title="Showcase holds ${MAX_SHOWCASE_BADGES} badges — remove one first"` : ""}>${on ? "Showcased " + sicon("check") : full ? `Showcase (${ids.length}/${MAX_SHOWCASE_BADGES})` : "Showcase"}</button>`;
   } else if (SOUND_EQUIP[i.id]) {
     const playing = state.soundMix[SOUND_EQUIP[i.id]] != null;
     action = `<button type="button" class="${playing ? "ghost" : "primary"} ${btn}" data-equip-sound="${idx}">${playing ? "Playing " + sicon("check") : "Play"}</button>`;
@@ -884,6 +926,53 @@ const MYSTERY_BOXES = {
 let cloudDeals = null; // server deals when signed in: [{reward_id, deal_price, pct}]
 let cloudDealsFailed = false; // set when the Phase-4 RPCs are unreachable
 
+// --- Backend status pill -----------------------------------------------------
+// Rewards are fully usable offline (local coin ledger); the cloud matters for
+// synced balances, deals and purchases — so a signed-out visitor gets the
+// honest "Local data" pill, and a signed-in one gets a real probe (direct RPC,
+// deliberately NOT getDailyDeals, whose day-cache would mask a dead server).
+let storeBackendStatus = null; // ok | down | offline | null = probing
+let storeBackendStatusAt = 0;
+
+function storePillInfo() {
+  const s = !cloudRewards() ? "local" : storeBackendStatus || "probing";
+  const cls = s;
+  const label =
+    s === "ok" ? "Live"
+    : s === "down" ? "Backend error"
+    : s === "offline" ? "Offline"
+    : s === "local" ? "Local data"
+    : "Connecting…";
+  const title =
+    s === "ok" ? "Store deals and balances are live from the backend"
+    : s === "down" ? "The server responded with an error — local deals are shown. Purchases that need the cloud will explain if they fail."
+    : s === "offline" ? "Can't reach the server — showing local deals and your device coin balance. Check your connection."
+    : s === "local" ? "Rewards work offline. Sign in to sync your coin balance, deals, and purchases across devices."
+    : "Checking the backend…";
+  return { cls, label, title, retryable: s !== "local" };
+}
+registerBackendPillResolver("store", storePillInfo);
+
+async function probeStoreBackend(root) {
+  if (!cloudRewards()) {
+    storeBackendStatus = "local";
+    paintBackendPill("store", root);
+    return;
+  }
+  storeBackendStatus = null; // probing
+  paintBackendPill("store", root);
+  let res;
+  try {
+    res = await loadDailyDeals();
+  } catch (err) {
+    res = { error: err };
+  }
+  const msg = String(res.error?.message || res.error || "");
+  storeBackendStatus = res.error ? (/Failed to fetch|network|NetworkError/i.test(msg) ? "offline" : "down") : "ok";
+  storeBackendStatusAt = Date.now();
+  paintBackendPill("store", root);
+}
+
 // Today's deals: server-computed (authoritative prices) for cloud members,
 // locally-seeded for guests (or when the Phase-4 migration isn't applied yet
 // — purchases then fail with an honest "run migration 012" error).
@@ -907,9 +996,15 @@ function refreshCloudDeals() {
         // Migration 012 not applied (or transient failure): fall back to
         // local deals; secure purchase calls will explain honestly.
         cloudDealsFailed = true;
+        storeBackendStatus = "down";
+        storeBackendStatusAt = Date.now();
+        paintBackendPill("store", $("#tab-store"));
         if (state.tab === "store" && $("#tab-store")?.innerHTML) renderStore();
         return;
       }
+      storeBackendStatus = "ok";
+      storeBackendStatusAt = Date.now();
+      paintBackendPill("store", $("#tab-store"));
       const sig = JSON.stringify(d);
       if (sig !== JSON.stringify(cloudDeals)) {
         cloudDeals = d;
@@ -2240,7 +2335,17 @@ function renderStore() {
     state.storeCategory === "All"
       ? shopItems()
       : shopItems().filter((x) => x.category === state.storeCategory);
-  t.innerHTML = `${viewHead("Rewards store", "Spend the coins you earn from focused sessions on themes, sounds, boosts, badges, and profile identities.")}${earnMarkup()}${topupMarkup()}${dealsMarkup()}${mysteryMarkup()}<div class="filter-bar">${["All", "Themes", "Sounds", "Boosts", "Badges", "Avatars"].map((x) => `<button type="button" class="filter ${state.storeCategory === x ? "active" : ""}" data-store-filter="${x}">${x}</button>`).join("")}</div><div class="grid three">${visible.map((i) => `<article class="card store-item ${state.selectedStore.includes(i.id) ? "selected" : ""}" data-store-item="${i.id}"><button type="button" class="info-btn" data-info="${i.id}" data-tip="${esc(rewardInfo(i))}" title="About this reward" aria-label="About ${esc(i.name)}">i</button><div class="emoji">${i.emoji}</div><div class="price">${sicon("coin")} ${i.price}</div>${isStackable(i.id) ? qtyStepperMarkup(i.id, i.price) : ""}<h3>${esc(i.name)}</h3><p class="muted">${esc(i.description)}</p><span class="tag">${i.category}</span>${i.season ? `<span class="tag limited-tag">limited · ${seasonDaysLeft(i)}d left</span>` : ""}</article>`).join("")}</div><div class="store-footer"><span><strong id="cart-count">${cartUnits()}</strong> units · <b id="cart-total">${cartTotal()}</b> coins</span><span class="recipient-wrap" data-recipient-wrap><button type="button" class="recipient-btn" data-recipient-btn aria-haspopup="listbox" aria-expanded="false">${giftBtnInner()}<svg class="recipient-chev" width="12" height="8" viewBox="0 0 12 8" fill="none"><path d="M1 1l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="recipient-pop" data-recipient-pop role="listbox" aria-label="Buy for" hidden>${recipientOptions().map((o) => `<button type="button" role="option" aria-selected="${o.id === giftRecipient}" class="recipient-opt${o.id === giftRecipient ? " selected" : ""}" data-recipient-pick="${o.id}">${o.initial ? `<span class="recipient-avatar sm">${esc(o.initial)}</span>` : `<span class="recipient-emoji">${o.icon}</span>`}<span class="recipient-txt"><strong>${esc(o.name)}</strong><small>${esc(o.sub)}</small></span><span class="recipient-check">${sicon("check")}</span></button>`).join("")}</div></span><button type="button" class="primary" id="checkout">Buy selected</button></div>${collectionMarkup()}`;
+  t.innerHTML = `${viewHead("Rewards store", "Spend the coins you earn from focused sessions on themes, sounds, boosts, badges, and profile identities.")}<div class="backend-pill-head">${backendPillMarkup("store")}</div>${earnMarkup()}${topupMarkup()}${dealsMarkup()}${mysteryMarkup()}<div class="filter-bar">${["All", "Themes", "Sounds", "Boosts", "Badges", "Avatars"].map((x) => `<button type="button" class="filter ${state.storeCategory === x ? "active" : ""}" data-store-filter="${x}">${x}</button>`).join("")}</div><div class="grid three">${visible.map((i) => `<article class="card store-item ${state.selectedStore.includes(i.id) ? "selected" : ""}" data-store-item="${i.id}"><button type="button" class="info-btn" data-info="${i.id}" data-tip="${esc(rewardInfo(i))}" title="About this reward" aria-label="About ${esc(i.name)}">i</button><div class="emoji">${i.emoji}</div><div class="price">${sicon("coin")} ${i.price}</div>${isStackable(i.id) ? qtyStepperMarkup(i.id, i.price) : ""}<h3>${esc(i.name)}</h3><p class="muted">${esc(i.description)}</p><span class="tag">${i.category}</span>${i.season ? `<span class="tag limited-tag">limited · ${seasonDaysLeft(i)}d left</span>` : ""}</article>`).join("")}</div><div class="store-footer"><span><strong id="cart-count">${cartUnits()}</strong> units · <b id="cart-total">${cartTotal()}</b> coins</span><span class="recipient-wrap" data-recipient-wrap><button type="button" class="recipient-btn" data-recipient-btn aria-haspopup="listbox" aria-expanded="false">${giftBtnInner()}<svg class="recipient-chev" width="12" height="8" viewBox="0 0 12 8" fill="none"><path d="M1 1l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="recipient-pop" data-recipient-pop role="listbox" aria-label="Buy for" hidden>${recipientOptions().map((o) => `<button type="button" role="option" aria-selected="${o.id === giftRecipient}" class="recipient-opt${o.id === giftRecipient ? " selected" : ""}" data-recipient-pick="${o.id}">${o.initial ? `<span class="recipient-avatar sm">${esc(o.initial)}</span>` : `<span class="recipient-emoji">${o.icon}</span>`}<span class="recipient-txt"><strong>${esc(o.name)}</strong><small>${esc(o.sub)}</small></span><span class="recipient-check">${sicon("check")}</span></button>`).join("")}</div></span><button type="button" class="primary" id="checkout">Buy selected</button>    </div>${collectionMarkup()}`;
+  paintBackendPill("store", t);
+  t.querySelector('[data-backend-retry][data-backend-status="store"]')?.addEventListener("click", async () => {
+    if (!cloudRewards()) return; // local pill has nothing to retry
+    await probeStoreBackend(t);
+    if (storeBackendStatus === "ok" && cloudDealsFailed) {
+      cloudDealsFailed = false;
+      refreshCloudDeals();
+    }
+  });
+  if (Date.now() - storeBackendStatusAt > 60000) probeStoreBackend(t);
   $$("[data-store-filter]", t).forEach(
     (b) =>
       (b.onclick = () => {
@@ -2316,12 +2421,15 @@ function renderStore() {
       (b.onclick = () => {
         const item = state.owned[+b.dataset.equipBadge];
         if (!item) return;
-        state.equipped.badge =
-          state.equipped.badge === item.id ? null : item.id;
+        const result = toggleShowcaseBadge(item);
         persist();
         shell();
         notify(
-          state.equipped.badge ? `${item.name} showcased` : "Badge removed",
+          result === "added"
+            ? `${item.name} showcased (${showcasedBadgeIds().length}/${MAX_SHOWCASE_BADGES})`
+            : result === "removed"
+              ? "Badge removed from showcase"
+              : `Showcase is full (${MAX_SHOWCASE_BADGES} badges) — remove one first`,
         );
       }),
   );
@@ -2574,4 +2682,4 @@ async function checkoutCloud(fresh, onConfirmed, onCancelled) {
   if (onConfirmed) onConfirmed();
 }
 
-export { storeItems, equippedAvatarEmoji, equippedBadgeEmoji, checkinReward, earnMarkup, claimCheckin, removeOwnedAt, collectionRow, collectionMarkup, purchaseHistoryMarkup, inSeason, seasonDaysLeft, normItem, findStoreItem, migrateOwned, shopItems, MYSTERY_BOXES, dailyDeals, dealCountdown, boxItemsByRarity, rollBoxReward, grantReward, boxBusy, buyBox, FREE_BOX_ODDS, hash01, rollFreeBox, claimBusy, claimFreeBox, collectFreeReward, freeBoxCountdown, freeBoxMarkup, freeBoxState, isStackable, ownsMine, MAX_QTY, itemQty, setItemQty, clearItemQty, qtyStepperMarkup, qtyLineText, refreshQtyDom, changeQty, bindQtySteppers, cartLines, cartTotal, cartUnits, refreshCartFooter, afterCardQty, afterStoreQty, recordTransaction, dealsMarkup, mysteryMarkup, openBox, openFreeBoxReveal, buyDeal, giftRecipient, giftTarget, giftView, giftSelected, giftQuery, giftResults, giftSearching, giftSearchTimer, giftSearchToken, recipientOptions, matchLocalFriends, giftBtnInner, bindRecipient, openGiftCenter, closeGiftCenter, giftPersonRow, renderGiftCenter, bindGiftPicks, runGiftSearch, deliverGiftCloud, checkoutGiftFlow, renderStore, checkoutBusy, checkout, activeDeals, refreshCloudDeals };
+export { storeItems, equippedAvatarEmoji, equippedBadgeEmoji, equippedBadges, checkinReward, earnMarkup, claimCheckin, removeOwnedAt, collectionRow, collectionMarkup, purchaseHistoryMarkup, inSeason, seasonDaysLeft, normItem, findStoreItem, migrateOwned, shopItems, MYSTERY_BOXES, dailyDeals, dealCountdown, boxItemsByRarity, rollBoxReward, grantReward, boxBusy, buyBox, FREE_BOX_ODDS, hash01, rollFreeBox, claimBusy, claimFreeBox, collectFreeReward, freeBoxCountdown, freeBoxMarkup, freeBoxState, isStackable, ownsMine, MAX_QTY, itemQty, setItemQty, clearItemQty, qtyStepperMarkup, qtyLineText, refreshQtyDom, changeQty, bindQtySteppers, cartLines, cartTotal, cartUnits, refreshCartFooter, afterCardQty, afterStoreQty, recordTransaction, dealsMarkup, mysteryMarkup, openBox, openFreeBoxReveal, buyDeal, giftRecipient, giftTarget, giftView, giftSelected, giftQuery, giftResults, giftSearching, giftSearchTimer, giftSearchToken, recipientOptions, matchLocalFriends, giftBtnInner, bindRecipient, openGiftCenter, closeGiftCenter, giftPersonRow, renderGiftCenter, bindGiftPicks, runGiftSearch, deliverGiftCloud, checkoutGiftFlow, renderStore, checkoutBusy, checkout, activeDeals, refreshCloudDeals };

@@ -276,8 +276,32 @@ html[data-night="1"] .group-logo {
   background: color-mix(in srgb, var(--muted) 8%, transparent);
 }
 
-.backend-pill:hover {
+.backend-pill.local {
+  color: var(--muted);
+  border-color: var(--line);
+  background: none;
+  cursor: default;
+}
+
+/* Only health states react to hover — "Local data" is informational. */
+.backend-pill:not(.local):hover {
   border-color: var(--ink);
+}
+
+/* Right-aligned pill row for tabs whose content starts directly with cards
+   (sprints) — keeps the indicator visible without disturbing the layout. */
+.backend-pill-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+/* Store/Library pills live right after the tab heading, above the first card.
+   Kept tiny and right-aligned so it reads as chrome, not content. */
+.backend-pill-head {
+  display: flex;
+  justify-content: flex-end;
+  margin: -6px 0 10px;
 }
 
 @keyframes backend-pulse {
@@ -288,6 +312,12 @@ html[data-night="1"] .group-logo {
 @media (prefers-reduced-motion: reduce) {
   .backend-pill i {
     animation: none;
+  }
+  .edge-swipe-veil {
+    display: none;
+  }
+  .chat.edge-swiping {
+    transition: none !important;
   }
 }
 
@@ -438,6 +468,48 @@ html[data-night="1"] .group-logo {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  position: relative;
+}
+
+/* Edge-swipe back gesture (phones): the open chat follows the finger while a
+   veil + "Back" chip reveal beneath — iOS/WhatsApp-style affordance. */
+.edge-swipe-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  opacity: 0;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--ink) 16%, transparent),
+    transparent 46%
+  );
+}
+.edge-swipe-chip {
+  margin-left: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px 7px 8px;
+  border-radius: 999px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  transform: scale(0.82);
+  transform-origin: left center;
+}
+.edge-swipe-chip b {
+  color: var(--sage);
+  font-size: 15px;
+  line-height: 1;
+}
+.chat.edge-swiping {
+  will-change: transform;
 }
 
 .chat-head {

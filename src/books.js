@@ -1,11 +1,11 @@
 /* books.js — book library: catalog, upload, details, favorites, download, reports */
 import {
   state, $, $$, esc, sicon, persist, notify, toast, confirmBox, viewHead, fitTextarea, requireAuth,
-  save,
+  save, paintBackendPill, registerBackendPillResolver, backendPillMarkup,
 } from "./core.js";
 import {
   backendConfigured, uploadBookFile, getBookFileUrl, downloadBookFile, removeBookFile,
-  createBook, deleteBook, listMyBooks, getBook, cloudUpsertBook,
+  createBook, deleteBook, listMyBooks, getBook, cloudUpsertBook, probeBooksBackend,
   toggleBookFavorite as toggleBookFavoriteRemote, listBookFavorites, saveBookProgress, listBookProgress,
   listBookBookmarks, addBookBookmark, removeBookBookmark,
   listBookHighlights, addBookHighlight, updateBookHighlight, removeBookHighlight,
@@ -310,11 +310,61 @@ export function searchBooks(q) {
 
 // Books are private by design: only the uploader ever sees their uploads.
 // (No public catalog, no discovery feed, no shared shelves.)
+// --- Backend status pill -----------------------------------------------------
+// Books live on this device; the cloud matters for sync (shelf, covers, file
+// storage). Signed-out visitors get the honest "Local data" pill, signed-in
+// users get a real reachability probe driven by the periodic shelf sync.
+let booksBackendStatus = null; // ok | down | offline | null = probing
+let booksBackendStatusAt = 0;
+let booksProbing = false;
+
+function booksPillInfo() {
+  const s = !backendConfigured || !state.user ? "local" : booksBackendStatus || "probing";
+  const cls = s;
+  const label =
+    s === "ok" ? "Live"
+    : s === "down" ? "Backend error"
+    : s === "offline" ? "Offline"
+    : s === "local" ? "Local data"
+    : "Connecting…";
+  const title =
+    s === "ok" ? "Your library is synced with the cloud — shelves, covers, and reading progress are live"
+    : s === "down" ? "The server responded with an error — showing your local shelves. Cloud changes may be delayed."
+    : s === "offline" ? "Can't reach the server — showing your local shelves. Cloud changes may be delayed. Check your connection."
+    : s === "local" ? "Books are stored on this device. Sign in to sync your library, covers, and reading progress."
+    : "Checking the backend…";
+  return { cls, label, title, retryable: s !== "local" };
+}
+registerBackendPillResolver("books", booksPillInfo);
+
+async function probeBooks(root) {
+  if (!backendConfigured || !state.user) {
+    booksBackendStatus = "local";
+    paintBackendPill("books", root);
+    return;
+  }
+  booksProbing = true;
+  booksBackendStatus = null; // probing
+  paintBackendPill("books", root);
+  const res = await probeBooksBackend().catch((err) => ({ error: err }));
+  const msg = String(res.error?.message || res.error || "");
+  booksBackendStatus = res.error ? (/Failed to fetch|network|NetworkError/i.test(msg) ? "offline" : "down") : "ok";
+  booksBackendStatusAt = Date.now();
+  booksProbing = false;
+  paintBackendPill("books", root);
+}
+
 async function syncMyBooksFromBackend() {
   if (!backendConfigured || !state.user) return false;
   const before = libSignature();
   try {
     const [mine, favs, prog] = await Promise.all([listMyBooks(), listBookFavorites(), listBookProgress()]);
+    // Report the real outcome for the Library pill: any of the three requests
+    // failing means the cloud shelf state is stale this round.
+    booksBackendStatus = mine.error || favs.error || prog.error
+      ? (/Failed to fetch|network|NetworkError/i.test(String(mine.error?.message || favs.error?.message || prog.error?.message || "")) ? "offline" : "down")
+      : "ok";
+    booksBackendStatusAt = Date.now();
     if (!mine.error && Array.isArray(mine.data)) {
       const remote = mine.data.map((r) => ({
         id: r.id, ownerId: r.owner_id, title: r.title, author: r.author,
@@ -342,6 +392,8 @@ async function syncMyBooksFromBackend() {
     return libSignature() !== before;
   } catch {
     /* offline — local data stands */
+    booksBackendStatus = "offline";
+    booksBackendStatusAt = Date.now();
     return false;
   }
 }
@@ -587,6 +639,7 @@ function paintLibError(t, err) {
 }
 function renderLibraryHome(t) {
   const books = allBooks();
+  booksProbing = false;
   const lastOpened = (state.bookStats && state.bookStats.lastOpened) || {};
   const byRecentOpen = (a, b) => (Number(lastOpened[b.id]) || 0) - (Number(lastOpened[a.id]) || 0);
   const started = books.filter((b) => { const p = bookProgressOf(b.id); return p > 0 && p < 0.995; }).sort(byRecentOpen);
@@ -595,6 +648,7 @@ function renderLibraryHome(t) {
   const recent = [...books].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 6);
   const filtering = bookHome.filter !== "all" || bookHome.q || bookHome.cat !== "All";
   t.innerHTML = `${viewHead("Book Library", "Your personal shelves — upload, discover, read, and study.")}
+  <div class="backend-pill-head">${backendPillMarkup("books")}</div>
   <div class="card" style="margin-bottom:18px"><div class="input-row" style="margin-bottom:0"><input class="input" id="book-search" placeholder="Search title, author, category, ISBN…" aria-label="Search books" value="${esc(bookHome.q)}"><button type="button" class="primary" data-book-upload>Upload Book</button></div>
   <div class="filter-bar" style="margin:12px 0 0">${BOOK_FILTERS.map(([v, label]) => `<button type="button" class="filter ${bookHome.filter === v ? "active" : ""}" data-book-filter="${v}">${label}</button>`).join("")}</div>
   <div class="book-catrow">${categorySelect(bookHome.cat, books)}</div></div>
@@ -606,6 +660,12 @@ function renderLibraryHome(t) {
   ${favs.length ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>My Favorites</h2><span class="tag">${favs.length}</span></div><div class="book-grid">${favs.slice(0, 6).map(safeBookCard).join("")}</div></div>` : ""}
   ${recent.length ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Recently Added</h2><span class="tag">yours</span></div><div class="book-grid">${recent.map(safeBookCard).join("")}</div></div>` : ""}`}`;
   renderBookResults();
+  paintBackendPill("books", t);
+  t.querySelector('[data-backend-retry][data-backend-status="books"]')?.addEventListener("click", async () => {
+    if (!backendConfigured || !state.user) return; // local pill has nothing to retry
+    await probeBooks(t);
+  });
+  if (!booksProbing && Date.now() - booksBackendStatusAt > 60000) probeBooks(t);
   const input = $("#book-search", t);
   let searchT = null;
   input.oninput = () => {
@@ -653,6 +713,7 @@ function renderLibraryHome(t) {
     libMineSyncedAt = Date.now();
     syncMyBooksFromBackend().then((changed) => {
       if (changed && state.tab === "books" && libOnHome()) renderLibrary();
+      paintBackendPill("books", $("#tab-books"));
     }).catch(() => {});
   }
 }
