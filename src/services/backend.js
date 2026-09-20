@@ -800,16 +800,20 @@ export async function listPublicGroups(limit = 200) {
     .limit(limit);
   if (!res.error) return res;
   // Degraded-project fallback: if the count embed itself fails server-side
-  // (e.g. a 500 from a stale/broken schema cache on the project), retry
-  // without it so group discovery keeps working; member counts fall back.
-  if (/500|internal|embed|relationship/i.test(res.error.message || "")) {
+  // (e.g. a 500 from a stale/broken schema cache or a recursive policy on
+  // the embedded relation — Postgres 42P17), retry without it so group
+  // discovery keeps working; member counts fall back to "—".
+  const embedFailed =
+    /500|internal|embed|relationship|recursion/i.test(res.error.message || "") ||
+    res.error.code === "42P17";
+  if (embedFailed) {
     const retry = await supabase
       .from("groups")
       .select("id,owner_id,name,description,logo,focus_topics,visibility,avatar_path")
       .eq("visibility", "public")
       .order("created_at", { ascending: false })
       .limit(limit);
-    if (!retry.error) return retry;
+    if (!retry.error) return { ...retry, degraded: true };
   }
   return res;
 }

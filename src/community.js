@@ -34,6 +34,11 @@ import { secureEarn } from "./services/rewards-sync.js";
 let cloudGroups = [];
 let cloudGroupsAt = 0;
 let cloudGroupsSig = "";
+// Last backend probe outcome for the Discover status pill:
+// "ok" | "degraded" (embed failed, fallback worked) | "down" | "offline" | null (never probed).
+let groupsBackendStatus = null;
+let groupsBackendStatusAt = 0;
+let groupsBackendInflight = false;
 // Cloud identity caches (in-memory only — never persisted; handles refresh).
 let cloudFriends = []; // accepted connections: { id, handle, name, avatar, bio }
 let cloudFriendReqs = []; // { id, incoming, handle, name, otherId, ts }
@@ -173,9 +178,15 @@ function adoptServerMutes(groups) {
 async function refreshCloudGroups(force) {
   if (!backendConfigured) return cloudGroups;
   if (!force && Date.now() - cloudGroupsAt < 60000 && cloudGroups.length) return cloudGroups;
+  if (groupsBackendInflight) return cloudGroups;
+  groupsBackendInflight = true;
   try {
-    const { data, error } = await listPublicGroups(200);
+    const { data, error, degraded } = await listPublicGroups(200);
     if (!error && Array.isArray(data)) {
+      // "degraded": only the no-embed fallback worked — server is up but
+      // sick (e.g. the 42P17 policy recursion). Groups still load.
+      groupsBackendStatus = degraded ? "degraded" : "ok";
+      groupsBackendStatusAt = Date.now();
       const mine = signedIn() ? await getMyGroups().catch(() => ({ data: [] })) : { data: [] };
       const byId = new Map();
       for (const r of data) byId.set(r.id, toCloudGroup(r, null));
@@ -194,9 +205,19 @@ async function refreshCloudGroups(force) {
         cloudGroupsSig = sig;
         cloudGroupsAt = Date.now();
       }
+    } else if (error) {
+      // The embed fallback in listPublicGroups already retried without the
+      // count; an error here means even the plain query failed (policy
+      // recursion, outage) — the 500 case.
+      groupsBackendStatus = /Failed to fetch|network|NetworkError/i.test(error.message || "") ? "offline" : "down";
+      groupsBackendStatusAt = Date.now();
     }
   } catch {
     /* offline — keep stale cache */
+    groupsBackendStatus = "offline";
+    groupsBackendStatusAt = Date.now();
+  } finally {
+    groupsBackendInflight = false;
   }
   return cloudGroups;
 }
@@ -850,6 +871,36 @@ function ensureSprintTicker() {
   }, 1000);
 }
 
+// Total unread across conversations — drives the Messages subtab badge.
+// Only counts chats that still resolve to a joined group or a live friend —
+// after leaving a group or unfriending, old histories stay on disk (the chat
+// view needs them) but must never bleed into the unread badge.
+function totalUnreadCount() {
+  const joinedGroups = new Set(
+    allGroups().filter((g) => get("sf-joined", []).includes(g.id)).map((g) => g.id),
+  );
+  const friendIds = new Set([
+    ...(state.friends || []).map((f) => f.id),
+    ...cloudFriends.filter((f) => !cloudBlocked.has(f.id)).map((f) => f.id),
+  ]);
+  let sum = 0;
+  for (const chatId of Object.keys(state.messages || {})) {
+    if (!joinedGroups.has(chatId) && !friendIds.has(chatId)) continue;
+    sum += unreadCount(chatId);
+  }
+  return sum;
+}
+
+function paintMessagesBadge(count) {
+  const btn = document.querySelector('[data-subtab="messages"]');
+  if (!btn) return;
+  const label = "Messages";
+  const badge = count ? ` <span class="subnav-badge" data-msgs-unread>${count > 99 ? "99+" : count}</span>` : "";
+  const current = btn.querySelector("[data-msgs-unread]");
+  if (current) current.remove();
+  btn.innerHTML = label + badge;
+}
+
 function renderCommunity() {
   clearSprintTicker();
   const t = $("#tab-community");
@@ -877,6 +928,7 @@ function renderCommunity() {
         renderCommunity();
       }),
   );
+  paintMessagesBadge(totalUnreadCount());
   const body = $("#community-body", t);
   const panels = {
     discover: renderDiscover,
@@ -897,6 +949,9 @@ function renderCommunity() {
   // typed draft outlives the repaint — the next render picks the data up).
   const seenCloudAt = cloudGroupsAt;
   refreshCloudGroups(false).then(() => {
+    // The status pill always reflects the freshest probe, even when the
+    // group list itself didn't change (or the user is mid-action).
+    paintBackendStatus();
     if (cloudGroupsAt === seenCloudAt || !cloudGroups.length) return;
     if (state.tab === "community" && !userIsBusy()) renderCommunity();
   }).catch(() => {});
@@ -2962,6 +3017,32 @@ function statusPointerCancel() {
   statusTouch = null;
 }
 
+// Discover's backend status pill — paints the CURRENT probe outcome onto
+// whatever pill exists in the DOM, so a background refresh finishing after
+// render still updates the label without re-rendering the tab.
+function paintBackendStatus(root) {
+  const pill = (root || document).querySelector("[data-backend-status]");
+  if (!pill) return;
+  const s = groupsBackendStatus;
+  const stateClass = s === "ok" ? "ok" : s === "degraded" ? "degraded" : s ? "down" : "probing";
+  const label =
+    s === "ok" ? "Live"
+    : s === "degraded" ? "Live · reduced"
+    : s === "down" ? "Backend error"
+    : s === "offline" ? "Offline"
+    : "Connecting…";
+  const title =
+    s === "ok" ? "Group list is live from the backend"
+    : s === "degraded" ? "Groups load, but the server is partially degraded (member counts unavailable). Run migration 018 to fix."
+    : s === "down" ? "The server responded with an error. Retrying automatically."
+    : s === "offline" ? "Can't reach the server — showing cached groups. Check your connection."
+    : "Checking the backend…";
+  pill.className = `backend-pill ${stateClass}`;
+  pill.title = title;
+  pill.setAttribute("aria-label", title);
+  pill.innerHTML = `<i></i><span>${label}</span>`;
+}
+
 function renderDiscover(body) {
   const subjects = [
     "All subjects",
@@ -2985,7 +3066,8 @@ function renderDiscover(body) {
   const recommendMarkup = recommended.length
     ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Recommended for you</h2><span class="tag">matched</span></div><div class="grid three">${recommended.map((x) => groupCardWithReason(x.group, x.hits)).join("")}</div></div>`
     : "";
-  body.innerHTML = `${storiesMarkup()}${recommendMarkup}<div class="community-layout"><div class="card"><div class="eyebrow" style="margin-bottom:10px">Subjects</div><div class="category-list">${subjects.map((subject) => `<button type="button" class="${activeSubject === subject ? "active" : ""}" data-group-category="${subject}">${subject}</button>`).join("")}</div></div><div><div class="input-row"><input class="input" id="group-search" placeholder="Search groups and topics" aria-label="Search groups and topics"></div><div class="grid three" id="groups-grid">${subjectGroups.map(groupCard).join("") || '<p class="muted">No groups match this subject yet.</p>'}</div></div></div>`;
+  body.innerHTML = `${storiesMarkup()}${recommendMarkup}<div class="community-layout"><div class="card"><div class="eyebrow" style="margin-bottom:10px">Subjects</div><div class="category-list">${subjects.map((subject) => `<button type="button" class="${activeSubject === subject ? "active" : ""}" data-group-category="${subject}">${subject}</button>`).join("")}</div></div><div><div class="input-row"><input class="input" id="group-search" placeholder="Search groups and topics" aria-label="Search groups and topics"><button type="button" class="backend-pill probing" data-backend-status data-backend-retry title="Checking the backend…" aria-label="Backend status — click to retry"><i></i><span>Connecting…</span></button></div><div class="grid three" id="groups-grid">${subjectGroups.map(groupCard).join("") || '<p class="muted">No groups match this subject yet.</p>'}</div></div></div>`;
+  paintBackendStatus(body);
   $$("[data-group-category]", body).forEach(
     (button) =>
       (button.onclick = () => {
@@ -3005,6 +3087,25 @@ function renderDiscover(body) {
   };
   bindGroupButtons(body);
   bindStories(body);
+  // Click-to-retry: re-probe now and repaint the pill (and the grid) with
+  // the fresh outcome — no full re-render needed.
+  body.querySelector("[data-backend-retry]")?.addEventListener("click", async () => {
+    groupsBackendStatus = null;
+    paintBackendStatus(body);
+    await refreshCloudGroups(true);
+    paintBackendStatus(body);
+    if (groupsBackendStatus === "ok" || groupsBackendStatus === "degraded") {
+      const grid = $("#groups-grid", body);
+      if (grid) {
+        const activeSubject = state.groupCategory || "All subjects";
+        const subjectGroups = allGroups().filter(
+          (group) => activeSubject === "All subjects" || subjectForGroup(group) === activeSubject,
+        );
+        grid.innerHTML = subjectGroups.map(groupCard).join("") || '<p class="muted">No groups match this subject yet.</p>';
+        bindGroupButtons(grid);
+      }
+    }
+  });
   body.insertAdjacentHTML("beforeend", `<section class="feed-section"><div class="section-row"><div><div class="eyebrow">Community feed</div><h2 style="margin:5px 0 0">Study notes from the community</h2></div><span class="tag">${visiblePosts().length} posts</span></div><div class="card composer"><textarea class="textarea autogrow" id="post-composer" rows="2" placeholder="Share a useful study insight, milestone, or question..."></textarea><div class="composer-actions"><span class="muted">Be generous with what you learn.</span><button type="button" class="primary" id="publish-post">Publish note</button></div></div><div class="feed-list">${visiblePosts().length ? visiblePosts().map((post) => `<article class="card post" data-post="${post.id}"><div class="post-author"><div class="avatar">${avatarMarkup(post.photo, post.avatar || state.profile.avatar)}</div><div><strong>${esc(post.author || state.profile.name)}</strong><small>@${esc(post.handle || state.profile.handle)}${post.university ? ` · ${esc(post.university)}` : ""} · ${new Date(post.time).toLocaleDateString()}</small></div>${postMenuMarkup(post)}</div><div class="post-text" data-post-text="${post.id}"><p>${esc(post.text)}</p>${post.editedAt ? '<small class="muted">(edited)</small>' : ""}</div><div class="post-actions"><button type="button" data-like-post="${post.id}" class="${(post.likedBy || []).includes(postOwnerId()) ? "liked" : ""}">${(post.likedBy || []).includes(postOwnerId()) ? sicon("heart-filled") : sicon("heartOutline")} ${post.likes || 0}</button><button type="button" data-comment-toggle="${post.id}">${sicon("chat")} ${(post.comments || []).length ? `${post.comments.length} ` : ""}Comments</button></div><div class="post-comments" data-comments="${post.id}" hidden></div></article>`).join("") : '<div class="card empty-state"><div class="emoji">' + sicon("sparkle") + '</div><h3>The feed is waiting for your first note</h3><p class="muted">Share a small insight and make someone else’s study session easier.</p></div>'}</div></section>`);
   bindFeed(body);
 }
@@ -3879,6 +3980,69 @@ function renderNotifications(body) {
     notify("All caught up");
   };
 }
+// ---- Inbox-style conversation list (unread badges + last-message previews)
+
+// Per-chat read marker: the last message the user has seen, anchored by
+// message ID (timestamp as fallback). ID anchoring keeps unread counts exact
+// even when a message lands in the same millisecond as the read marker — a
+// pure-timestamp marker silently swallowed those. Persisted via save().
+function chatReadMap() {
+  const saved = get("sf-chat-read", {});
+  return saved && typeof saved === "object" ? saved : {};
+}
+function markChatRead(chatId) {
+  const map = chatReadMap();
+  const last = (state.messages[chatId] || []).at(-1);
+  const entry = { ts: Math.max(last?.ts || 0, Date.now()), id: last?.id || null };
+  const prev = map[chatId];
+  const prevTs = typeof prev === "number" ? prev : prev?.ts || 0;
+  if (prevTs >= entry.ts && (prev?.id || null) === entry.id) return false;
+  map[chatId] = entry;
+  save("sf-chat-read", map);
+  return true;
+}
+function unreadCount(chatId) {
+  const msgs = state.messages[chatId] || [];
+  const marker = chatReadMap()[chatId];
+  // Preferred: count everything after the last-seen message in arrival order.
+  if (marker && typeof marker === "object" && marker.id) {
+    const idx = msgs.findIndex((m) => m.id === marker.id);
+    if (idx >= 0) return msgs.slice(idx + 1).filter((m) => !m.me).length;
+  }
+  // Fallback: legacy numeric markers or a marker whose message aged out.
+  const since = typeof marker === "number" ? marker : marker?.ts || 0;
+  return msgs.filter((m) => !m.me && (m.ts || 0) > since).length;
+}
+
+// "You:" prefix inside groups, "You" when it's the user's own line in a DM,
+// otherwise the sender's name — mirrors how the chat itself labels authors.
+function previewLabel(chatId, m, isGroup) {
+  if (!m) return "";
+  if (m.me) return "You: ";
+  if (isGroup || m.sysName) return (m.sysName || "Group member") + ": ";
+  return "";
+}
+
+function conversationRow(c) {
+  const isGroup = allGroups().some((g) => g.id === c.id);
+  const msgs = state.messages[c.id] || [];
+  const last = msgs.at(-1);
+  const unread = unreadCount(c.id);
+  const muted = isChatMuted(c.id);
+  const draft = state.activeChat === c.id ? "active" : "";
+  const preview = last
+    ? previewLabel(c.id, last, isGroup) + escSnippet(messageText(last), 46)
+    : '<em class="conv-empty">No messages yet</em>';
+  return `<button type="button" class="conv-row ${draft}${unread ? " has-unread" : ""}" data-select-chat="${c.id}">`
+    + `<span class="conv-ava">${c.emoji || "●"}</span>`
+    + `<span class="conv-main">`
+    + `<span class="conv-top"><span class="conv-name">${esc(c.name || "@" + c.username)}${muted ? ` <span class="mute-ico" title="Muted">${sicon("mute")}</span>` : ""}</span>`
+    + `<span class="conv-time">${last ? relTime(last.ts) : ""}</span></span>`
+    + `<span class="conv-preview">${preview}</span></span>`
+    + (unread ? `<span class="conv-unread" title="${unread} unread message${unread === 1 ? "" : "s"}">${unread > 99 ? "99+" : unread}</span>` : "")
+    + `</button>`;
+}
+
 function renderMessages(body) {
   const cloudConns = cloudFriends
     .filter((f) => !cloudBlocked.has(f.id))
@@ -3889,7 +4053,10 @@ function renderMessages(body) {
     ...cloudConns.filter((c) => !(state.friends || []).some((f) => f.id === c.id)),
   ];
   if (state.activeChat && (isBlockedKey(state.activeChat) || cloudBlocked.has(state.activeChat))) state.activeChat = null;
-  body.innerHTML = `<div class="card messages"><div class="conversation">${chats.map((c) => `<button type="button" class="${state.activeChat === c.id ? "active" : ""}" data-select-chat="${c.id}">${c.emoji || "●"} ${esc(c.name || "@" + c.username)}${isChatMuted(c.id) ? ` <span class="mute-ico" title="Muted">${sicon("mute")}</span>` : ""}</button>`).join("") || '<span class="muted">No conversations yet.</span>'}</div><div class="chat">${state.activeChat ? (groupSearch && groupSearch.id === state.activeChat ? groupSearchMarkup(state.activeChat) : chatMarkup(state.activeChat)) : '<div style="margin:auto" class="muted">Select a group or friend to start messaging.</div>'}</div></div>`;
+  if (state.activeChat) markChatRead(state.activeChat);
+  const totalUnread = chats.reduce((sum, c) => sum + (state.activeChat === c.id ? 0 : unreadCount(c.id)), 0);
+  body.innerHTML = `<div class="card messages"><div class="conversation">${chats.map(conversationRow).join("") || '<span class="muted">No conversations yet.</span>'}</div><div class="chat">${state.activeChat ? (groupSearch && groupSearch.id === state.activeChat ? groupSearchMarkup(state.activeChat) : chatMarkup(state.activeChat)) : '<div style="margin:auto" class="muted">Select a group or friend to start messaging.</div>'}</div></div>`;
+  paintMessagesBadge(totalUnread);
   $$("[data-select-chat]", body).forEach(
     (b) =>
       (b.onclick = () => {
@@ -3898,6 +4065,7 @@ function renderMessages(body) {
           groupNav = null;
         }
         state.activeChat = b.dataset.selectChat;
+        markChatRead(state.activeChat);
         renderMessages(body);
       }),
   );
@@ -5824,7 +5992,11 @@ async function loadCloudHistory(id, root) {
     merged.sort((a, b) => (a.ts || 0) - (b.ts || 0));
     state.messages[id] = merged.slice(-300);
     persist();
-    if (token === historyToken && state.activeChat === id) paintChatBody(id, root, false);
+    if (token === historyToken && state.activeChat === id) {
+      markChatRead(id); // history merged while the chat is open = seen
+      paintChatBody(id, root, false);
+      paintMessagesBadge(totalUnreadCount());
+    }
   } catch {
     /* offline — local cache stands */
   }
@@ -5912,10 +6084,14 @@ function subscribeToChat(id) {
           // Background chat: cache only, plus the standard notification path.
           state.messages[id] = [...(state.messages[id] || []), row].slice(-300);
           persist();
+          // Unread badge lives while the chat is closed; muted chats stay silent.
+          if (state.tab === "community" && !isChatMuted(id)) paintMessagesBadge(totalUnreadCount());
         } else {
           state.messages[id] = [...(state.messages[id] || []), row].slice(-300);
           persist();
+          markChatRead(id); // chat is open and visible — counts as read
           appendChatBubble(id, row, chatRoot()) || (state.tab === "community" && renderCommunity());
+          if (state.tab === "community") paintMessagesBadge(totalUnreadCount());
         }
         if (state.user) markMessageRead(message.id, state.user.id).catch(() => {});
         if (notifOn("community") && !isChatMuted(id)) {
