@@ -72,6 +72,9 @@ function recordFocusDay(sessionRef) {
       secureStreak(`day:${today}:${sessionRef || "na"}`).then((r) => {
         if (!r || !r.ok) return;
         state.streak.lastDate = today;
+        // The server owns the count for cloud members — mirror it locally,
+        // otherwise the UI keeps showing a stale/zero streak.
+        if (Number.isFinite(+r.current)) state.streak.count = +r.current;
         if (r.longest > (state.bestStreak || 0)) state.bestStreak = r.longest;
         persist();
         if (r.bonus > 0) {

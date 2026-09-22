@@ -942,6 +942,15 @@ const STATE_OBJECT_DEFAULTS = {
   },
   streak: { count: 0, lastDate: "", days: [] },
 };
+const HANDLE_ADJ = ["focus", "deep", "bright", "swift", "calm", "bold", "wise", "kind", "brave", "quiet", "clever", "happy", "lucky", "nimble", "cosmic", "solar", "misty", "rapid", "gentle", "prime"];
+const HANDLE_NOUN = ["fox", "owl", "wolf", "bear", "finch", "otter", "lynx", "raven", "badger", "heron", "turtle", "falcon", "koala", "panda", "tiger", "eagle", "otter", "crane", "ember", "lotus"];
+// Unique-ish default handles so two learners never share a name. The server
+// unique constraint remains the final arbiter on signup/sync.
+function randomHandle() {
+  const pick = (a) => a[Math.floor(Math.random() * a.length)];
+  const n = Math.floor(10 + Math.random() * 90);
+  return `${pick(HANDLE_ADJ)}_${pick(HANDLE_NOUN)}_${n}`.slice(0, 30);
+}
 function sanitizeState() {
   try {
     for (const k of STATE_ARRAYS) {
@@ -953,6 +962,11 @@ function sanitizeState() {
     }
     state.profile = { ...STATE_OBJECT_DEFAULTS.profile, ...state.profile };
     if (!Array.isArray(state.profile.subjects)) state.profile.subjects = [];
+    // Retire the legacy shared default: anyone still on "study_learner" (or
+    // with no handle at all) gets their own generated username.
+    if (!state.profile.handle || state.profile.handle === "study_learner") {
+      state.profile.handle = randomHandle();
+    }
     if (!Array.isArray(state.streak.days)) state.streak.days = [];
     if (!Array.isArray(state.referrals.redeemed)) state.referrals.redeemed = [];
     if (!Number.isFinite(Number(state.coins))) state.coins = 0;
@@ -1833,4 +1847,4 @@ function celebrate(big) {
 
 
 
-export { $, $$, uid, get, save, esc, SICON_PATHS, sicon, stripIcon, haltPersist, isPersistHalted, collectUserSettings, applyUserSettings, pushUserSettings, pullCloudProfile, state, sanitizeState, persistFailed, persist, persistNow, refreshCoinDisplays, updateBarPadding, makeDraggable, dragLock, toast, addCoins, spendCoins, cloudSnapshot, cloudSyncTimer, scheduleCloudSync, hydrateCloudState, cloudStateSubscription, fitTextarea, notify, notifOn, ensureNotifyPermission, browserNotify, dayKey, formatHeaderDate, serverOffsetMs, refreshServerTime, serverNow, serverDayKey, addNotification, avatarMarkup, iconStar, bindFavorites, THEME_SKINS, isDarkPaper, NIGHT_BASE, NIGHT_SHADOW, accentLuminance, onAccentText, applyEquippedTheme, toggleNight, syncThemeToggle, applyMotion, applyDisplay, viewHead, fmt, fmtDur, fmtClock, fmtSize, confirmBox, checkReminder, whatsNewShown, WHATS_NEW, openWhatsNew, closeWhatsNew, maybeWhatsNew, confettiPieces, confettiRunning, confettiCanvas, confettiBurst, confettiLoop, celebrate, requireAuth, archiveStateForSignOut, restoreArchivedState };
+export { $, $$, uid, get, save, esc, SICON_PATHS, sicon, stripIcon, haltPersist, isPersistHalted, collectUserSettings, applyUserSettings, pushUserSettings, pullCloudProfile, state, sanitizeState, persistFailed, persist, persistNow, refreshCoinDisplays, updateBarPadding, makeDraggable, dragLock, toast, addCoins, spendCoins, cloudSnapshot, cloudSyncTimer, scheduleCloudSync, hydrateCloudState, cloudStateSubscription, fitTextarea, notify, notifOn, ensureNotifyPermission, browserNotify, dayKey, formatHeaderDate, serverOffsetMs, refreshServerTime, serverNow, serverDayKey, addNotification, avatarMarkup, iconStar, bindFavorites, THEME_SKINS, isDarkPaper, NIGHT_BASE, NIGHT_SHADOW, accentLuminance, onAccentText, applyEquippedTheme, toggleNight, syncThemeToggle, applyMotion, applyDisplay, viewHead, fmt, fmtDur, fmtClock, fmtSize, confirmBox, checkReminder, whatsNewShown, WHATS_NEW, openWhatsNew, closeWhatsNew, maybeWhatsNew, confettiPieces, confettiRunning, confettiCanvas, confettiBurst, confettiLoop, celebrate, requireAuth, archiveStateForSignOut, restoreArchivedState, randomHandle };

@@ -3,7 +3,7 @@ import {
   state, $, $$, uid, get, save, esc, sicon, stripIcon, haltPersist, pushUserSettings, persist, notify, confirmBox, viewHead,
   applyDisplay, applyEquippedTheme, applyMotion, avatarMarkup, cloudStateSubscription,
   dayKey, hydrateCloudState, openWhatsNew, setCloudSubscription, toggleNight, requireAuth,
-  archiveStateForSignOut, restoreArchivedState,
+  archiveStateForSignOut, restoreArchivedState, randomHandle,
 } from "./core.js";
 import { pullProductivity } from "./services/productivity-sync.js";
 import { pullRewards } from "./services/rewards-sync.js";
@@ -13,7 +13,7 @@ import {
   signUpWithEmail, signInWithEmail, resendVerification, requestPasswordReset,
   friendlyAuthError,
   updatePassword, signInWithProvider, signOut, getCurrentUser, syncProfile,
-  uploadAvatar, removeAvatar, avatarPublicUrl,
+  uploadAvatar, removeAvatar, avatarPublicUrl, searchUsers,
   uploadUserFile, deleteMyBackendData, backendConfigured, hasActiveSession,
 } from "./services/backend.js";
 import { CHIMES, playChime, clearSongDatabase, stopAllLayers } from "./audio.js";
@@ -22,6 +22,89 @@ import { startTechCheck, techInfo, enterApp } from "./techniques.js";
 import { equippedAvatarEmoji, equippedBadgeEmoji, showcasedBadgeIds, toggleShowcaseBadge, ownedBadges, MAX_SHOWCASE_BADGES } from "./store.js";
 import { disconnectRealtime, conversationSubscription, presenceSub } from "./community.js";
 import { shell } from "./app.js";
+
+// Username dice: roll a fresh handle into any username input. Checks the
+// directory for collisions when signed in (best-effort — the server unique
+// constraint is still the final arbiter). Typing your own always wins.
+async function handleAvailable(handle) {
+  try {
+    if (!backendConfigured || !state.user) return true;
+    const clean = String(handle || "").trim().toLowerCase().replace(/^@/, "");
+    if (clean.length < 2) return false;
+    const { data, error } = await searchUsers(clean, 5);
+    if (error || !Array.isArray(data)) return true;
+    return !data.some((u) => String(u.handle || "").toLowerCase() === clean);
+  } catch {
+    return true;
+  }
+}
+async function rollHandleInto(input, btn) {
+  if (!input) return;
+  if (btn) {
+    btn.disabled = true;
+    btn.classList.add("rolling");
+  }
+  try {
+    let pick = randomHandle();
+    for (let i = 0; i < 6; i++) {
+      const candidate = randomHandle();
+      pick = candidate;
+      if (await handleAvailable(candidate)) break;
+    }
+    input.value = pick;
+    try {
+      input.focus();
+    } catch {
+      /* ignore */
+    }
+    notify(`How about @${pick}? Keep typing your own or roll again 🎲`);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.classList.remove("rolling");
+    }
+  }
+}
+function handleFieldMarkup(id, value, hint) {
+  return `<label class="field-label">Username<span class="handle-row"><input class="input" id="${id}" value="${esc(value || "")}" placeholder="pick_a_name" autocomplete="off" autocapitalize="off" spellcheck="false"><button type="button" class="dice-btn" data-dice-for="${id}" title="Roll a random username" aria-label="Roll a random username">🎲</button></span>${hint ? `<small class="muted">${esc(hint)}</small>` : ""}</label>`;
+}
+function bindHandleDice(root) {
+  $$("[data-dice-for]", root).forEach((b) => {
+    if (b.dataset.diceBound) return;
+    b.dataset.diceBound = "1";
+    b.onclick = () => {
+      const sel = `#${b.dataset.diceFor}`;
+      const input = root.querySelector(sel) || document.getElementById(b.dataset.diceFor);
+      rollHandleInto(input, b);
+    };
+  });
+}
+// Password visibility (👁): pure type toggle, works on every password field
+// rendered with .pw-wrap. Never logs or stores the value anywhere.
+function pwFieldMarkup(id, label, placeholder, autocomplete) {
+  return `<label class="field-label">${esc(label)}<span class="pw-wrap"><input class="input" id="${id}" type="password" placeholder="${esc(placeholder)}" autocomplete="${autocomplete || "current-password"}"><button type="button" class="pw-toggle off" data-pw-toggle aria-label="Show password" title="Show password">👁️</button></span></label>`;
+}
+function bindPwToggles(root) {
+  $$(".pw-toggle", root).forEach((b) => {
+    if (b.dataset.pwBound) return;
+    b.dataset.pwBound = "1";
+    b.onclick = () => {
+      const input = b.closest(".pw-wrap")?.querySelector("input");
+      if (!input) return;
+      const show = input.type === "password";
+      input.type = show ? "text" : "password";
+      b.setAttribute("aria-pressed", String(show));
+      b.setAttribute("aria-label", show ? "Hide password" : "Show password");
+      b.title = show ? "Hide password" : "Show password";
+      b.classList.toggle("off", !show);
+      try {
+        input.focus();
+      } catch {
+        /* ignore */
+      }
+    };
+  });
+}
 function openProfile() {
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
@@ -36,7 +119,7 @@ function openProfile() {
       <div class="profile-avatar-preview" id="profile-photo-preview">${previewMarkup()}</div>
       <div class="photo-row"><label class="ghost" style="font-size:12px;padding:9px 12px;cursor:pointer">Upload photo<input id="profile-photo" type="file" accept="image/*" hidden></label>${pendingPhoto ? `<button type="button" class="ghost" style="font-size:12px;padding:9px 12px" data-remove-photo>Remove photo</button>` : ""}</div>
       <label class="field-label">Display name<input class="input" id="profile-name" value="${esc(state.profile.name)}"></label>
-      <label class="field-label">Username<input class="input" id="profile-handle" value="${esc(state.profile.handle)}"></label>
+      ${handleFieldMarkup("profile-handle", state.profile.handle, "Yours alone — no two learners share one.")}
     </div>
     <div class="profile-details">
       <label class="field-label">Bio<textarea class="textarea autogrow" id="profile-bio" rows="3">${esc(state.profile.bio)}</textarea></label>
@@ -48,6 +131,8 @@ function openProfile() {
     </div>
   </div>${state.user ? `<div class="auth-session"><span>Signed in as ${esc(state.user.email || state.profile.handle)}</span><button type="button" class="ghost" data-sign-out>Sign out</button></div>` : ""}<div class="modal-actions"><button type="button" class="ghost" data-profile-close>Cancel</button><button type="button" class="primary" data-profile-save>Save profile</button></div></div>`;
   $("#modal-root").append(modal);
+  bindHandleDice(modal);
+  bindPwToggles(modal);
   $("[data-profile-close]", modal).onclick = () => modal.remove();
   $("#profile-photo", modal).onchange = (event) => {
     const file = event.target.files?.[0];
@@ -527,7 +612,7 @@ function bindBadgeShelf(root) {
 function accountAuthMarkup() {
   const reset = state.accountView === "reset";
   const create = state.accountView === "create";
-  return `<div class="auth-header"><span class="auth-kicker">${reset ? "Account recovery" : create ? "Start your journey" : "Welcome back"}</span><h2>${reset ? "Reset your password" : create ? "Create your StudyFlow account" : "Sign in to StudyFlow"}</h2><p class="muted">${reset ? "We will send a secure reset link to your email." : create ? "Your focus history should travel with you." : "Pick up exactly where your attention left off."}</p></div><div class="auth-tabs"><button type="button" data-auth-view="welcome" class="${!create && !reset ? "active" : ""}">Sign in</button><button type="button" data-auth-view="create" class="${create ? "active" : ""}">Create account</button><button type="button" data-auth-view="reset" class="${reset ? "active" : ""}">Reset password</button></div>${reset ? `<label class="field-label">Email<input class="input" id="account-email" type="email" placeholder="you@example.com"></label><button type="button" class="primary auth-submit" data-reset-password>Send reset link</button>` : `<label class="field-label">Email<input class="input" id="account-email" type="email" placeholder="you@example.com"></label><label class="field-label">Password<input class="input" id="account-password" type="password" placeholder="At least 6 characters"></label>${create ? `<label class="field-label">Display name<input class="input" id="account-name" placeholder="How should we call you?"></label><label class="field-label">Country (optional)<input class="input" id="account-country" placeholder="e.g. Ghana"></label><label class="field-label">Phone number (optional)<input class="input" id="account-phone" type="tel" placeholder="e.g. +233 ..."></label><label class="field-label">University (optional)<input class="input" id="account-university" placeholder="Where do you school?"></label><label class="field-label">Subjects you study (optional)<input class="input" id="account-subjects" placeholder="e.g. Calculus, Web Development"></label>` : ""}<button type="button" class="primary auth-submit" data-email-auth>${create ? "Create account" : "Sign in"}</button><div class="auth-divider"><span>or continue with</span></div><div class="oauth-row"><button type="button" class="oauth google" data-provider="google"><b>G</b> Google</button><button type="button" class="oauth apple" data-provider="apple"><b>●</b> Apple</button></div><p class="auth-foot">Already have a verification email? <button type="button" class="text-button" data-resend>Resend it</button></p>`}`;
+  return `<div class="auth-header"><span class="auth-kicker">${reset ? "Account recovery" : create ? "Start your journey" : "Welcome back"}</span><h2>${reset ? "Reset your password" : create ? "Create your StudyFlow account" : "Sign in to StudyFlow"}</h2><p class="muted">${reset ? "We will send a secure reset link to your email." : create ? "Your focus history should travel with you." : "Pick up exactly where your attention left off."}</p></div><div class="auth-tabs"><button type="button" data-auth-view="welcome" class="${!create && !reset ? "active" : ""}">Sign in</button><button type="button" data-auth-view="create" class="${create ? "active" : ""}">Create account</button><button type="button" data-auth-view="reset" class="${reset ? "active" : ""}">Reset password</button></div>${reset ? `<label class="field-label">Email<input class="input" id="account-email" type="email" placeholder="you@example.com"></label><button type="button" class="primary auth-submit" data-reset-password>Send reset link</button>` : `<label class="field-label">Email<input class="input" id="account-email" type="email" placeholder="you@example.com"></label>${pwFieldMarkup("account-password", "Password", "At least 6 characters", create ? "new-password" : "current-password")}${create ? `<label class="field-label">Display name<input class="input" id="account-name" placeholder="How should we call you?"></label>${handleFieldMarkup("account-handle", "", "Claim it now, or roll the dice 🎲")}<label class="field-label">Country (optional)<input class="input" id="account-country" placeholder="e.g. Ghana"></label><label class="field-label">Phone number (optional)<input class="input" id="account-phone" type="tel" placeholder="e.g. +233 ..."></label><label class="field-label">University (optional)<input class="input" id="account-university" placeholder="Where do you school?"></label><label class="field-label">Subjects you study (optional)<input class="input" id="account-subjects" placeholder="e.g. Calculus, Web Development"></label>` : ""}<button type="button" class="primary auth-submit" data-email-auth>${create ? "Create account" : "Sign in"}</button><div class="auth-divider"><span>or continue with</span></div><div class="oauth-row"><button type="button" class="oauth google" data-provider="google"><b>G</b> Google</button><button type="button" class="oauth apple" data-provider="apple"><b>●</b> Apple</button></div><p class="auth-foot">Already have a verification email? <button type="button" class="text-button" data-resend>Resend it</button></p>`}`;
 }
 
 function accountSignedInMarkup(user) {
@@ -537,6 +622,8 @@ function accountSignedInMarkup(user) {
 
 function bindAccount(root) {
   bindBadgeShelf(root);
+  bindHandleDice(root);
+  bindPwToggles(root);
   $$("[data-auth-view]", root).forEach(
     (button) =>
       (button.onclick = () => {
@@ -562,6 +649,9 @@ function bindAccount(root) {
     const profileExtras = create
       ? {
           name: $("#account-name", root)?.value.trim() || "Study Learner",
+          handle:
+            $("#account-handle", root)?.value.trim().replace(/\s+/g, "_") ||
+            randomHandle(),
           country: $("#account-country", root)?.value.trim() || "",
           phone: $("#account-phone", root)?.value.trim() || "",
           university: $("#account-university", root)?.value.trim() || "",
@@ -895,7 +985,7 @@ function renderSettings() {
   const target = $("#tab-settings");
   const minutes = state.timerMinutes || { focus: 25, short: 5, long: 15 };
   const seconds = state.timerSeconds || { focus: 0, short: 0, long: 0 };
-  target.innerHTML = `${viewHead("Settings", "Tune your timer and keep your account secure.")}<div class="grid two">${appearanceCard()}<div class="card"><div class="section-row"><h2>Timer durations</h2><span class="tag">min + sec</span></div><p class="muted">Customise how long each session lasts, down to the second. Short break defaults to 5:00, long break to 15:00.</p><div class="duration-grid"><div><div class="eyebrow">Focus</div><div class="dur-pair"><label class="field-label">Min<input class="input" id="set-focus" type="number" min="0" max="180" step="1" value="${minutes.focus}"></label><label class="field-label">Sec<input class="input" id="set-focus-s" type="number" min="0" max="59" step="1" value="${seconds.focus}"></label></div></div><div><div class="eyebrow">Short break</div><div class="dur-pair"><label class="field-label">Min<input class="input" id="set-short" type="number" min="0" max="180" step="1" value="${minutes.short}"></label><label class="field-label">Sec<input class="input" id="set-short-s" type="number" min="0" max="59" step="1" value="${seconds.short}"></label></div></div><div><div class="eyebrow">Long break</div><div class="dur-pair"><label class="field-label">Min<input class="input" id="set-long" type="number" min="0" max="180" step="1" value="${minutes.long}"></label><label class="field-label">Sec<input class="input" id="set-long-s" type="number" min="0" max="59" step="1" value="${seconds.long}"></label></div></div></div><button type="button" class="primary" data-save-durations>Save durations</button></div><div class="card"><div class="section-row"><h2>Change password</h2><span class="tag">cloud accounts</span></div>${state.user && backendConfigured ? `<p class="muted">Signed in as ${esc(state.user.email || state.profile.handle)}. Enter a new password below.</p><label class="field-label">New password<input class="input" id="set-new-password" type="password" placeholder="At least 6 characters"></label><label class="field-label">Confirm new password<input class="input" id="set-confirm-password" type="password" placeholder="Repeat the new password"></label><button type="button" class="primary" data-change-password>Update password</button>` : `<p class="muted">Password changes apply to your cloud account. ${backendConfigured ? "Sign in from the Account tab first." : "Add Supabase keys to enable cloud accounts."}</p><label class="field-label">Email<input class="input" id="set-reset-email" type="email" placeholder="you@example.com" value="${esc(state.profile.email || (state.user && state.user.email) || "")}"></label><button type="button" class="ghost" data-send-reset>Send reset link</button>`}</div>${notifCard()}${comfortCard()}${shortcutsCard()}${flowCard()}${themeCard()}${displayCard()}${techCheckCard()}${dataMarkup()}</div>`;
+  target.innerHTML = `${viewHead("Settings", "Tune your timer and keep your account secure.")}<div class="grid two">${appearanceCard()}<div class="card"><div class="section-row"><h2>Timer durations</h2><span class="tag">min + sec</span></div><p class="muted">Customise how long each session lasts, down to the second. Short break defaults to 5:00, long break to 15:00.</p><div class="duration-grid"><div><div class="eyebrow">Focus</div><div class="dur-pair"><label class="field-label">Min<input class="input" id="set-focus" type="number" min="0" max="180" step="1" value="${minutes.focus}"></label><label class="field-label">Sec<input class="input" id="set-focus-s" type="number" min="0" max="59" step="1" value="${seconds.focus}"></label></div></div><div><div class="eyebrow">Short break</div><div class="dur-pair"><label class="field-label">Min<input class="input" id="set-short" type="number" min="0" max="180" step="1" value="${minutes.short}"></label><label class="field-label">Sec<input class="input" id="set-short-s" type="number" min="0" max="59" step="1" value="${seconds.short}"></label></div></div><div><div class="eyebrow">Long break</div><div class="dur-pair"><label class="field-label">Min<input class="input" id="set-long" type="number" min="0" max="180" step="1" value="${minutes.long}"></label><label class="field-label">Sec<input class="input" id="set-long-s" type="number" min="0" max="59" step="1" value="${seconds.long}"></label></div></div></div><button type="button" class="primary" data-save-durations>Save durations</button></div><div class="card"><div class="section-row"><h2>Change password</h2><span class="tag">cloud accounts</span></div>${state.user && backendConfigured ? `<p class="muted">Signed in as ${esc(state.user.email || state.profile.handle)}. Enter a new password below.</p>${pwFieldMarkup("set-new-password", "New password", "At least 6 characters", "new-password")}${pwFieldMarkup("set-confirm-password", "Confirm new password", "Repeat the new password", "new-password")}<button type="button" class="primary" data-change-password>Update password</button>` : `<p class="muted">Password changes apply to your cloud account. ${backendConfigured ? "Sign in from the Account tab first." : "Add Supabase keys to enable cloud accounts."}</p><label class="field-label">Email<input class="input" id="set-reset-email" type="email" placeholder="you@example.com" value="${esc(state.profile.email || (state.user && state.user.email) || "")}"></label><button type="button" class="ghost" data-send-reset>Send reset link</button>`}</div>${notifCard()}${comfortCard()}${shortcutsCard()}${flowCard()}${themeCard()}${displayCard()}${techCheckCard()}${dataMarkup()}</div>`;
   bindSettings(target);
 }
 
@@ -947,6 +1037,7 @@ function bindDataZone(root) {
 }
 function bindSettings(root) {
   bindDataZone(root);
+  bindPwToggles(root);
   $$("[data-mode-set]", root).forEach(
     (b) =>
       (b.onclick = () => {

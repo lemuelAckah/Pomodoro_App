@@ -2634,11 +2634,9 @@ function openStoryViewer(items, startIdx) {
       if (!st.items.length) {
         closeStoryViewer();
         renderCommunity();
-        notify("Status deleted");
         return;
       }
       show(Math.min(st.idx, st.items.length - 1));
-      notify("Status deleted");
     });
   };
   stage().addEventListener("pointerdown", pause);
@@ -2859,7 +2857,6 @@ function askDeleteStatus(item) {
       }
       done(false);
       afterStatusDeleted(item.key);
-      notify("Status deleted");
       renderCommunity(); // refresh the story strip when deleted from outside the viewer
     }, 60);
   };
