@@ -452,10 +452,9 @@ function estimatePdfPages(blob) {
     }
   }).catch(() => null);
 }
-function coverUrl(book, signedCache) {
+function coverUrl(book) {
   if (book.coverData) return book.coverData;
-  if (book.coverPath && signedCache && signedCache.get(book.coverPath)) return signedCache.get(book.coverPath);
-  return "";
+  return coverSignedUrl(book.coverPath);
 }
 function monogram(title) {
   const words = String(title || "?").trim().split(/\s+/).slice(0, 2);
@@ -494,18 +493,35 @@ function libSignature() {
 function libFiltering() {
   return bookHome.filter !== "all" || !!bookHome.q || bookHome.cat !== "All";
 }
-const coverSignedCache = new Map();
+const coverSignedCache = new Map(); // path -> { url, exp }
+// Signed URLs live 24h server-side: cache them for 20h (no repeated
+// downloads) and cap the map (bounded memory even at 300 books).
+const COVER_URL_TTL_MS = 20 * 3600 * 1000;
+const COVER_CACHE_MAX = 60;
+function coverSignedUrl(path) {
+  const hit = path ? coverSignedCache.get(path) : null;
+  if (!hit) return "";
+  if (hit.exp <= Date.now()) {
+    coverSignedCache.delete(path);
+    return "";
+  }
+  return hit.url;
+}
 
 async function resolveCovers(books) {
   if (!backendConfigured) return false;
   let changed = false;
+  const now = Date.now();
   await Promise.all((books || []).map(async (b) => {
-    if (!b.coverPath || b.coverData || coverSignedCache.has(b.coverPath)) return;
+    if (!b.coverPath || b.coverData || coverSignedUrl(b.coverPath)) return;
     try {
       const { data, error } = await getBookFileUrl(b.coverPath, 86400);
       const url = !error && data ? data.signedUrl || data.signedURL : "";
       if (url) {
-        coverSignedCache.set(b.coverPath, url);
+        if (coverSignedCache.size >= COVER_CACHE_MAX) {
+          coverSignedCache.delete(coverSignedCache.keys().next().value);
+        }
+        coverSignedCache.set(b.coverPath, { url, exp: now + COVER_URL_TTL_MS });
         changed = true;
       }
     } catch {
@@ -515,7 +531,7 @@ async function resolveCovers(books) {
   return changed;
 }
 function coverImg(book, cls) {
-  const url = coverUrl(book, coverSignedCache);
+  const url = coverUrl(book);
   if (url) return `<img class="${cls || ""}" src="${url}" alt="Cover of ${esc(book.title)}" loading="lazy">`;
   return `<span class="book-mono ${cls || ""}" aria-hidden="true">${esc(monogram(book.title))}</span>`;
 }
@@ -951,7 +967,7 @@ async function renderBookDetails(t, id) {
   if (editBtn) editBtn.onclick = () => openEditBook(book.id);
   const delBtn = $("[data-book-delete]", t);
   if (delBtn) delBtn.onclick = () => askDeleteBook(book.id);
-  if (book.coverPath && !book.coverData && !coverSignedCache.has(book.coverPath)) {
+  if (book.coverPath && !book.coverData && !coverSignedUrl(book.coverPath)) {
     resolveCovers([book]).then((changed) => {
       if (changed && state.tab === "books" && state.bookView?.name === "details" && state.bookView?.id === book.id)
         renderBookDetails(t, book.id);
@@ -1278,7 +1294,7 @@ function openEditBook(id) {
   <label class="field-label">Custom category<input class="input" data-ed-custom placeholder="Leave blank to keep selection"></label></div>
   <label class="field-label">Tags (comma separated)<input class="input" data-ed-tags value="${esc((book.tags || []).join(", "))}"></label>
   <div class="grid two"><label class="field-label">ISBN<input class="input" data-ed-isbn value="${esc(book.isbn || "")}"></label>
-  <div class="field-label">Replace cover${coverPickerMarkup("data-ed-cover", book.coverData || coverSignedCache.get(book.coverPath) || "")}</div></div>
+  <div class="field-label">Replace cover${coverPickerMarkup("data-ed-cover", book.coverData || coverSignedUrl(book.coverPath) || "")}</div></div>
   <label class="field-label" style="display:none">Visibility<select class="select" data-ed-vis><option value="private" selected>Private — only I can see this book</option></select></label>
   <label class="toggle-row"><span><strong>Allow downloads</strong><small>Export the file when reading your book</small></span><input type="checkbox" data-ed-dl${book.allowDownload ? " checked" : ""}></label>
   <p class="st-confirm-err" data-ed-err hidden></p>
@@ -1371,7 +1387,7 @@ function askDeleteBook(id) {
       await bookBlobDelete("text:" + (fresh.fileKey || fresh.id));
       bookUrlCache.delete(fresh.fileKey || fresh.id);
       try {
-        const url = coverSignedCache.get(fresh.coverPath);
+        const url = coverSignedUrl(fresh.coverPath);
         if (url && url.startsWith("blob:")) URL.revokeObjectURL(url);
       } catch { /* ignore */ }
       if (fresh.coverPath) coverSignedCache.delete(fresh.coverPath);
