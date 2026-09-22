@@ -1,4 +1,5 @@
 import { state, save, persist, uid, get } from "./core.js";
+import { mirrorSongFavorites } from "./services/music-sync.js";
 
 export const PLAYER_DEFAULTS = {
   repeat: "off",
@@ -151,6 +152,12 @@ export function toggleFavorite(songId) {
   if (song) song.liked = isFavorite(songId);
   persist();
   savePlayerStorage();
+  // Discrete user gesture: mirror the single row best-effort (never throws).
+  try {
+    mirrorSongFavorites(songId, isFavorite(songId));
+  } catch {
+    /* offline applies on next pull */
+  }
   return isFavorite(songId);
 }
 

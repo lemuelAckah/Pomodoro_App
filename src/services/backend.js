@@ -170,6 +170,7 @@ export async function deleteMyBackendData() {
   await wipe("group_memberships", eq("user_id"), "group memberships");
   await wipe("friendships", (q) => q.or(`user_id.eq.${uid},friend_id.eq.${uid}`), "friendships");
   await wipe("messages", eq("sender_id"), "sent messages");
+  await wipe("message_reactions", eq("user_id"), "message reactions");
   await wipe("message_receipts", eq("user_id"), "message receipts");
   await wipe("notifications", eq("user_id"), "notifications");
   await wipe("purchases", eq("buyer_id"), "purchase records");
@@ -427,7 +428,7 @@ export async function saveUserSettings(patch) {
   if (!user)
     return { data: null, error: new Error("Sign in to save settings") };
   const row = { user_id: user.id, updated_at: new Date().toISOString() };
-  for (const k of ["theme", "notifications", "timer", "display"]) {
+  for (const k of ["theme", "notifications", "timer", "display", "music"]) {
     if (patch && patch[k] !== undefined) row[k] = patch[k];
   }
   if (typeof row.theme === "string") row.theme = row.theme.slice(0, 64) || "system";
@@ -1644,6 +1645,42 @@ export async function cloudDeletePlaylist(id) {
   return e ? { data: null, error: e } : { data: true, error: null };
 }
 
+// Song favorites (020 widened the generic favorites table to item_type='song').
+// Discrete user gestures only — never per-play writes.
+export async function cloudSetSongFavorite(songId, on) {
+  const { userId, error } = await requireUserId();
+  if (error) return { data: null, error };
+  const itemId = String(songId || "").slice(0, 160);
+  if (!itemId) return { data: null, error: new Error("Pick a song first") };
+  if (on) {
+    return supabase
+      .from("favorites")
+      .upsert({ user_id: userId, item_id: itemId, item_type: "song" }, { onConflict: "user_id,item_id" });
+  }
+  return supabase
+    .from("favorites")
+    .delete()
+    .eq("user_id", userId)
+    .eq("item_id", itemId)
+    .eq("item_type", "song");
+}
+
+export async function cloudListSongFavorites() {
+  const { userId, error } = await requireUserId();
+  if (error) return { data: [], error };
+  const res = await supabase
+    .from("favorites")
+    .select("item_id")
+    .eq("user_id", userId)
+    .eq("item_type", "song")
+    .limit(500);
+  if (res.error) {
+    if (/does not exist|schema cache/i.test(res.error.message || "")) return { data: [], error: null };
+    return res;
+  }
+  return { data: (res.data || []).map((r) => r.item_id).filter(Boolean), error: null };
+}
+
 // --- Phase 7: community, groups, stories & notifications ----------------------
 // Role enforcement, ownership transfer, notification fan-out and the directory
 // lockdown all live in migration 016 SECURITY DEFINER RPCs. The browser calls
@@ -1864,6 +1901,36 @@ export async function deleteCloudMessage(messageId) {
   if (authError) return { data: null, error: authError };
   const res = await supabase.rpc("sf_message_delete", { p_message_id: messageId });
   if (res.error && isMissingRpc(res.error)) return phase7Unavailable();
+  return res;
+}
+
+// --- message reactions (021): toggle is server-verified, reads are RLS ----
+
+const REACT_EMOJI = ["heart", "thumbsUp", "laugh", "wow", "cry", "clap"];
+
+export async function reactToMessage(messageId, emoji) {
+  const { error: authError } = await requireUserId();
+  if (authError) return { data: null, error: authError };
+  if (!REACT_EMOJI.includes(emoji)) return { data: null, error: new Error("Unknown reaction") };
+  const res = await supabase.rpc("sf_react_toggle", { p_message_id: messageId, p_emoji: emoji });
+  if (res.error && isMissingRpc(res.error)) return phase7Unavailable();
+  return res;
+}
+
+export async function loadMessageReactions(messageIds) {
+  const { error: authError } = await requireUserId();
+  if (authError) return { data: [], error: authError };
+  const ids = [...new Set((messageIds || []).filter(Boolean))].slice(0, 300);
+  if (!ids.length) return { data: [], error: null };
+  const res = await supabase
+    .from("message_reactions")
+    .select("message_id,user_id,emoji")
+    .in("message_id", ids)
+    .limit(2000);
+  if (res.error) {
+    if (/does not exist|schema cache/i.test(res.error.message || "")) return { data: [], error: null };
+    return res;
+  }
   return res;
 }
 

@@ -457,6 +457,14 @@ function equippedBadges() {
     .map((id) => ownedById.get(id) || findStoreItem(id))
     .filter((item) => item && item.category === "Badges");
 }
+// Every acquired badge, newest acquisition last (owned entries carry
+// boughtAt; legacy entries without one sort stable).
+function ownedBadges() {
+  return (state.owned || [])
+    .filter((o) => o && !Array.isArray(o) && o.id != null && o.category === "Badges")
+    .slice()
+    .sort((a, b) => (b.boughtAt || 0) - (a.boughtAt || 0));
+}
 function toggleShowcaseBadge(item) {
   if (!item || item.category !== "Badges") return "not-badge";
   const ids = showcasedBadgeIds();
@@ -750,7 +758,7 @@ function collectionRow(i, idx) {
     const armed = Boolean(state.boosts?.doubleArmed);
     action = `<button type="button" class="${armed ? "ghost" : "primary"} ${btn}" data-activate-double="${idx}"${armed ? " disabled" : ""}>${armed ? "Armed " + sicon("check") : "Activate"}</button>`;
   }
-  return `<div class="collection-row"><span class="collection-item">${i.emoji} <strong>${esc(i.name)}</strong></span><span class="collection-actions">${action}<button type="button" class="ghost ${btn}" data-sell-idx="${idx}" title="Sell for ${sell} coins">+${sell} ${sicon("coin")}</button></span></div>`;
+  return `<div class="collection-row"><span class="collection-item">${i.emoji} <strong>${esc(i.name)}</strong></span><span class="collection-actions">${action}${i.unbuyable ? `<span class="tag" title="Earned badges can never be sold">earned · unsellable</span>` : `<button type="button" class="ghost ${btn}" data-sell-idx="${idx}" title="Sell for ${sell} coins">+${sell} ${sicon("coin")}</button>`}</span></div>`;
 }
 
 function collectionMarkup() {
@@ -2448,6 +2456,7 @@ function renderStore() {
           notify(`${item.name} playing`);
         }
         persist();
+        pushUserSettings();
         renderStore();
       }),
   );
@@ -2492,6 +2501,7 @@ function renderStore() {
       (b.onclick = () => {
         const preview = state.owned[+b.dataset.sellIdx];
         if (!preview) return;
+        if (preview.unbuyable) return notify("Earned badges can't be sold — they stay with you.");
         consumeOne(preview.id, () => {
           persist();
           applyEquippedTheme();
@@ -2682,4 +2692,4 @@ async function checkoutCloud(fresh, onConfirmed, onCancelled) {
   if (onConfirmed) onConfirmed();
 }
 
-export { storeItems, equippedAvatarEmoji, equippedBadgeEmoji, equippedBadges, checkinReward, earnMarkup, claimCheckin, removeOwnedAt, collectionRow, collectionMarkup, purchaseHistoryMarkup, inSeason, seasonDaysLeft, normItem, findStoreItem, migrateOwned, shopItems, MYSTERY_BOXES, dailyDeals, dealCountdown, boxItemsByRarity, rollBoxReward, grantReward, boxBusy, buyBox, FREE_BOX_ODDS, hash01, rollFreeBox, claimBusy, claimFreeBox, collectFreeReward, freeBoxCountdown, freeBoxMarkup, freeBoxState, isStackable, ownsMine, MAX_QTY, itemQty, setItemQty, clearItemQty, qtyStepperMarkup, qtyLineText, refreshQtyDom, changeQty, bindQtySteppers, cartLines, cartTotal, cartUnits, refreshCartFooter, afterCardQty, afterStoreQty, recordTransaction, dealsMarkup, mysteryMarkup, openBox, openFreeBoxReveal, buyDeal, giftRecipient, giftTarget, giftView, giftSelected, giftQuery, giftResults, giftSearching, giftSearchTimer, giftSearchToken, recipientOptions, matchLocalFriends, giftBtnInner, bindRecipient, openGiftCenter, closeGiftCenter, giftPersonRow, renderGiftCenter, bindGiftPicks, runGiftSearch, deliverGiftCloud, checkoutGiftFlow, renderStore, checkoutBusy, checkout, activeDeals, refreshCloudDeals };
+export { storeItems, equippedAvatarEmoji, equippedBadgeEmoji, equippedBadges, showcasedBadgeIds, toggleShowcaseBadge, ownedBadges, MAX_SHOWCASE_BADGES, checkinReward, earnMarkup, claimCheckin, removeOwnedAt, collectionRow, collectionMarkup, purchaseHistoryMarkup, inSeason, seasonDaysLeft, normItem, findStoreItem, migrateOwned, shopItems, MYSTERY_BOXES, dailyDeals, dealCountdown, boxItemsByRarity, rollBoxReward, grantReward, boxBusy, buyBox, FREE_BOX_ODDS, hash01, rollFreeBox, claimBusy, claimFreeBox, collectFreeReward, freeBoxCountdown, freeBoxMarkup, freeBoxState, isStackable, ownsMine, MAX_QTY, itemQty, setItemQty, clearItemQty, qtyStepperMarkup, qtyLineText, refreshQtyDom, changeQty, bindQtySteppers, cartLines, cartTotal, cartUnits, refreshCartFooter, afterCardQty, afterStoreQty, recordTransaction, dealsMarkup, mysteryMarkup, openBox, openFreeBoxReveal, buyDeal, giftRecipient, giftTarget, giftView, giftSelected, giftQuery, giftResults, giftSearching, giftSearchTimer, giftSearchToken, recipientOptions, matchLocalFriends, giftBtnInner, bindRecipient, openGiftCenter, closeGiftCenter, giftPersonRow, renderGiftCenter, bindGiftPicks, runGiftSearch, deliverGiftCloud, checkoutGiftFlow, renderStore, checkoutBusy, checkout, activeDeals, refreshCloudDeals };

@@ -240,7 +240,7 @@ function renderTimer() {
     )
     .join(
       "",
-    )}</div><div class="template-row">${TIMER_TEMPLATES.map((p) => `<button type="button" class="template-chip" data-template="${p.id}" title="Focus ${p.focus}:${String(p.focusSec ?? 0).padStart(2, "0")} · break ${p.short}:${String(p.shortSec ?? 0).padStart(2, "0")}">${p.name}</button>`).join("")}</div><div class="dur-row"><label class="field-label">Minutes<input class="input dur-input" id="dur-min" type="number" min="0" max="180" step="1" value="${Math.floor(durations[state.mode] / 60)}" aria-label="Custom minutes"></label><label class="field-label">Seconds<input class="input dur-input" id="dur-sec" type="number" min="0" max="59" step="1" value="${durations[state.mode] % 60}" aria-label="Custom seconds"></label><button type="button" class="ghost" data-set-dur title="Apply to ${modeLabels[state.mode]}">Set duration</button></div>${challengeLockBanner()}<div class="focus-live off" data-focus-live><span class="live-dot"></span>Focus live — leaving this page resets the session</div>${techTagMarkup()}<div class="timer-ring" style="--progress:${(state.time / durations[state.mode]) * 360}deg"><div><div class="time">${fmt(state.time)}</div><div class="timer-label">${modeLabels[state.mode]}</div></div></div><div class="timer-actions"><button type="button" class="icon-btn" data-reset title="Reset">↻</button><button type="button" class="primary" data-toggle>${state.running ? "Pause" : "Start session"}</button><button type="button" class="icon-btn" data-focusview title="Focus mode — just the timer">${sicon("expand")}</button></div><div class="muted" style="margin-top:36px">${state.sessions % 4}/4 sessions until a long break</div></div><div class="card tasks-card"><div class="section-row"><h2>Today’s tasks</h2><span class="tag" data-task-count>${state.tasks.filter((t) => t.done).length}/${state.tasks.length} complete</span><span class="sync-pill" data-sync-pill hidden></span></div><div class="input-row"><input class="input" id="task-input" placeholder="What are you working on?"><button type="button" class="primary" data-add-task>+</button></div><div id="task-list">${state.tasks.length ? state.tasks.map(taskRow).join("") : '<p class="muted" style="padding:25px 0">Your task list is clear. Add one small next step.</p>'}</div></div></div><div class="grid four stats"><div class="card stat"><span>Sessions</span><strong>${state.sessions}</strong><span>all time</span></div><div class="card stat"><span>Coins</span><strong data-coin="stat">${state.coins}</strong><span>available to spend</span></div><div class="card stat"><span>Tasks</span><strong>${state.tasks.filter((t) => t.done).length}</strong><span>completed</span></div><div class="card stat"><span>Focus streak</span><strong>${state.streak.count}</strong>${streakDots()}<span>day streak</span></div></div>${missionDeskMarkup()}${techOfDayMarkup()}${gardenMarkup()}${recordsMarkup()}${achievementsCabinetMarkup()}`;
+    )}</div><div class="template-row">${TIMER_TEMPLATES.map((p) => `<button type="button" class="template-chip" data-template="${p.id}" title="Focus ${p.focus}:${String(p.focusSec ?? 0).padStart(2, "0")} · break ${p.short}:${String(p.shortSec ?? 0).padStart(2, "0")}">${p.name}</button>`).join("")}</div><div class="dur-row"><label class="field-label">Minutes<input class="input dur-input" id="dur-min" type="number" min="0" max="180" step="1" value="${Math.floor(durations[state.mode] / 60)}" aria-label="Custom minutes"></label><label class="field-label">Seconds<input class="input dur-input" id="dur-sec" type="number" min="0" max="59" step="1" value="${durations[state.mode] % 60}" aria-label="Custom seconds"></label><button type="button" class="ghost" data-set-dur title="Apply to ${modeLabels[state.mode]}">Set duration</button></div>${challengeLockBanner()}<div class="focus-live off" data-focus-live><span class="live-dot"></span>Focus live — leaving this page resets the session</div>${techTagMarkup()}<div class="timer-ring" style="--progress:${(state.time / durations[state.mode]) * 360}deg"><div><div class="time">${fmt(state.time)}</div><div class="timer-label">${modeLabels[state.mode]}</div></div></div><div class="timer-actions"><button type="button" class="icon-btn" data-reset title="Reset">↻</button><button type="button" class="primary" data-toggle>${state.running ? "Pause" : "Start session"}</button><button type="button" class="icon-btn" data-focusview title="Focus mode — just the timer">${sicon("expand")}</button></div><div class="muted" style="margin-top:36px">${state.sessions % 4}/4 sessions until a long break</div></div><div class="card tasks-card"><div class="section-row"><h2>Today’s tasks</h2><span class="tag" data-task-count>${state.tasks.filter((t) => t.done).length}/${state.tasks.length} complete</span><span class="sync-pill" data-sync-pill hidden></span></div><div class="input-row"><input class="input" id="task-input" placeholder="What are you working on?"><button type="button" class="primary" data-add-task>+</button></div><div id="task-list">${state.tasks.length ? state.tasks.map(taskRow).join("") : '<p class="muted" style="padding:25px 0">Your task list is clear. Add one small next step.</p>'}</div></div></div><div class="grid four stats"><div class="card stat"><span>Sessions</span><strong>${state.sessions}</strong><span>all time</span></div><div class="card stat"><span>Coins</span><strong data-coin="stat">${state.coins}</strong><span>available to spend</span></div><div class="card stat"><span>Tasks</span><strong>${state.tasks.filter((t) => t.done).length}</strong><span>completed</span></div><div class="card stat"><span>Focus streak</span><strong>${state.streak.count}</strong>${streakDots()}<span>day streak</span></div></div>${missionDeskMarkup()}${techOfDayMarkup()}${gardenMarkup()}${recordsMarkup()}${achievementsCabinetMarkup()}${masteryLadderMarkup()}`;
   $$("[data-mode]", target).forEach(
     (b) =>
       (b.onclick = () => {
@@ -447,6 +447,78 @@ const ACHIEVEMENTS = [
   { id: "marathon", icon: "run", emoji: sicon("run"), name: "Marathon Day", desc: "Focus 120+ minutes in a single day.", progress: () => ({ have: Math.min(biggestDay(), 120), need: 120, suffix: "m" }) },
 ];
 
+// MASTERY LADDER — Master → Grandmaster → Mythic → Legendary. These badges
+// are NEVER sold, boxed, or gifted: they unlock only through brutal,
+// months-long feats. Each entry carries its badge item definition so the
+// unlock can grant it straight into the owned collection.
+const MASTERY_LADDER = [
+  {
+    id: "master-focus", icon: "gem", emoji: sicon("gem"), tier: "Master",
+    name: "Master of Focus",
+    desc: "Complete 250 focus sessions. Months of showing up.",
+    progress: () => ({ have: Math.min(state.sessions, 250), need: 250 }),
+    badge: { id: "master-focus", name: "Master of Focus badge", category: "Badges", emoji: sicon("gem"), price: 0, description: "Earned through 250 focus sessions. Never sold.", tier: "Master", unbuyable: true },
+  },
+  {
+    id: "grandmaster-resolve", icon: "crown", emoji: sicon("crown"), tier: "Grandmaster",
+    name: "Grandmaster's Resolve",
+    desc: "Reach a 60-day focus streak. Two relentless months.",
+    progress: () => ({ have: Math.min(Math.max(state.streak.count, state.bestStreak || 0), 60), need: 60 }),
+    badge: { id: "grandmaster-resolve", name: "Grandmaster's Resolve badge", category: "Badges", emoji: sicon("crown"), price: 0, description: "Earned through a 60-day streak. Never sold.", tier: "Grandmaster", unbuyable: true },
+  },
+  {
+    id: "mythic-mind", icon: "planet", emoji: sicon("planet"), tier: "Mythic",
+    name: "Mythic Mind",
+    desc: "Accumulate 500 hours of total focus. A legend in the making.",
+    progress: () => ({ have: Math.min(state.totalFocusMin, 30000), need: 30000, suffix: "m" }),
+    badge: { id: "mythic-mind", name: "Mythic Mind badge", category: "Badges", emoji: sicon("planet"), price: 0, description: "Earned through 500 hours of focus. Never sold.", tier: "Mythic", unbuyable: true },
+  },
+  {
+    id: "living-legend", icon: "trophy", emoji: sicon("trophy"), tier: "Legendary",
+    name: "Living Legend",
+    desc: "Reach a 365-day focus streak. Immortality, earned daily.",
+    progress: () => ({ have: Math.min(Math.max(state.streak.count, state.bestStreak || 0), 365), need: 365 }),
+    badge: { id: "living-legend", name: "Living Legend badge", category: "Badges", emoji: sicon("trophy"), price: 0, description: "Earned through a 365-day streak. Never sold.", tier: "Legendary", unbuyable: true },
+  },
+];
+
+function masteryLadderMarkup() {
+  const earned = MASTERY_LADDER.filter((m) => (state.achievements || []).includes(m.id));
+  return `<div class="card mastery-ladder" style="margin-top:18px"><div class="section-row"><h2>${sicon("crown")} Mastery ladder</h2><span class="tag">${earned.length}/${MASTERY_LADDER.length} claimed</span></div><p class="muted">Four badges money can't buy — each one demands months of proof. Past bests count, so nothing you've already done is wasted.</p><div class="ladder">${MASTERY_LADDER.map((m, i) => {
+    const isEarned = (state.achievements || []).includes(m.id);
+    const p = achievementProgress(m);
+    const pct = p ? Math.min(100, Math.round((p.have / p.need) * 100)) : 0;
+    return `<div class="ladder-rung${isEarned ? " earned" : ""}${i === MASTERY_LADDER.length - 1 ? " final" : ""}"><span class="ladder-node tier-${m.tier.toLowerCase()}">${m.emoji}</span><div class="ladder-body"><div class="section-row"><strong>${esc(m.name)}</strong><span class="tag rarity-${m.tier.toLowerCase()}">${esc(m.tier)}</span></div><small class="muted">${esc(m.desc)}</small>${isEarned ? `<span class="tag">claimed ${sicon("check")}</span>` : p ? `<div class="crew-track slim"><span class="crew-fill" style="width:${pct}%"></span></div><small class="muted">${p.have}/${p.need}${p.suffix} · ${pct}%</small>` : ""}<span class="tag unbuyable-tag">never sold · earn only</span></div></div>`;
+  }).join("")}</div></div>`;
+}
+
+function checkMasteryLadder() {
+  let changed = false;
+  MASTERY_LADDER.forEach((m) => {
+    if ((state.achievements || []).includes(m.id)) return;
+    const p = achievementProgress(m);
+    if (!(p && p.have >= p.need)) return;
+    state.achievements.push(m.id);
+    changed = true;
+    // Grant the badge item straight into the owned collection (deduped), so
+    // it appears on the Badge shelf and can be showcased immediately.
+    if (!(state.owned || []).some((o) => o && o.id === m.badge.id)) {
+      state.owned = [...(state.owned || []), { ...m.badge, owner: "me", boughtAt: Date.now() }];
+    }
+    addNotification("Mastery claimed", m.name, m.icon || "crown");
+    celebrate(false);
+    notify(`${m.emoji} MASTERY CLAIMED: ${m.name}!`);
+    if (cloudRewards()) {
+      try {
+        secureUnlock(m.id).catch(() => {});
+      } catch {
+        /* unlock sync is best-effort */
+      }
+    }
+  });
+  if (changed) persist();
+}
+
 function achievementProgress(a) {
   try {
     const p = a.progress ? a.progress() : null;
@@ -493,6 +565,8 @@ function checkAchievements() {
       }
     }
   });
+  // Mastery ladder runs on the same beat — brutal feats checked every session.
+  checkMasteryLadder();
   if (changed) persist();
 }
 
@@ -1185,4 +1259,4 @@ function addTask() {
 
 
 
-export { durations, applyDurations, modeLabels, timerHandle, recordFocusDay, STREAK_MILESTONES, checkStreakMilestone, GARDEN_COMMON, GARDEN_RARE, GARDEN_LEGENDARY, plantFlower, wiltNewest, gardenMarkup, streakDots, renderTimer, focusScore, scoreGrade, ACHIEVEMENTS, checkAchievements, achievementProgress, achievementsCabinetMarkup, saveAccomplishment, TIMER_TEMPLATES, applyTemplate, applyCustomDuration, techniqueOfDay, techOfDayMarkup, biggestDay, recordsMarkup, techTagMarkup, toggleTimer, startTimer, pauseTimer, startTick, tickTimer, completeSession, BREAK_IDEAS, randomBreakIdea, armAutoStart, showCompletionCard, sessionInProgress, resetFocusSession, handleWindowHidden, updateTimerDom, renderMiniTimer, taskRow, openTaskEditor, addTask, openFocusView, closeFocusView, toggleBoss };
+export { durations, applyDurations, modeLabels, timerHandle, recordFocusDay, STREAK_MILESTONES, checkStreakMilestone, GARDEN_COMMON, GARDEN_RARE, GARDEN_LEGENDARY, plantFlower, wiltNewest, gardenMarkup, streakDots, renderTimer, focusScore, scoreGrade, ACHIEVEMENTS, checkAchievements, achievementProgress, achievementsCabinetMarkup, MASTERY_LADDER, masteryLadderMarkup, checkMasteryLadder, saveAccomplishment, TIMER_TEMPLATES, applyTemplate, applyCustomDuration, techniqueOfDay, techOfDayMarkup, biggestDay, recordsMarkup, techTagMarkup, toggleTimer, startTimer, pauseTimer, startTick, tickTimer, completeSession, BREAK_IDEAS, randomBreakIdea, armAutoStart, showCompletionCard, sessionInProgress, resetFocusSession, handleWindowHidden, updateTimerDom, renderMiniTimer, taskRow, openTaskEditor, addTask, openFocusView, closeFocusView, toggleBoss };

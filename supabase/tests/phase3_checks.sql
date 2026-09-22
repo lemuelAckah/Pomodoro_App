@@ -98,5 +98,15 @@ begin
     raise notice 'PASS tasks rejects unauthenticated inserts (%)', sqlerrm;
   end;
 
+  -- 7. music prefs column (019 follow-up: ambient mix + master volume) --------
+  select count(*) into v_count
+  from information_schema.columns
+  where table_schema = 'public' and table_name = 'user_settings'
+    and column_name = 'music';
+  if v_count <> 1 then
+    raise exception 'FAIL user_settings.music column missing (apply 019_phase3_music_prefs.sql)';
+  end if;
+  raise notice 'PASS user_settings.music present';
+
   raise notice 'PHASE 3 CHECKS COMPLETE';
 end $$;

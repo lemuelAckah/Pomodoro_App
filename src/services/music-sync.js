@@ -29,6 +29,8 @@ import {
   cloudListPlaylists,
   cloudUpsertPlaylists,
   cloudDeletePlaylist,
+  cloudSetSongFavorite,
+  cloudListSongFavorites,
 } from "./backend.js";
 
 const OUTBOX_KEY = "sf-music-outbox";
@@ -124,6 +126,37 @@ export function mirrorMusicTracks() {
 
 export function deleteTrackEverywhere(id) {
   queueOutbox("tracks", id);
+  // Best-effort: drop the cloud favorite row too so it never resurrects.
+  cloudSetSongFavorite(id, false).catch(() => {});
+}
+
+// Song favorites: discrete toggles only (never per-play writes). Pull unions
+// cloud ids into the local set; a cross-device un-favorite can resurface on
+// another device's next pull — accepted tradeoff, documented here.
+export function mirrorSongFavorites(songId, on) {
+  if (!canSync() || !songId) return;
+  cloudSetSongFavorite(songId, on).catch(() => {});
+}
+
+export async function pullSongFavorites() {
+  if (!canSync()) return { ok: false, offline: true };
+  try {
+    const res = await cloudListSongFavorites();
+    if (res.error) return { ok: false };
+    const cloud = new Set(res.data || []);
+    if (!cloud.size) return { ok: true };
+    const raw = get("sf-player", {});
+    const local = Array.isArray(raw.favorites) ? raw.favorites : [];
+    const merged = [...new Set([...local, ...cloud])].slice(-500);
+    if (merged.length !== local.length) {
+      save("sf-player", { ...raw, favorites: merged });
+      if (state.player && typeof state.player === "object") state.player.favorites = merged;
+      persist();
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
 }
 
 export function mirrorPlaylists() {
@@ -213,6 +246,11 @@ export async function pullMusic() {
     persist();
   } catch {
     ok = false;
+  }
+  try {
+    await pullSongFavorites();
+  } catch {
+    /* favorites merge is best-effort */
   }
   scheduleFlush();
   return { ok };

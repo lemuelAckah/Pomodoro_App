@@ -11,7 +11,7 @@ import {
   createCloudGroup, joinCloudGroup, leaveCloudGroup, deleteCloudGroup,
   groupCreate, groupAddMember, groupSetMember, groupLeave, groupTransfer,
   groupDelete, groupUpdate, getMyGroups, getGroupMembers,
-  loadConversation, deleteCloudMessage,
+  loadConversation, deleteCloudMessage, reactToMessage, loadMessageReactions,
   listFriendships, sendFriendRequest, respondFriendRequest, removeFriend,
   listBlocks, blockUser, unblockUser as serverUnblock,
   createStory, listStories, viewStory, deleteStory, listStoryViews,
@@ -4832,11 +4832,17 @@ function bindChat(root, id) {
         msg.reactions = msg.reactions || {};
         const users = msg.reactions[emoji] || [];
         const key = chatKey();
-        msg.reactions[emoji] = users.includes(key)
-          ? users.filter((u) => u !== key)
-          : [...users, key];
+        const adding = !users.includes(key);
+        msg.reactions[emoji] = adding
+          ? [...users, key]
+          : users.filter((u) => u !== key);
         if (!msg.reactions[emoji].length) delete msg.reactions[emoji];
         persist();
+        // Server sync is best-effort: the RPC re-verifies visibility, and a
+        // reopen converges via history merge. Local paint never waits on it.
+        if (msg.cloudId && signedIn()) {
+          reactToMessage(msg.cloudId, emoji).catch(() => {});
+        }
         renderMessages(root);
         return;
       }
@@ -5755,7 +5761,7 @@ function groupSearchMarkup(id) {
   const g = groupById(id);
   const q = groupSearch?.q || "";
   const results = searchGroupMessages(id, q);
-  return `<div class="chat-head"><button type="button" class="icon-btn" data-gs-back aria-label="Back to chat">‹</button><div style="flex:1;min-width:0"><strong>${esc(g?.name || "Group")}</strong><div class="muted" style="font-size:11px">Search this group</div></div><span class="tag">${results.length}</span></div><div class="input-row" style="margin:12px 14px 0"><span class="song-search-ico" style="position:static;transform:none" aria-hidden="true">${sicon("search")}</span><input class="input" id="gs-input" style="flex:1" placeholder="Search messages, files, links…" value="${esc(q)}" aria-label="Search group messages" autocomplete="off"></div><div class="chat-body" id="gs-results">${groupSearchResultsHtml(id, results)}</div>`;
+  return `<div class="chat-head"><button type="button" class="icon-btn" data-gs-back aria-label="Back to chat">‹</button><div style="flex:1;min-width:0"><strong>${esc(g?.name || "Group")}</strong><div class="muted" style="font-size:11px">Search this group</div></div><span class="tag">${results.length}</span></div><div class="input-row" style="margin:12px 14px 0"><span class="song-search-ico" style="position:static;transform:none" aria-hidden="true">${sicon("search")}</span><input class="input" id="gs-input" style="flex:1" placeholder="Search messages, files, links…" value="${esc(q)}" aria-label="Search group messages" autocomplete="off"></div>${signedIn() && q.trim().length >= 2 && (groupSearch?.depth || 0) < 4 ? `<div style="margin:8px 14px 0" data-gs-more-wrap><button type="button" class="ghost" data-gs-more ${groupSearch?.deepening ? "disabled" : ""}>${groupSearch?.deepening ? "Searching older messages…" : "Search older messages"}</button></div>` : `<div data-gs-more-wrap></div>`}<div class="chat-body" id="gs-results">${groupSearchResultsHtml(id, results)}</div>`;
 }
 function groupSearchResultsHtml(id, results) {
   if (!results.length) {
@@ -5767,12 +5773,24 @@ function groupSearchResultsHtml(id, results) {
 function paintGroupSearchResults(id) {
   const box = $("#gs-results");
   if (!box) return;
-  box.innerHTML = groupSearchResultsHtml(id, searchGroupMessages(id, groupSearch?.q || ""));
+  const q = groupSearch?.q || "";
+  box.innerHTML = groupSearchResultsHtml(id, searchGroupMessages(id, q));
   $$("[data-gs-jump]", box).forEach(
     (b) => (b.onclick = () => jumpToGroupMessage(id, Number(b.dataset.gsJump))),
   );
   const tag = document.querySelector(".chat-head .tag");
-  if (tag) tag.textContent = String(searchGroupMessages(id, groupSearch?.q || "").length);
+  if (tag) tag.textContent = String(searchGroupMessages(id, q).length);
+  // The deepen button lives outside #gs-results (so typing never loses it);
+  // repaint + rebind it here so loading state and page budget stay current.
+  const wrap = document.querySelector("[data-gs-more-wrap]");
+  if (wrap) {
+    const show = signedIn() && q.trim().length >= 2 && (groupSearch?.depth || 0) < 4;
+    wrap.innerHTML = show
+      ? `<button type="button" class="ghost" data-gs-more ${groupSearch?.deepening ? "disabled" : ""}>${groupSearch?.deepening ? "Searching older messages…" : "Search older messages"}</button>`
+      : "";
+    const btn = wrap.querySelector("[data-gs-more]");
+    if (btn) btn.onclick = () => deepenGroupSearch(id);
+  }
 }
 function bindGroupSearch(body, id) {
   $("[data-gs-back]", body).onclick = () => {
@@ -6097,6 +6115,72 @@ function paintTypingIndicator(id, isTyping, root) {
 // Server history merges into the local cache once per chat open. Guarded by
 // a token so a late response never paints into a different conversation.
 let historyToken = 0;
+// Shared cloud-row plumbing: resolve sender handles, merge rows into the
+// local cache (dedupe by cloud id, cap 300), and fold server reactions in.
+// Used by both history load and search deepening so the mapping stays single.
+async function resolveSenderNames(rows, me) {
+  const unknown = [...new Set(rows.filter((r) => r.sender_id !== me).map((r) => r.sender_id).filter(Boolean))];
+  if (!unknown.length) return new Map();
+  const { data: profiles } = await getPublicProfiles(unknown).catch(() => ({ data: [] }));
+  return new Map((profiles || []).map((p) => [p.id, "@" + (p.handle || "member")]));
+}
+function mergeCloudRows(id, rows, names, me) {
+  const seen = new Set((state.messages[id] || []).map((m) => m.id || m.cloudId));
+  let added = 0;
+  const merged = [...(state.messages[id] || [])];
+  for (const r of rows) {
+    if (!r || !r.id || seen.has(r.id)) continue;
+    seen.add(r.id);
+    merged.push({
+      id: r.id,
+      cloudId: r.id,
+      me: r.sender_id === me,
+      sender_id: r.sender_id,
+      sysName: r.sender_id === me ? undefined : names.get(r.sender_id),
+      text: r.text || "",
+      kind: r.kind && r.kind !== "text" ? r.kind : undefined,
+      ts: r.created_at ? new Date(r.created_at).getTime() : Date.now(),
+      edited: Boolean(r.edited_at),
+    });
+    if (r.sender_id === me) state.messageStatus[r.id] = "delivered";
+    added++;
+  }
+  if (!added) return 0;
+  merged.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  state.messages[id] = merged.slice(-300);
+  persist();
+  return added;
+}
+// Server is authoritative for reactions on cloud messages (converges every
+// device on reopen). Local-only messages keep local-only reactions.
+async function attachCloudReactions(id, me) {
+  const cloudIds = (state.messages[id] || []).map((m) => m.cloudId).filter(Boolean);
+  if (!cloudIds.length) return false;
+  const { data, error } = await loadMessageReactions(cloudIds).catch(() => ({ data: [] }));
+  if (error || !Array.isArray(data) || !data.length) return false;
+  const key = chatKey();
+  const byMsg = new Map();
+  for (const r of data) {
+    if (!r || !r.message_id || !r.emoji) continue;
+    if (!byMsg.has(r.message_id)) byMsg.set(r.message_id, {});
+    const bucket = byMsg.get(r.message_id);
+    const who = r.user_id === me ? key : String(r.user_id || "");
+    if (!who) continue;
+    bucket[r.emoji] = bucket[r.emoji] || [];
+    if (!bucket[r.emoji].includes(who)) bucket[r.emoji].push(who);
+  }
+  if (!byMsg.size) return false;
+  let changed = false;
+  for (const m of state.messages[id] || []) {
+    if (!m.cloudId || !byMsg.has(m.cloudId)) continue;
+    if (JSON.stringify(m.reactions || {}) !== JSON.stringify(byMsg.get(m.cloudId))) {
+      m.reactions = byMsg.get(m.cloudId);
+      changed = true;
+    }
+  }
+  if (changed) persist();
+  return changed;
+}
 async function loadCloudHistory(id, root) {
   if (!signedIn()) return;
   const target = chatTarget(id);
@@ -6115,44 +6199,62 @@ async function loadCloudHistory(id, root) {
     const rows = Array.isArray(data) ? data : [];
     if (!rows.length) return;
     const me = state.user.id;
-    const unknown = [...new Set(rows.filter((r) => r.sender_id !== me).map((r) => r.sender_id).filter(Boolean))];
-    let names = new Map();
-    if (unknown.length) {
-      const { data: profiles } = await getPublicProfiles(unknown).catch(() => ({ data: [] }));
-      names = new Map((profiles || []).map((p) => [p.id, "@" + (p.handle || "member")]));
-      if (token !== historyToken || state.activeChat !== id) return;
-    }
-    const seen = new Set((state.messages[id] || []).map((m) => m.id || m.cloudId));
-    let added = 0;
-    const merged = [...(state.messages[id] || [])];
-    for (const r of rows) {
-      if (!r || !r.id || seen.has(r.id)) continue;
-      seen.add(r.id);
-      merged.push({
-        id: r.id,
-        cloudId: r.id,
-        me: r.sender_id === me,
-        sender_id: r.sender_id,
-        sysName: r.sender_id === me ? undefined : names.get(r.sender_id),
-        text: r.text || "",
-        kind: r.kind && r.kind !== "text" ? r.kind : undefined,
-        ts: r.created_at ? new Date(r.created_at).getTime() : Date.now(),
-        edited: Boolean(r.edited_at),
-      });
-      if (r.sender_id === me) state.messageStatus[r.id] = "delivered";
-      added++;
-    }
-    if (!added) return;
-    merged.sort((a, b) => (a.ts || 0) - (b.ts || 0));
-    state.messages[id] = merged.slice(-300);
-    persist();
+    const names = await resolveSenderNames(rows, me).catch(() => new Map());
+    if (token !== historyToken || state.activeChat !== id) return;
+    const added = mergeCloudRows(id, rows, names, me);
+    let reactionsChanged = false;
     if (token === historyToken && state.activeChat === id) {
-      markChatRead(id); // history merged while the chat is open = seen
-      paintChatBody(id, root, false);
-      paintMessagesBadge(totalUnreadCount());
+      reactionsChanged = await attachCloudReactions(id, me).catch(() => false);
     }
+    if (!added && !reactionsChanged) return;
+    if (token !== historyToken || state.activeChat !== id) return;
+    markChatRead(id); // history merged while the chat is open = seen
+    paintChatBody(id, root, false);
+    paintMessagesBadge(totalUnreadCount());
   } catch {
     /* offline — local cache stands */
+  }
+}
+// Search deepening: group search starts local, then pages older cloud
+// history (up to 4 extra pages) so matches aren't limited to the newest 300.
+// Explicit button (never auto-query): offline-safe, no extra subscriptions.
+async function deepenGroupSearch(id) {
+  if (!signedIn()) return;
+  if (!groupSearch || groupSearch.id !== id || groupSearch.deepening) return;
+  const q = String(groupSearch.q || "").trim();
+  if (q.length < 2) return;
+  const target = chatTarget(id);
+  if (target.kind !== "group" && target.kind !== "connection") return;
+  if (target.kind === "connection" && !isUuid(id)) return;
+  const depth = groupSearch.depth || 0;
+  if (depth >= 4) return;
+  const local = state.messages[id] || [];
+  if (!local.length) return;
+  const oldest = local.reduce((n, m) => Math.min(n, m.ts || Date.now()), Date.now());
+  groupSearch.deepening = true;
+  groupSearch.depth = depth + 1;
+  paintGroupSearchResults(id);
+  try {
+    const args = target.kind === "group" ? { groupId: id } : { recipientId: id };
+    const { data, error } = await loadConversation({
+      ...args,
+      limit: 100,
+      before: new Date(oldest).toISOString(),
+    });
+    if (error || !groupSearch || groupSearch.id !== id) return;
+    const rows = Array.isArray(data) ? data : [];
+    if (rows.length) {
+      const me = state.user.id;
+      const names = await resolveSenderNames(rows, me).catch(() => new Map());
+      if (!groupSearch || groupSearch.id !== id) return;
+      mergeCloudRows(id, rows, names, me);
+      await attachCloudReactions(id, me).catch(() => {});
+    }
+  } finally {
+    if (groupSearch && groupSearch.id === id) {
+      groupSearch.deepening = false;
+      paintGroupSearchResults(id);
+    }
   }
 }
 

@@ -90,5 +90,16 @@ begin
   end if;
   raise notice 'PASS no binary columns (device-local audio design intact)';
 
+  -- 7. song favorites widened (020 follow-up) ----------------------------------------------
+  select count(*) into v_count
+  from pg_constraint
+  where conrelid = 'public.favorites'::regclass
+    and conname = 'favorites_item_type_check'
+    and pg_get_constraintdef(oid) like '%song%';
+  if v_count <> 1 then
+    raise exception 'FAIL favorites check does not allow song ids (apply 020_phase5_song_favorites.sql)';
+  end if;
+  raise notice 'PASS song favorites allowed';
+
   raise notice 'PHASE 5 CHECKS COMPLETE';
 end $$;

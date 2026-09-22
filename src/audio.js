@@ -1,6 +1,6 @@
 /* audio.js — chimes, ambient engine, music library, sound studio */
 import {
-  state, $, $$, uid, get, save, esc, sicon, persist, toast, addCoins,
+  state, $, $$, uid, get, save, esc, sicon, persist, pushUserSettings, toast, addCoins,
   fmtClock, fmtSize, iconStar, bindFavorites, checkReminder, confirmBox, viewHead,
   updateBarPadding, makeDraggable, dragLock,
 } from "./core.js";
@@ -269,7 +269,10 @@ function bindMixer(t) {
       const pct = $("[data-master-pct]", t);
       if (pct) pct.textContent = `${master.value}%`;
     };
-    master.onchange = () => persist();
+    master.onchange = () => {
+      persist();
+      pushUserSettings();
+    };
   }
   $$("[data-layer-vol]", t).forEach((slider) => {
     slider.oninput = () => {
@@ -284,7 +287,10 @@ function bindMixer(t) {
       const pct = $(`[data-layer-pct="${id}"]`, t);
       if (pct) pct.textContent = `${slider.value}%`;
     };
-    slider.onchange = () => persist();
+    slider.onchange = () => {
+      persist();
+      pushUserSettings();
+    };
   });
   $$("[data-layer-remove]", t).forEach(
     (b) =>
@@ -292,6 +298,7 @@ function bindMixer(t) {
         stopLayer(b.dataset.layerRemove);
         delete state.soundMix[b.dataset.layerRemove];
         persist();
+        pushUserSettings();
         renderSounds();
       }),
   );
@@ -313,6 +320,7 @@ function bindMixer(t) {
       stopAllLayers();
       state.soundMix = {};
       persist();
+      pushUserSettings();
       renderSounds();
     };
 }
@@ -2061,6 +2069,9 @@ function deleteSong(songId) {
     persist();
     mirrorMusicTracks();
     deleteTrackEverywhere(songId);
+    // Rewrite playlist links now so the deleted id never lingers as a ghost
+    // membership on the server (links rewrite from local state).
+    mirrorPlaylists();
     if (state.tab === "sounds") renderSounds();
     renderNowPlaying();
   });

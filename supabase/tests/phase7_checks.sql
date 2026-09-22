@@ -107,6 +107,20 @@ begin
   end if;
   raise notice 'PASS community storage buckets';
 
+  -- 10. message reactions (021 follow-up) ----------------------------------------------------------
+  select count(*) into v_count from pg_tables
+  where schemaname = 'public' and tablename = 'message_reactions' and rowsecurity;
+  if v_count <> 1 then
+    raise exception 'FAIL message_reactions missing or RLS disabled (apply 021_phase7_reactions.sql)';
+  end if;
+  select count(*) into v_count from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public' and p.proname = 'sf_react_toggle';
+  if v_count <> 1 then
+    raise exception 'FAIL sf_react_toggle RPC missing';
+  end if;
+  raise notice 'PASS message reactions + toggle RPC';
+
   raise notice 'ALL PHASE 7 CHECKS PASSED';
 end;
 $$;

@@ -640,7 +640,22 @@ function collectUserSettings() {
       zoom: state.display?.zoom || 1,
       night: Boolean(state.night),
     },
+    music: collectMusicPrefs(),
   };
+}
+
+// Ambient mix + master volume, sanitized and bounded so a corrupt local
+// value can never bloat the settings row.
+function collectMusicPrefs() {
+  const mix = {};
+  for (const [id, v] of Object.entries(state.soundMix || {})) {
+    if (Object.keys(mix).length >= 24) break;
+    const key = String(id).slice(0, 64);
+    const vol = Number(v);
+    if (key && Number.isFinite(vol)) mix[key] = Math.min(1, Math.max(0, vol));
+  }
+  const volume = Number(state.soundVolume);
+  return { mix, volume: Number.isFinite(volume) ? Math.min(1, Math.max(0, volume)) : 0.8 };
 }
 
 // Apply a cloud settings row onto local state. Returns true when anything
@@ -696,6 +711,21 @@ async function applyUserSettings(row) {
         : state.display?.zoom || 1,
     };
     if (typeof d.night === "boolean") state.night = d.night;
+    touched = true;
+  }
+  const mu = row.music;
+  if (mu && typeof mu === "object") {
+    if (mu.mix && typeof mu.mix === "object" && !Array.isArray(mu.mix)) {
+      const mix = {};
+      for (const [id, v] of Object.entries(mu.mix).slice(0, 24)) {
+        const vol = Number(v);
+        if (typeof id === "string" && id && Number.isFinite(vol))
+          mix[id.slice(0, 64)] = Math.min(1, Math.max(0, vol));
+      }
+      state.soundMix = mix;
+    }
+    if (Number.isFinite(+mu.volume))
+      state.soundVolume = Math.min(1, Math.max(0, +mu.volume));
     touched = true;
   }
   if (!touched) return false;

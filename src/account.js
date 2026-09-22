@@ -19,7 +19,7 @@ import {
 import { CHIMES, playChime, clearSongDatabase, stopAllLayers } from "./audio.js";
 import { applyDurations, haltTimer, durations, renderTimer, sessionInProgress, timerHandle } from "./timer.js";
 import { startTechCheck, techInfo, enterApp } from "./techniques.js";
-import { equippedAvatarEmoji, equippedBadgeEmoji } from "./store.js";
+import { equippedAvatarEmoji, equippedBadgeEmoji, showcasedBadgeIds, toggleShowcaseBadge, ownedBadges, MAX_SHOWCASE_BADGES } from "./store.js";
 import { disconnectRealtime, conversationSubscription, presenceSub } from "./community.js";
 import { shell } from "./app.js";
 function openProfile() {
@@ -480,8 +480,48 @@ function renderAccount() {
   const sidePanel = !user
     ? `<aside class="auth-side" aria-label="Why join StudyFlow"><div class="auth-side-glow" aria-hidden="true"></div><div class="eyebrow">Why join</div><h3>Everything you do here, kept.</h3><p class="muted">A free account follows you across devices and keeps every streak, coin and highlight safe.</p><div class="auth-side-stats"><div class="auth-side-stat"><b>${(state.sessions || []).length}</b><small>session${(state.sessions || []).length === 1 ? "" : "s"} focused so far</small></div><div class="auth-side-stat"><b>${state.coins || 0}</b><small>coins ready to sync</small></div><div class="auth-side-stat"><b>${(state.books || []).length}</b><small>book${(state.books || []).length === 1 ? "" : "s"} on your shelf</small></div></div><ul class="auth-side-perks"><li><span>${sicon("fire")}</span><div><strong>Streaks that travel</strong><small>Your garden and streak survive a lost laptop.</small></div></li><li><span>${sicon("users")}</span><div><strong>Study together</strong><small>Sprint rooms, gifts and group challenges.</small></div></li><li><span>${sicon("refresh")}</span><div><strong>Cloud save</strong><small>Pick up on your phone mid-revision.</small></div></li><li><span>${sicon("shield")}</span><div><strong>Private by default</strong><small>You choose who sees your activity.</small></div></li></ul></aside>`
     : "";
-  target.innerHTML = `<div class="account-page"><div class="account-hero"><div><div class="eyebrow">StudyFlow identity</div><h1>${user ? "Your account, your space." : "A calmer way to sign in."}</h1><p class="lede">${user ? "Manage your profile, privacy, and connected sessions from one secure place." : "Join your focused workspace and keep your progress with you across devices."}</p></div><div class="account-orbit"><span>◷</span><i></i><b></b></div></div>${completenessMarkup()}<div class="auth-split"><div class="card auth-card">${user ? accountSignedInMarkup(user) : accountAuthMarkup()}</div>${sidePanel}</div>${!user ? `<div class="privacy-consent" style="margin-top:16px">${privacyAgreementMarkup("account-privacy")}</div>` : ""}${dataMarkup()}${privacyCard()}</div>`;
+  target.innerHTML = `<div class="account-page"><div class="account-hero"><div><div class="eyebrow">StudyFlow identity</div><h1>${user ? "Your account, your space." : "A calmer way to sign in."}</h1><p class="lede">${user ? "Manage your profile, privacy, and connected sessions from one secure place." : "Join your focused workspace and keep your progress with you across devices."}</p></div><div class="account-orbit"><span>◷</span><i></i><b></b></div></div>${completenessMarkup()}<div class="auth-split"><div class="card auth-card">${user ? accountSignedInMarkup(user) : accountAuthMarkup()}</div>${sidePanel}</div>${user ? badgeShelfMarkup() : ""}${!user ? `<div class="privacy-consent" style="margin-top:16px">${privacyAgreementMarkup("account-privacy")}</div>` : ""}${dataMarkup()}${privacyCard()}</div>`;
   bindAccount(target);
+}
+
+// Badge shelf: every acquired badge on display, tap to showcase (up to
+// MAX_SHOWCASE_BADGES ride beside your name). Rarity ring glows for tiered
+// box exclusives; plain badges get the sage ring.
+function badgeShelfMarkup() {
+  const owned = ownedBadges();
+  const ids = showcasedBadgeIds();
+  const tiles = owned.map((b) => {
+    const on = ids.includes(b.id);
+    const tier = String(b.tier || "").toLowerCase();
+    return `<button type="button" class="badge-tile${on ? " on" : ""}${tier ? ` tier-${tier}` : ""}" data-shelf-badge="${esc(b.id)}" aria-pressed="${on}" title="${esc(b.name)} — ${on ? "tap to remove from showcase" : "tap to showcase"}"><span class="badge-medal">${b.emoji}</span>${on ? `<span class="badge-check">${sicon("check")}</span>` : ""}<strong>${esc(b.name.replace(/\s*badge\s*/i, ""))}</strong>${tier ? `<small class="rarity-${tier}">${esc(b.tier)}</small>` : `<small>${on ? "showcased" : "tap to showcase"}</small>`}</button>`;
+  }).join("");
+  return `<div class="card badge-shelf"><div class="section-row"><h2>${sicon("trophy")} Badge shelf</h2><span class="tag" data-shelf-count>${ids.length}/${MAX_SHOWCASE_BADGES} showcased</span></div>${owned.length ? `<p class="muted">Your collection — tap badges to line them up beside your name.</p><div class="badge-grid">${tiles}</div>` : `<div class="empty-state"><div class="emoji">${sicon("medal")}</div><h3>No badges yet</h3><p class="muted">Earn them in focus sessions, events and mystery boxes — then showcase your favorites here.</p><button type="button" class="primary" data-goto-store>Earn badges</button></div>`}</div>`;
+}
+function bindBadgeShelf(root) {
+  const grid = $("[data-shelf-badge]", root);
+  if (!grid && !$("[data-goto-store]", root)) return;
+  $$("[data-shelf-badge]", root).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const item = (state.owned || []).find((o) => o && o.id === b.dataset.shelfBadge);
+        if (!item) return;
+        const result = toggleShowcaseBadge(item);
+        persist();
+        renderAccount();
+        notify(
+          result === "added"
+            ? `${item.name} showcased (${showcasedBadgeIds().length}/${MAX_SHOWCASE_BADGES})`
+            : result === "removed"
+              ? "Badge removed from showcase"
+              : `Showcase is full (${MAX_SHOWCASE_BADGES} badges) — remove one first`,
+        );
+      }),
+  );
+  $("[data-goto-store]", root)?.addEventListener("click", () => {
+    state.tab = "store";
+    persist();
+    shell();
+  });
 }
 
 function accountAuthMarkup() {
@@ -496,6 +536,7 @@ function accountSignedInMarkup(user) {
 }
 
 function bindAccount(root) {
+  bindBadgeShelf(root);
   $$("[data-auth-view]", root).forEach(
     (button) =>
       (button.onclick = () => {

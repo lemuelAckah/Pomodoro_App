@@ -178,6 +178,21 @@ html[data-night="1"] .box-legendary {
   color: #9a6b0a;
 }
 
+.rarity-master {
+  background: #e3f0e8;
+  color: #2c6b4a;
+}
+
+.rarity-grandmaster {
+  background: #e3ecfd;
+  color: #2f5fd0;
+}
+
+.rarity-mythic {
+  background: #ece4fa;
+  color: #7b4fd6;
+}
+
 .box-inventory {
   display: flex;
   gap: 8px;
