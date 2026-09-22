@@ -886,18 +886,27 @@ export function subscribeToPresence(channelName, userInfo, onSync) {
 export function subscribeToConversation({
   groupId,
   recipientId,
+  myUserId,
   onMessage,
   onUpdate,
   onTyping,
   onRead,
 }) {
   if (!supabase) return { unsubscribe: () => {}, sendTyping: async () => {} };
+  // DM channels must be DETERMINISTIC per conversation — both sides join the
+  // same channel (sorted id pair) or broadcasts (typing) never cross over:
+  // each side used to sit on its own privately-named channel.
   const channelName = groupId
     ? `studyflow-messages:group:${groupId}`
-    : `studyflow-messages:dm:${recipientId}`;
+    : `studyflow-messages:dm:${[myUserId, recipientId].filter(Boolean).sort().join("--")}`;
+  // DM filter: both directions. The old recipient-only filter never matched
+  // messages addressed TO me, so incoming DMs arrived only on the next full
+  // history reload — the classic "I sent it but they see nothing" flaw.
   const msgFilter = groupId
     ? { filter: `group_id=eq.${groupId}` }
-    : { filter: `recipient_id=eq.${recipientId}` };
+    : myUserId
+      ? { filter: `or(and(sender_id.eq.${myUserId},recipient_id.eq.${recipientId}),and(sender_id.eq.${recipientId},recipient_id.eq.${myUserId}))` }
+      : { filter: `recipient_id=eq.${recipientId}` };
   const channel = supabase
     .channel(channelName)
     .on(
@@ -945,6 +954,18 @@ export async function sendCloudMessage(message) {
       data: null,
       error: new Error("Realtime messaging is not configured"),
     };
+  // DMs go through the server-validated RPC (023) — friendship and blocks
+  // are re-checked database-side, and the inserted row comes back so the
+  // sender can stamp the cloud id. Groups keep the plain insert.
+  if (message && !message.group_id && message.recipient_id && (message.kind == null || message.kind === "text")) {
+    const { data, error } = await supabase.rpc("sf_direct_message", {
+      p_recipient: message.recipient_id,
+      p_text: String(message.text || ""),
+      p_metadata: message.metadata && typeof message.metadata === "object" ? message.metadata : {},
+    }).single();
+    if (error && isMissingRpc(error)) return supabase.from("messages").insert(message).select().single();
+    return { data, error };
+  }
   return supabase.from("messages").insert(message).select().single();
 }
 
@@ -1699,7 +1720,7 @@ function phase7Unavailable() {
 }
 
 function isMissingRpc(error) {
-  return /not find|does not exist|schema cache|function .* does not exist/i.test(
+  return /not find|does not exist|schema cache|function .* does not exist|not found in schema cache|Could not find the function/i.test(
     error?.message || "",
   );
 }
@@ -1855,7 +1876,7 @@ export async function getGroupMembers(groupId) {
 
 // --- messaging history / edit / soft-delete ----------------------------------
 
-const MESSAGE_COLUMNS = "id,group_id,sender_id,recipient_id,text,attachment_path,kind,created_at,edited_at";
+const MESSAGE_COLUMNS = "id,group_id,sender_id,recipient_id,text,attachment_path,kind,metadata,created_at,edited_at";
 
 export async function loadConversation({ groupId, recipientId, limit = 60, before = null } = {}) {
   const { userId, error } = await requireUserId();
@@ -1957,14 +1978,26 @@ export async function sendFriendRequest(friendId) {
   if (error) return { data: null, error };
   if (!friendId || friendId === userId)
     return { data: null, error: new Error("Pick another user first") };
+  // Plain insert first: the INSERT..SELECT in an upsert+select returns the
+  // written row under its own SELECT policies, which rejected the mirrored
+  // 'accepted' row and failed the whole request (42501) — the flaw that made
+  // friend adds silently do nothing for the other user.
   const res = await supabase
     .from("friendships")
-    .upsert({ user_id: userId, friend_id: friendId, status: "pending" }, { onConflict: "user_id,friend_id" })
+    .insert({ user_id: userId, friend_id: friendId, status: "pending" })
+    .select("id,user_id,friend_id,status")
+    .single();
+  if (res.error && !/duplicate|unique|409/i.test(res.error.message || ""))
+    return res;
+  // Row exists (re-request, or they already added us): converge to accepted —
+  // this UPDATE is now legal for the requester (023 requester-accept policy).
+  return supabase
+    .from("friendships")
+    .update({ status: "accepted" })
+    .eq("user_id", userId)
+    .eq("friend_id", friendId)
     .select("id,user_id,friend_id,status")
     .maybeSingle();
-  if (res.error && /duplicate|unique/i.test(res.error.message || ""))
-    return { data: null, error: new Error("Request already sent") };
-  return res;
 }
 
 export async function respondFriendRequest(requestId, accept) {

@@ -849,10 +849,15 @@ html[data-night="1"] .profile-identity {
   border-radius: 12px;
   border: 1px solid var(--line);
   background: var(--panel);
-  font-size: 20px;
-  line-height: 1;
+  color: var(--ink);
+  display: grid;
+  place-items: center;
   cursor: pointer;
   transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.dice-btn .sicon {
+  width: 22px;
+  height: 22px;
 }
 .dice-btn:hover {
   transform: translateY(-2px);
@@ -902,11 +907,15 @@ html[data-night="1"] .profile-identity {
   border-radius: 10px;
   border: 0;
   background: transparent;
-  font-size: 18px;
-  line-height: 1;
+  color: var(--ink);
+  display: grid;
+  place-items: center;
   cursor: pointer;
-  opacity: 1;
   transition: opacity 0.15s ease, background 0.15s ease;
+}
+.pw-toggle .sicon {
+  width: 20px;
+  height: 20px;
 }
 .pw-toggle:hover {
   background: rgba(148, 163, 184, 0.14);

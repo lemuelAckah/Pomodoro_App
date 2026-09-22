@@ -46,6 +46,10 @@ let friendsBackendStatusAt = 0;
 // Cloud identity caches (in-memory only — never persisted; handles refresh).
 let cloudFriends = []; // accepted connections: { id, handle, name, avatar, bio }
 let cloudFriendReqs = []; // { id, incoming, handle, name, otherId, ts }
+function cloudFriendReqsById(id) {
+  return cloudFriends.find((f) => f.id === id)
+    || (() => { const r = cloudFriendReqs.find((x) => x.otherId === id); return r ? { id: id, handle: r.handle, name: r.name } : null; })();
+}
 let cloudFriendsAt = 0;
 let cloudBlocked = new Set();
 let cloudStories = [];
@@ -1308,6 +1312,160 @@ function resolveOneInvite(sp, force) {
   return true;
 }
 
+/* ---------- real invite delivery between users (cloud DMs) ---------- */
+// Sprint and session invites used to live only in the sender's localStorage —
+// the recipient never received anything. Invites now ride the existing DM
+// pipeline as text messages carrying a structured `invite` in the row's
+// metadata: they arrive through the same realtime subscription and history
+// load as every other message, so no new backend surface is needed.
+
+// Serialized uuids a real user can be reached at (cloud connections and
+// locally-added friends resolved to cloud accounts).
+function inviteRecipients(ids) {
+  return (ids || []).filter((id) => signedIn() && isUuid(id) && id !== state.user?.id);
+}
+
+function inviteMessageRow(inv, prefix) {
+  const isSprint = prefix === "sprint";
+  const when = inv.startsAt || inv.at;
+  const text = isSprint
+    ? `Sprint invite — “${inv.title}” · ${Math.round((inv.durationSec || 1500) / 60)} min · ${new Date(when || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}. Open Community → Sprints to join.`
+    : `Study session invite — “${inv.title}” · ${new Date(when || Date.now()).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })} · ${inv.durationMin || 25} min. Open Community → Sprints to RSVP.`;
+  return {
+    sender_id: state.user.id,
+    group_id: null,
+    recipient_id: inv.toId,
+    text,
+    kind: "text",
+    metadata: {
+      invite: {
+        t: prefix, // "sprint" | "session"
+        id: inv.refId,
+        title: inv.title,
+        purpose: inv.purpose || "",
+        at: when,
+        durationSec: inv.durationSec || (inv.durationMin || 25) * 60,
+      },
+    },
+  };
+}
+
+async function sendInviteDms(prefix, inv, toIds) {
+  if (!signedIn()) return;
+  const targets = inviteRecipients(toIds);
+  for (const toId of targets) {
+    await pushInviteDm(inviteMessageRow({ ...inv, toId }, prefix));
+  }
+  if (targets.length) persist();
+}
+
+// Stash the DM locally, send through the cloud, paint the status chip.
+async function pushInviteDm(payload) {
+  const local = {
+    id: uid(),
+    me: true,
+    text: payload.text,
+    ts: Date.now(),
+    deliveryStatus: "sent",
+  };
+  state.messages[payload.recipient_id] = [...(state.messages[payload.recipient_id] || []), local];
+  try {
+    const { error } = await sendCloudMessage(payload);
+    if (!error) state.messageStatus[local.id] = "delivered";
+  } catch { /* local copy stands */ }
+  persist();
+}
+
+// Tell the host their invite was answered (real reply, not the simulated
+// ticker). Travels as a reply DM with structured metadata.
+async function sendInviteReplyDm(inv, status) {
+  if (!signedIn() || !inv?.fromId || !isUuid(inv.fromId) || !inv.refId) return;
+  const text = status === "accepted"
+    ? `I joined “${inv.title}” — see you at the start.`
+    : `I passed on “${inv.title}” this time.`;
+  await pushInviteDm({
+    sender_id: state.user.id,
+    group_id: null,
+    recipient_id: inv.fromId,
+    text,
+    kind: "text",
+    metadata: { inviteReply: { t: inv.t || "sprint", id: inv.refId, status } },
+  });
+}
+
+// Fold an incoming invite DM into the recipient's inbox. Returns true when a
+// new invite row was created (dedupe by refId — realtime + history both call
+// this, so the same invite must not double up).
+function adoptIncomingInvite(inv, fromHandle, fromId) {
+  if (!inv || !inv.t || !inv.id || !inv.title) return false;
+  const store = inv.t === "sprint" ? "sprintInvites" : "eventInvites";
+  if (!Array.isArray(state[store])) state[store] = [];
+  if (state[store].some((i) => i.refId === inv.id || (i.sprintId === inv.id && inv.t === "sprint"))) return false;
+  state[store].push({
+    id: uid(),
+    refId: inv.id,
+    demo: false,
+    status: "pending",
+    from: fromHandle || "a friend",
+    fromId: fromId || null,
+    t: inv.t,
+    title: inv.title,
+    purpose: inv.purpose || "",
+    startsAt: inv.at,
+    at: inv.at,
+    durationMin: Math.max(1, Math.round((inv.durationSec || 1500) / 60)),
+    sprintId: inv.t === "sprint" ? inv.id : undefined,
+  });
+  state[store] = state[store].slice(-20);
+  persist();
+  return true;
+}
+
+// Host side: a real reply to a sprint/session invite. Updates the room's
+// invite chips and crew roster exactly like the simulated replies used to.
+function adoptInviteReply(reply, from) {
+  if (!reply || !reply.id || !reply.status) return false;
+  const who = from?.handle || "a friend";
+  if (reply.t === "session") {
+    const ev = (state.events || []).find((x) => x.id === reply.id);
+    if (!ev) return false;
+    const pend = (ev.invites || []).find((i) => i.status === "pending" && i.username === who);
+    if (!pend) return false;
+    pend.status = reply.status === "accepted" ? "accepted" : "declined";
+    if (pend.status === "accepted")
+      addNotification("Session invite accepted", `@${who} is going to “${ev.title}”.`, "calendar");
+    persist();
+    return true;
+  }
+  const sp = (state.sprints || []).find((x) => x.id === reply.id);
+  if (!sp) return false;
+  const pend = (sp.invites || []).find((i) => i.status === "pending" && (i.friendId === from?.id || i.username === who));
+  if (!pend) return false;
+  pend.status = reply.status === "accepted" ? "accepted" : "declined";
+  if (pend.status === "accepted") {
+    const crew = sp.roster || (sp.roster = []);
+    if (!crew.some((c) => c.id === pend.friendId))
+      crew.push({ id: pend.friendId || "peer-" + uid(), name: pend.username || who, total: 4, left: 4, pct: 6, live: false });
+    addNotification("Sprint invite accepted", `@${who} joined “${sp.title}”.`, "bolt");
+  }
+  persist();
+  return true;
+}
+
+// Scan DM rows for structured invite metadata the caches don't know yet.
+// Runs on history merge and on every realtime-arriving message.
+function harvestInvitesFromRows(rows, resolveFrom) {
+  let changed = false;
+  for (const r of rows || []) {
+    if (!r || r.sender_id === state.user?.id) continue; // never adopt my own sends
+    const meta = r.metadata || {};
+    const from = resolveFrom ? resolveFrom(r) : null;
+    if (meta.invite && adoptIncomingInvite(meta.invite, from?.handle, from?.id)) changed = true;
+    if (meta.inviteReply && adoptInviteReply(meta.inviteReply, from)) changed = true;
+  }
+  return changed;
+}
+
 function openSprintEditor(id) {
   const sp = state.sprints.find((x) => x.id === id);
   if (!sp) return notify("That room no longer exists");
@@ -1488,6 +1646,15 @@ function bindSprints(body) {
     state.sprints.push(sp);
     if (groupId)
       postGroupMessage(groupId, `Sprint room open: “${title}”${purpose ? ` — ${purpose}` : ""} — ${dur} min, starts in ${mins} min. Join from Community → Sprints.`, "bolt");
+    // Real delivery: invited friends receive the sprint as a DM with
+    // structured metadata (works for cloud connections with real ids).
+    sendInviteDms("sprint", {
+      refId: sp.id,
+      title,
+      purpose,
+      startsAt: sp.startsAt,
+      durationSec: sp.durationSec,
+    }, invites.map((i) => i.friendId)).catch(() => {});
     if (visibility === "friends")
       addNotification("Sprint invites sent", `“${title}” — ${invites.map((i) => "@" + i.username).join(", ")}. They can join or pass.`, "gift");
     persist();
@@ -1535,6 +1702,7 @@ function bindSprints(body) {
         const inv = state.sprintInvites.find((x) => x.id === b.dataset.invAccept);
         if (!inv || inv.status !== "pending") return;
         inv.status = "accepted";
+        sendInviteReplyDm(inv, "accepted").catch(() => {});
         const dur = inv.durationMin || 25;
         state.sprints.push(sanitizeSprint({
           id: inv.sprintId || uid(),
@@ -1563,6 +1731,7 @@ function bindSprints(body) {
         const inv = state.sprintInvites.find((x) => x.id === b.dataset.invDecline);
         if (!inv) return;
         inv.status = "declined";
+        sendInviteReplyDm(inv, "declined").catch(() => {});
         persist();
         renderCommunity();
         notify("Invite passed — no hard feelings");
@@ -1802,6 +1971,15 @@ function bindSprints(body) {
     state.events.push(e);
     if (e.groupId)
       postGroupMessage(e.groupId, `Scheduled: “${title}” — ${new Date(at).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}. RSVP in Community → Sprints.`, "calendar");
+    // Real delivery: invited friends receive the session as a DM with
+    // structured metadata (works for cloud connections with real ids).
+    sendInviteDms("session", {
+      refId: e.id,
+      title,
+      purpose: "",
+      at,
+      durationSec: durationMin * 60,
+    }, invites.map((i) => i.friendId)).catch(() => {});
     if (e.visibility === "friends")
       addNotification("Session invites sent", `“${title}” — ${invites.map((i) => "@" + i.username).join(", ")}. They can RSVP or pass.`, "gift");
     persist();
@@ -1814,6 +1992,7 @@ function bindSprints(body) {
         const inv = (state.eventInvites || []).find((x) => x.id === b.dataset.evInvAccept);
         if (!inv || inv.status !== "pending") return;
         inv.status = "accepted";
+        sendInviteReplyDm({ ...inv, t: "session" }, "accepted").catch(() => {});
         state.events.push({
           id: uid(),
           title: inv.title || "Study session",
@@ -1838,6 +2017,7 @@ function bindSprints(body) {
         const inv = (state.eventInvites || []).find((x) => x.id === b.dataset.evInvDecline);
         if (!inv) return;
         inv.status = "declined";
+        sendInviteReplyDm({ ...inv, t: "session" }, "declined").catch(() => {});
         persist();
         renderCommunity();
         notify("Invite passed — no hard feelings");
@@ -3728,8 +3908,104 @@ function bindCloudFriends(body) {
     renderCommunity();
   }));
 }
+// Live search-as-you-type in the "Add friend" box: every keystroke queries
+// the locked-down directory and floats matching users right under the input.
+// Picking a result sends a real friend request (cloud) — typing never gets
+// blocked, and results vanish on clear. Local-only visitors just see the
+// sign-in nudge when they try to add.
+let friendNameSearch = { q: "", results: [], searching: false, token: 0 };
+function friendNameSearchMarkup(q) {
+  const s = friendNameSearch;
+  if (!q || q.length < 2) return "";
+  if (s.searching) return '<p class="muted" style="margin:4px 0">Searching…</p>';
+  if (!s.results.length) return '<p class="muted" style="margin:4px 0">No users found — check the spelling.</p>';
+  return s.results.map((u) => {
+    const known = cloudFriends.some((f) => f.id === u.id) || cloudFriendReqs.some((r) => r.otherId === u.id) || (state.friends || []).some((f) => f.username === u.handle);
+    return `<button type="button" class="pick-row friend-search-hit" data-fs-add="${u.id}" data-fs-handle="${esc(u.handle || "?")}" role="option" aria-label="Add ${esc(u.handle || "user")}"><span class="crew-avatar sm">${esc(((u.handle || "?")[0] || "?").toUpperCase())}</span><span style="flex:1;min-width:0"><strong style="display:block">@${esc(u.handle || "?")}</strong><small class="muted" style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(u.name || "")}</small></span>${known ? '<span class="tag">added</span>' : '<span class="tag live">add</span>'}</button>`;
+  }).join("");
+}
+function paintFriendNameSearch(body) {
+  const pop = $("#friend-search-pop", body);
+  const input = $("#friend-name", body);
+  if (!pop || !input) return;
+  const q = input.value.trim().replace(/^@/, "");
+  const html = friendNameSearchMarkup(q);
+  pop.innerHTML = html;
+  const open = Boolean(html) || friendNameSearch.searching && q.length >= 2;
+  pop.hidden = !open;
+  input.setAttribute("aria-expanded", open ? "true" : "false");
+  $$("[data-fs-add]", pop).forEach((b) => (b.onclick = async () => {
+    if (!signedIn()) {
+      requireAuth("add study buddies");
+      return;
+    }
+    const handle = b.dataset.fsHandle;
+    b.disabled = true;
+    b.querySelector(".tag")?.replaceChildren("…");
+    const { error } = await sendFriendRequest(b.dataset.fsAdd);
+    notify(error ? "Couldn't send request — " + String(error.message).slice(0, 90) : `Request sent to @${handle}`);
+    await refreshCloudSocial(true).catch(() => {});
+    paintFriendNameSearch(body);
+  }));
+}
+function bindFriendNameSearch(body) {
+  const input = $("#friend-name", body);
+  if (!input) return;
+  let t = 0;
+  input.addEventListener("input", () => {
+    clearTimeout(t);
+    const q = input.value.trim().replace(/^@/, "");
+    if (q.length < 2) {
+      friendNameSearch = { q: "", results: [], searching: false, token: friendNameSearch.token + 1 };
+      paintFriendNameSearch(body);
+      return;
+    }
+    friendNameSearch.searching = true;
+    paintFriendNameSearch(body);
+    t = setTimeout(async () => {
+      const token = ++friendNameSearch.token;
+      friendNameSearch.q = q;
+      try {
+        const { data, error } = await searchUsers(q, 8);
+        if (token !== friendNameSearch.token) return; // a newer keystroke won
+        friendNameSearch.results = error || !Array.isArray(data) ? [] : data;
+      } catch {
+        if (token !== friendNameSearch.token) return;
+        friendNameSearch.results = [];
+      }
+      friendNameSearch.searching = false;
+      if (input.isConnected) paintFriendNameSearch(body);
+    }, 250);
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      const pop = $("#friend-search-pop", body);
+      if (pop && !pop.hidden) {
+        e.stopPropagation();
+        pop.hidden = true;
+        input.setAttribute("aria-expanded", "false");
+      }
+    } else if (e.key === "Enter") {
+      // Enter in the input should still fall through to the existing
+      // add flow — just close the dropdown first so the render doesn't eat it.
+      const pop = $("#friend-search-pop", body);
+      if (pop) pop.hidden = true;
+    }
+  });
+  input.addEventListener("blur", () => {
+    // Defer: a pointerdown on a result must win over the blur close.
+    setTimeout(() => {
+      const pop = $("#friend-search-pop", body);
+      if (pop && !pop.contains(document.activeElement)) {
+        pop.hidden = true;
+        input.setAttribute("aria-expanded", "false");
+      }
+    }, 150);
+  });
+}
+
 function renderFriends(body) {
-  body.innerHTML = `<div class="card" style="margin-bottom:18px"><h2>Invite study buddies</h2><p class="muted">Friends join with your username. Share this invite anywhere — anyone who installs StudyFlow can add you in seconds.</p><div class="input-row"><input class="input" id="invite-link" readonly value="${esc(inviteText())}"><button type="button" class="primary" id="copy-invite">Copy</button><button type="button" class="ghost" id="share-invite">Share</button><button type="button" class="backend-pill probing" data-backend-status="friends" data-backend-retry title="Checking the backend…" aria-label="Backend status — click to retry"><i></i><span>Connecting…</span></button></div></div>${signedIn() ? cloudFriendsMarkup() : ""}${referralMarkup()}<div class="card"><h2>Friends & gifting</h2><p class="muted">Add study partners here. They will also appear as gift recipients in the Rewards store.</p><div class="input-row"><input class="input" id="friend-name" placeholder="Username" aria-label="Friend username"><button type="button" class="primary" id="add-friend">Add friend</button></div><div class="grid">${state.friends.map((f) => `<div class="task"><div class="avatar">${f.username[0].toUpperCase()}</div><span class="task-text">@${esc(f.username)}</span><span class="friend-actions"><button type="button" class="ghost" data-chat-friend="${f.id}">Message</button><button type="button" class="ghost" data-block-friend="${f.id}">Block</button><button type="button" class="delete" data-remove-friend="${f.id}" title="Remove friend">×</button></span></div>`).join("") || '<p class="muted">Add a friend to send gifts and messages.</p>'}</div>${blockedSectionMarkup()}</div></div>`;
+  body.innerHTML = `<div class="card" style="margin-bottom:18px"><h2>Invite study buddies</h2><p class="muted">Friends join with your username. Share this invite anywhere — anyone who installs StudyFlow can add you in seconds.</p><div class="input-row"><input class="input" id="invite-link" readonly value="${esc(inviteText())}"><button type="button" class="primary" id="copy-invite">Copy</button><button type="button" class="ghost" id="share-invite">Share</button><button type="button" class="backend-pill probing" data-backend-status="friends" data-backend-retry title="Checking the backend…" aria-label="Backend status — click to retry"><i></i><span>Connecting…</span></button></div></div>${signedIn() ? cloudFriendsMarkup() : ""}${referralMarkup()}<div class="card"><h2>Friends & gifting</h2><p class="muted">Add study partners here. They will also appear as gift recipients in the Rewards store.</p><div class="input-row" style="position:relative" id="friend-add-row"><input class="input" id="friend-name" placeholder="Username" aria-label="Friend username" autocomplete="off" role="combobox" aria-controls="friend-search-pop"><button type="button" class="primary" id="add-friend">Add friend</button><div class="friend-pick drop" id="friend-search-pop" role="listbox" hidden></div></div><div class="grid">${state.friends.map((f) => `<div class="task"><div class="avatar">${f.username[0].toUpperCase()}</div><span class="task-text">@${esc(f.username)}</span><span class="friend-actions"><button type="button" class="ghost" data-chat-friend="${f.id}">Message</button><button type="button" class="ghost" data-block-friend="${f.id}">Block</button><button type="button" class="delete" data-remove-friend="${f.id}" title="Remove friend">×</button></span></div>`).join("") || '<p class="muted">Add a friend to send gifts and messages.</p>'}</div>${blockedSectionMarkup()}</div></div>`;
   paintBackendPill("friends", body);
   // Click-to-retry: re-probe friendships, repaint the pill, and refresh the
   // connections list — but never while the user is mid-action (a half-typed
@@ -3743,16 +4019,56 @@ function renderFriends(body) {
     if (state.tab === "community" && !userIsBusy()) renderFriends(body);
   });
   bindCloudFriends(body);
-  $("#add-friend", body).onclick = () => {
+  $("#add-friend", body).onclick = async () => {
     if (!requireAuth("add study buddies")) return;
-    const name = $("#friend-name").value.trim();
+    const input = $("#friend-name");
+    const name = input.value.trim().replace(/^@/, "");
     if (!name) return;
-    if (state.friends.some((f) => f.username === name))
+    input.value = "";
+    const pop = $("#friend-search-pop", body);
+    if (pop) pop.hidden = true;
+    if ((state.friends || []).some((f) => (f.username || "").toLowerCase() === name.toLowerCase()))
       return notify("Friend already added");
+    // Signed in: resolve the handle through the directory and send a REAL
+    // request. Keeping the real cloud id makes messages, sprints and
+    // schedules map to the actual account instead of a local-only stand-in.
+    if (signedIn()) {
+      try {
+        const { data, error } = await searchUsers(name, 8);
+        if (error) throw error;
+        const match = (data || []).find((u) => String(u.handle || "").toLowerCase() === name.toLowerCase()) || (data || []).find((u) => String(u.handle || "").toLowerCase().startsWith(name.toLowerCase()));
+        if (match) {
+          const known = cloudFriends.some((f) => f.id === match.id) || cloudFriendReqs.some((r) => r.otherId === match.id);
+          if (known && cloudFriends.some((f) => f.id === match.id)) {
+            if (!(state.friends || []).some((f) => f.id === match.id)) {
+              state.friends.push({ id: match.id, username: match.handle, name: match.name });
+              persist();
+            }
+            renderFriends(body);
+            return notify(`@${match.handle} is already in your connections`);
+          }
+          const { error: reqErr } = await sendFriendRequest(match.id);
+          if (reqErr) {
+            notify("Couldn't send request — " + String(reqErr.message).slice(0, 90));
+          } else {
+            state.friends.push({ id: match.id, username: match.handle, name: match.name });
+            persist();
+            notify(`Request sent to @${match.handle}`);
+            refreshCloudSocial(true).catch(() => {});
+          }
+          renderFriends(body);
+          return;
+        }
+        notify(`No user named “${name}” — added locally for now`);
+      } catch {
+        notify("Couldn't reach the directory — added locally for now");
+      }
+    }
     state.friends.push({ id: uid(), username: name });
     persist();
     renderFriends(body);
   };
+  bindFriendNameSearch(body);
   $("#referral-redeem", body).onclick = () => redeemReferral(body);
   $("#referral-share", body).onclick = async () => {
     const text = `Join me on StudyFlow 📚 — redeem my code ${myReferralCode()} for +30 coins!`;
@@ -4541,7 +4857,7 @@ function chatMarkup(id) {
   const nav = groupNav && groupNav.id === id && groupNav.matches.length
     ? `<div class="msg-nav"><button type="button" data-gnav="prev" aria-label="Previous match">‹</button><span>${groupNav.pos + 1} / ${groupNav.matches.length}</span><button type="button" data-gnav="next" aria-label="Next match">›</button><button type="button" data-gnav="close" aria-label="Close search navigation">×</button></div>`
     : "";
-  return `<div class="chat-head"><div class="chat-head-who">${isGroup ? groupAvatarMarkup(allGroups().find((g) => g.id === id)) : ""}<div><strong>${esc(target?.name || "@" + (target?.username || target?.handle || "?"))}</strong>${mutedTag}${typing}${presence}</div></div><span class="friend-actions"><button type="button" class="primary" data-start-call="${id}" style="padding:8px 12px;font-size:11px">Video call</button>${isFriendChat ? `<span class="post-menu-wrap"><button type="button" class="icon-btn" data-chat-menu="${id}" title="Conversation options" aria-label="Conversation options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden><button type="button" data-chat-block="${id}">Block user</button></span></span>` : ""}${isGroup && !isFriendChat ? `<span class="post-menu-wrap"><button type="button" class="icon-btn" data-chat-menu="${id}" title="Group options" aria-label="Group options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden>${groupMenuMarkup(id)}</span></span>` : ""}</span></div>${pinbar}${nav}<div class="chat-body">${msgs.map((m, i) => `<div class="bubble ${m.me ? "me" : ""}" data-midx="${i}">${messageHtml(m)}</div>`).join("") || '<span class="muted">No messages yet. Start the conversation.</span>'}</div>${reply}${rec}<div class="chat-input"><textarea class="input autogrow chat-textarea" id="chat-text" rows="1" data-grow-max="150" placeholder="Type a message (Shift + Enter for a new line)" aria-label="Type a message"></textarea><div class="chat-extras-wrap"><button type="button" class="icon-btn chat-extras-toggle" data-chat-extras title="Add to your message" aria-label="Add to your message" aria-haspopup="true" aria-expanded="false"><span class="chat-extras-plus">${sicon("plus")}</span></button><div class="chat-extras-menu" data-chat-extras-pop hidden role="dialog" aria-label="Add to your message"><div class="chat-extras-head"><strong>Add to chat</strong><button type="button" class="icon-btn chat-extras-close" data-chat-extras-close title="Close" aria-label="Close menu">${sicon("x")}</button></div><div class="chat-extras-grid"><label class="chat-extras-item" title="Attach a file up to 3 MB"><input type="file" id="chat-file" hidden><span class="chat-extras-ic file">${sicon("clip")}</span><span>File</span></label><button type="button" class="chat-extras-item" id="poll-button" title="Create a poll"><span class="chat-extras-ic poll">${sicon("chart")}</span><span>Poll</span></button><button type="button" class="chat-extras-item" id="voice-button" title="Record a voice note"><span class="chat-extras-ic voice">${sicon("mic")}</span><span>Voice</span></button></div><div class="chat-extras-foot">Files up to 3 MB. Attach documents, start a poll, or record a voice note.</div></div></div><button type="button" class="primary" id="send-message">Send</button></div>`;
+  return `<div class="chat-head"><div class="chat-head-who">${isGroup ? groupAvatarMarkup(allGroups().find((g) => g.id === id)) : ""}<div><strong>${esc(target?.name || "@" + (target?.username || target?.handle || "?"))}</strong>${mutedTag}${typing}${presence}</div></div><span class="friend-actions"><button type="button" class="primary" data-start-call="${id}" style="padding:8px 12px;font-size:11px">Video call</button>${isFriendChat ? `<span class="post-menu-wrap"><button type="button" class="icon-btn" data-chat-menu="${id}" title="Conversation options" aria-label="Conversation options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden><button type="button" data-chat-block="${id}">Block user</button></span></span>` : ""}${isGroup && !isFriendChat ? `<span class="post-menu-wrap"><button type="button" class="icon-btn" data-chat-menu="${id}" title="Group options" aria-label="Group options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden>${groupMenuMarkup(id)}</span></span>` : ""}</span></div>${pinbar}${nav}<div class="chat-body">${msgs.map((m, i) => `<div class="bubble ${m.me ? "me" : ""}" data-midx="${i}">${messageHtml(m)}</div>`).join("") || '<span class="muted">No messages yet. Start the conversation.</span>'}</div>${reply}${rec}<div class="chat-input"><textarea class="input autogrow chat-textarea" id="chat-text" rows="1" data-grow-max="150" placeholder="type a message" aria-label="Type a message"></textarea><div class="chat-extras-wrap"><button type="button" class="icon-btn chat-extras-toggle" data-chat-extras title="Add to your message" aria-label="Add to your message" aria-haspopup="true" aria-expanded="false"><span class="chat-extras-plus">${sicon("plus")}</span></button><div class="chat-extras-menu" data-chat-extras-pop hidden role="dialog" aria-label="Add to your message"><div class="chat-extras-head"><strong>Add to chat</strong><button type="button" class="icon-btn chat-extras-close" data-chat-extras-close title="Close" aria-label="Close menu">${sicon("x")}</button></div><div class="chat-extras-grid"><label class="chat-extras-item" title="Attach a file up to 3 MB"><input type="file" id="chat-file" hidden><span class="chat-extras-ic file">${sicon("clip")}</span><span>File</span></label><button type="button" class="chat-extras-item" id="poll-button" title="Create a poll"><span class="chat-extras-ic poll">${sicon("chart")}</span><span>Poll</span></button><button type="button" class="chat-extras-item" id="voice-button" title="Record a voice note"><span class="chat-extras-ic voice">${sicon("mic")}</span><span>Voice</span></button></div><div class="chat-extras-foot">Files up to 3 MB. Attach documents, start a poll, or record a voice note.</div></div></div><button type="button" class="primary" id="send-message">Send</button></div>`;
 }
 
 function closeChatExtras(root) {
@@ -6181,6 +6497,13 @@ function mergeCloudRows(id, rows, names, me) {
     if (r.sender_id === me) state.messageStatus[r.id] = "delivered";
     added++;
   }
+  if (added) {
+    // Structured invite DMs (sprints / sessions) land in their inboxes too.
+    harvestInvitesFromRows(rows, (r) => {
+      const p = (r.sender_id && cloudFriendReqsById(r.sender_id)) || {};
+      return { id: r.sender_id, handle: names.get(r.sender_id)?.replace(/^@/, "") || p.handle || "a friend" };
+    });
+  }
   if (!added) return 0;
   merged.sort((a, b) => (a.ts || 0) - (b.ts || 0));
   state.messages[id] = merged.slice(-300);
@@ -6224,12 +6547,12 @@ async function loadCloudHistory(id, root) {
     // Custom groups created before Phase 7 may still have a cloud copy with
     // the same id — try it, but treat any failure as local-only.
   }
-  if (target.kind !== "group" && target.kind !== "connection") return;
+  if (target.kind !== "group" && target.kind !== "connection" && !(target.kind === "friend" && isUuid(id))) return;
   if (target.kind === "connection" && !isUuid(id)) return;
   const token = ++historyToken;
   try {
     const { data, error } = await loadConversation(
-      target.kind === "group" ? { groupId: id } : { recipientId: id },
+      target.kind === "group" ? { groupId: id } : { recipientId: id }, // friend/uuid DMs use recipientId too
     );
     if (error || token !== historyToken || state.activeChat !== id) return;
     const rows = Array.isArray(data) ? data : [];
@@ -6271,7 +6594,7 @@ async function deepenGroupSearch(id) {
   groupSearch.depth = depth + 1;
   paintGroupSearchResults(id);
   try {
-    const args = target.kind === "group" ? { groupId: id } : { recipientId: id };
+    const args = target.kind === "group" ? { groupId: id } : { recipientId: id }; // friend/uuid DMs use recipientId too
     const { data, error } = await loadConversation({
       ...args,
       limit: 100,
@@ -6320,14 +6643,18 @@ function sendChat(id, text) {
   // stay local — and a cloud failure never blocks or spams the sender.
   // (Group sends always attempt when signed in: pre-Phase-7 custom groups
   // may still own a cloud copy with the same id; RLS decides.)
-  const cloudOk = signedIn() && (target.kind === "group" || target.kind === "connection");
+  // A locally-stored friend whose id was resolved to a real cloud account
+  // (uuid) is cloud-backed too — that's how directory-resolved adds ship.
+  const cloudOk = signedIn() && (target.kind === "group" || target.kind === "connection" || (target.kind === "friend" && isUuid(id)));
   if (cloudOk) {
     const payload = target.kind === "group"
       ? { id: crypto.randomUUID(), sender_id: state.user.id, group_id: id, recipient_id: null, text: message.text, kind: "text", delivery_status: "sent" }
       : { id: crypto.randomUUID(), sender_id: state.user.id, group_id: null, recipient_id: id, text: message.text, kind: "text", delivery_status: "sent" };
     sendCloudMessage(payload).then((result) => {
       if (!result.error) {
-        message.cloudId = payload.id;
+        // The server assigns the canonical id (the RPC generates its own) —
+        // adopt it so read receipts and edits key off the right row.
+        message.cloudId = result.data?.id || payload.id;
         state.messageStatus[message.id] = "delivered";
         persist();
       }
@@ -6348,7 +6675,10 @@ function subscribeToChat(id) {
   const target = chatTarget(id);
   const group = target.kind === "group" ? target.group : null;
   // Local-only chats have no server counterpart — nothing to subscribe to.
-  if (!signedIn() || (target.kind !== "group" && target.kind !== "connection")) {
+  // Directory-resolved friends (uuid id) are cloud-backed even though they
+  // sit in state.friends.
+  const cloudBacked = target.kind === "group" || target.kind === "connection" || (target.kind === "friend" && isUuid(id));
+  if (!signedIn() || !cloudBacked) {
     conversationSubscription = { unsubscribe: () => {}, sendTyping: async () => {} };
     return;
   }
@@ -6356,8 +6686,13 @@ function subscribeToChat(id) {
   conversationSubscription = subscribeToConversation({
     groupId: group?.id,
     recipientId: group ? undefined : id,
+    myUserId: state.user?.id,
     onMessage: (message) => {
       if (!message || message.sender_id === state.user?.id) return;
+      // Structured invite DMs (sprints / sessions) route themselves even when
+      // this conversation is closed — the inbox is the destination, not the
+      // chat window.
+      harvestInvitesFromRows([message], (r) => ({ id: r.sender_id, handle: cloudFriendReqsById(r.sender_id)?.handle || "a friend" }));
       const row = {
         id: message.id,
         cloudId: message.id,
