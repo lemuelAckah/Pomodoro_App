@@ -2233,7 +2233,7 @@ function bindStories(body) {
     };
     reader.readAsDataURL(file);
   };
-  $("[data-status-play]", body).onclick = () => openStatus();
+  $("[data-status-play]", body).onclick = () => playAllStatuses();
   $$("[data-story-view]", body).forEach(
     (b) => (b.onclick = () => openStatus("story:" + b.dataset.storyView)),
   );
@@ -2365,6 +2365,39 @@ function bindStatusHome(body) {
 // Dedicated story viewer: progress bars, per-user text cards / photo stage,
 // tap + keyboard navigation off a single index, auto-advance with pause,
 // targeted DOM updates only (Community never re-renders underneath).
+// Status button (Discover strip): one tap plays EVERYTHING in order — your
+// updates first (oldest to newest), then each person's updates oldest to
+// newest, most recently active first. No per-ring tapping. Falls back to the
+// device-local loop for guests/offline with no cloud stories.
+function playAllStatuses() {
+  const byTime = (a, b) => new Date(a.createdAt) - new Date(b.createdAt);
+  const mine = cloudStories.filter((s) => s.mine).sort(byTime);
+  const others = new Map();
+  for (const s of cloudStories) {
+    if (s.mine) continue;
+    if (!others.has(s.userId)) others.set(s.userId, []);
+    others.get(s.userId).push(s);
+  }
+  const groups = [...others.values()]
+    .map((items) => items.sort(byTime))
+    .sort((a, b) => new Date(b[b.length - 1].createdAt) - new Date(a[a.length - 1].createdAt));
+  const all = [...mine, ...groups.flat()];
+  if (!all.length) {
+    if (liveStories().length) {
+      openStatus();
+      return;
+    }
+    // Nothing to play: take the user to the Status composer instead of
+    // popping a notification.
+    if (state.subtab !== "status") {
+      state.subtab = "status";
+      renderCommunity();
+    }
+    return;
+  }
+  const firstNew = all.findIndex((s) => !isSeen("cstory:" + s.id));
+  openStoryViewer(all, firstNew < 0 ? 0 : firstNew);
+}
 function closeStoryViewer() {
   const ov = $("#story-viewer");
   if (!ov) return;
@@ -2427,10 +2460,11 @@ function openStoryViewer(items, startIdx) {
     endsAt: 0,
     paused: false,
     dur: 0,
+    gen: 0,
   };
   const ov = document.createElement("div");
   ov.id = "story-viewer";
-  ov.innerHTML = `<div class="sv-frame" role="dialog" aria-label="Status viewer"><div class="sv-progress" data-sv-progress></div><div class="sv-top"><span class="status-avatar sm" data-sv-avatar></span><span class="sv-who"><strong data-sv-name></strong><small data-sv-time></small></span><button type="button" class="sv-more" data-sv-more aria-label="Status options" title="Status options" hidden>⋮</button><button type="button" class="sv-close" data-sv-close aria-label="Close status viewer">×</button></div><div class="sv-stage" data-sv-stage></div><button type="button" class="sv-tap left" data-sv-prev aria-label="Previous status">‹</button><button type="button" class="sv-tap right" data-sv-next aria-label="Next status">›</button><div class="sv-foot"><span class="muted" data-sv-views></span></div></div>`;
+  ov.innerHTML = `<div class="sv-frame" role="dialog" aria-label="Status viewer"><div class="sv-progress" data-sv-progress></div><div class="sv-top"><span class="status-avatar sm" data-sv-avatar></span><span class="sv-who"><strong data-sv-name></strong><small data-sv-time></small></span><span class="sv-count" data-sv-count></span><button type="button" class="sv-more" data-sv-more aria-label="Status options" title="Status options" hidden>⋮</button><button type="button" class="sv-close" data-sv-close aria-label="Close status viewer">×</button></div><div class="sv-stage" data-sv-stage></div><button type="button" class="sv-tap left" data-sv-prev aria-label="Previous status">‹</button><button type="button" class="sv-tap right" data-sv-next aria-label="Next status">›</button><div class="sv-foot"><span class="muted" data-sv-views></span></div></div>`;
   document.body.append(ov);
   const bar = () => ov.querySelector("[data-sv-progress]");
   const stage = () => ov.querySelector("[data-sv-stage]");
@@ -2495,6 +2529,7 @@ function openStoryViewer(items, startIdx) {
   function show(i) {
     // Single source of truth for the index: clamped, never out of range.
     st.idx = Math.min(Math.max(i, 0), st.items.length - 1);
+    st.gen += 1;
     closeStoryMenu();
     const item = st.items[st.idx];
     if (!item) {
@@ -2506,6 +2541,7 @@ function openStoryViewer(items, startIdx) {
     ov.querySelector("[data-sv-avatar]").style.setProperty("--sv-accent", svAccent(item.handle));
     ov.querySelector("[data-sv-name]").textContent = item.mine ? "My Status" : "@" + item.handle;
     ov.querySelector("[data-sv-time]").textContent = `${relTime(item.createdAt)} · ${item.visibility}`;
+    ov.querySelector("[data-sv-count]").textContent = `${st.idx + 1} / ${st.items.length}`;
     const views = ov.querySelector("[data-sv-views]");
     views.textContent = "";
     if (item.mine && signedIn()) {
@@ -2519,27 +2555,31 @@ function openStoryViewer(items, startIdx) {
     if (item.kind === "image" && item.mediaPath) {
       box.innerHTML = `<div class="sv-photo-wrap"><img class="sv-photo" alt="Status photo"></div>`;
       const img = box.querySelector("img");
+      // Generation guard: async photo callbacks from a previous item must
+      // never arm timers for the current one (skipped/duplicated statuses).
+      const gen = st.gen;
+      const beginIfCurrent = (ms) => { if (st.gen === gen) begin(ms); };
       let started = false;
       const begin = (ms) => {
         if (started || !document.body.contains(ov)) return;
         started = true;
         schedule(ms);
       };
-      img.addEventListener("load", () => begin(7000));
+      img.addEventListener("load", () => beginIfCurrent(7000));
       img.addEventListener("error", () => {
         img.alt = "Photo unavailable";
-        begin(5000);
+        beginIfCurrent(5000);
       });
       getStoryMediaUrl(item.mediaPath).then(({ data, error } = {}) => {
         if (!img.isConnected || st.items[st.idx]?.id !== item.id) return;
         if (error || !data?.signedUrl) {
           img.alt = "Photo unavailable";
-          begin(5000);
+          beginIfCurrent(5000);
           return;
         }
         img.src = data.signedUrl;
-      }).catch(() => begin(5000));
-      setTimeout(() => begin(10000), 10000); // failsafe: never stall
+      }).catch(() => beginIfCurrent(5000));
+      setTimeout(() => beginIfCurrent(10000), 10000); // failsafe: never stall
     } else {
       box.innerHTML = `<div class="sv-text-card" style="background:${svTheme(item.id)}"><p>${esc(item.text || "")}</p><div class="sv-card-foot"><strong>${esc(item.mine ? "You" : "@" + item.handle)}</strong><small>${relTime(item.createdAt)}</small></div></div>`;
       schedule(5000);
@@ -2687,7 +2727,6 @@ function openStatus(startKey) {
   pruneExpiredStories();
   statusSeq = buildStatusSequence();
   if (!statusSeq.length) {
-    notify("No status yet — post your first story " + sicon("fire"));
     return;
   }
   let idx = statusSeq.findIndex((it) => it.key === startKey);

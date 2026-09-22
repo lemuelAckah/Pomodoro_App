@@ -415,6 +415,16 @@
   font-size: 12px;
   opacity: 0.7;
 }
+.sv-count {
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.75);
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 99px;
+  padding: 4px 10px;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
 .sv-close {
   background: rgba(255, 255, 255, 0.12);
   border: 0;

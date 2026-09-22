@@ -424,6 +424,29 @@ function freeBoxState() {
   if (fb.pending !== null && typeof fb.pending !== "object") fb.pending = null;
   return fb;
 }
+// Server truth for today's free box: the pullRewards box log (sf-boxlog)
+// records every server-side opening. Local lastClaimDay covers the fresh
+// claim; the log covers claims made on other devices/sessions that this
+// device never saw. Either one means "claimed".
+function serverFreeClaimedToday() {
+  // Only for the signed-in account: the box log cache could otherwise leak
+  // one account's claim into another's (or a guest's) view.
+  if (!cloudRewards() || !state.user) return false;
+  try {
+    const log = JSON.parse(localStorage.getItem("sf-boxlog") || "[]");
+    if (!Array.isArray(log)) return false;
+    const today = serverDayKey();
+    return log.some((r) => r && r.box_type === "free-common"
+      && String(r.opened_day || "").slice(0, 10) === today);
+  } catch {
+    return false;
+  }
+}
+function freeClaimedToday() {
+  const fb = freeBoxState();
+  if (fb.lastClaimDay === serverDayKey()) return true;
+  return serverFreeClaimedToday();
+}
 
 function equippedAvatarEmoji() {
   const owned = (state.owned || []).find((o) => o && o.id === state.equipped?.avatar);
@@ -1326,6 +1349,12 @@ async function claimFreeBox() {
   try {
     if (cloudRewards()) {
       if (!requireAuth("claim your free box")) return;
+      // Fast path: server truth (box log) or local state already shows
+      // today's claim — don't fire an RPC we know will 400.
+      if (!fb.pending && freeClaimedToday()) {
+        renderStore();
+        return notify(`Already claimed — your next box lands after midnight UTC (${freeBoxCountdown()})`);
+      }
       notify("Checking the calendar…");
       await refreshServerTime();
       // The server rolls, enforces one-per-day (UTC) and credits the
@@ -1333,6 +1362,13 @@ async function claimFreeBox() {
       // unique AND the day guard rejects duplicates.
       const res = await secureOpenBox("free-common");
       if (!res.ok) {
+        // Reconcile: the server says today is already claimed (claimed on
+        // another device/session), so adopt that truth locally instead of
+        // leaving a Claim button that can never succeed.
+        if (/already claimed/i.test(String(res.error || ""))) {
+          fb.lastClaimDay = serverDayKey();
+          persist();
+        }
         renderStore();
         notify(res.error || "Could not claim your box.");
         return;
@@ -1438,7 +1474,7 @@ function freeBoxMarkup() {
   const today = serverDayKey();
   if (fb.pending && !fb.pending.opened)
     return `<div class="card freebox-card pending" style="margin-bottom:18px"><div class="section-row"><h2>Free daily box</h2><span class="tag">unopened</span></div><p class="muted">Your sealed box is waiting — the reward inside is already locked in.</p><button type="button" class="primary" data-free-reveal style="margin-top:10px">Reveal my box</button></div>`;
-  if (fb.lastClaimDay === today)
+  if (fb.lastClaimDay === today || serverFreeClaimedToday())
     return `<div class="card freebox-card claimed" style="margin-bottom:18px"><div class="section-row"><h2>Free daily box</h2><span class="tag">claimed</span></div><p class="muted">Next free box in <strong>${freeBoxCountdown()}</strong> (midnight UTC).</p></div>`;
   return `<div class="card freebox-card" style="margin-bottom:18px"><div class="section-row"><h2>Free daily box</h2><span class="tag">free</span></div><p class="muted">One Common box on the house — <strong>9.3% Rare</strong>, plus micro chances at <strong>Epic (0.63%)</strong> and <strong>Legendary (0.07%)</strong>. No coins needed.</p><button type="button" class="primary" data-free-claim style="margin-top:10px">Claim free box</button></div>`;
 }
