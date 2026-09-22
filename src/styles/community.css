@@ -599,6 +599,21 @@ html[data-night="1"] .group-logo {
   background: #edf3e8;
   font-size: 13px;
   line-height: 1.45;
+  /* Long pasted links/words must wrap inside the bubble — never push the
+     chat sideways on narrow phones. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
+}
+/* Same guarantee for feed notes, comments and search snippets. */
+.post-text,
+.post-text p,
+.comment-body,
+.comment-body p,
+.gs-snippet {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
 }
 
 .bubble.me {
