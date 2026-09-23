@@ -16,7 +16,7 @@ import {
   listBlocks, blockUser, unblockUser as serverUnblock,
   createStory, listStories, viewStory, deleteStory, listStoryViews,
   listNotifications, markNotificationRead, markAllNotificationsRead,
-  getPublicProfiles, searchUsers, editCloudMessage,
+  getPublicProfiles, listUserFriends, searchUsers, editCloudMessage,
   uploadGroupAvatar, removeGroupAvatar, getGroupAvatarUrl,
   uploadStoryPhoto, deleteStoryMedia, getStoryMediaUrl,
   setCloudMute, MUTE_FOREVER_AT, validateImageFile, IMAGE_FORMAT_ERROR,
@@ -4425,20 +4425,85 @@ function profileCardInner(d) {
     ? `<span class="pp-ava"><img src="${esc(photo)}" alt=""></span>`
     : `<span class="pp-ava">${esc(((d.handle || "?")[0] || "?").toUpperCase())}</span>`}<div class="pp-id"><strong>@${esc(d.handle)}</strong><small>${esc(d.name)}</small></div></div>${d.bio ? `<p class="pp-bio">${esc(d.bio)}</p>` : ""}${stateLabel ? `<span class="pp-state">${esc(stateLabel)}</span>` : ""}<button type="button" class="primary pp-view" data-pp-view>View profile</button>`;
 }
+// Async friends strip inside openProfileView — mutual friends sort first and
+// get the gold ring + "Mutual" pill; every tile navigates to that profile.
+async function loadProfileFriends(modal, d) {
+  const section = modal.querySelector("[data-pv-friends]");
+  if (!section) return;
+  try {
+    const { data, error } = await listUserFriends(d.id);
+    if (!modal.isConnected) return;
+    if (error || !Array.isArray(data)) {
+      section.remove();
+      return;
+    }
+    const rows = data
+      .filter((f) => f && f.id && f.id !== d.id)
+      .map((f) => ({
+        id: String(f.id),
+        handle: f.handle || "member",
+        name: f.name || f.handle || "Member",
+        photo: f.photo_path || "",
+        bio: f.bio || "",
+        mutual: Boolean(f.mutual),
+      }));
+    if (!rows.length) {
+      section.querySelector("[data-pv-friends-meta]").textContent = "";
+      const strip = section.querySelector("[data-pv-friends-strip]");
+      strip.className = "pv-friends-strip";
+      strip.innerHTML = `<p class="muted pv-friends-empty">No friends to show yet.</p>`;
+      return;
+    }
+    // Seed the photo cache so friendAvatarMarkup can resolve non-cached ids.
+    rows.forEach((f) => {
+      if (f.photo && !friendPhotoUrls.has(f.id)) friendPhotoUrls.set(f.id, resolvePhoto(f.photo));
+    });
+    rows.sort((a, b) => (b.mutual - a.mutual) || a.handle.localeCompare(b.handle));
+    const mutualN = rows.filter((f) => f.mutual).length;
+    section.querySelector("[data-pv-friends-meta]").innerHTML = mutualN
+      ? `<span class="pv-mutual-pill">${sicon("users")} ${mutualN} friend${mutualN === 1 ? "" : "s"} in common</span>`
+      : `<span>${rows.length}</span>`;
+    const strip = section.querySelector("[data-pv-friends-strip]");
+    strip.className = "pv-friends-strip";
+    strip.innerHTML = rows.map((f) => {
+      const state = f.mutual || cloudFriends.some((x) => x.id === f.id) ? "friends" : "";
+      return `<button type="button" class="pv-friend${f.mutual ? " mutual" : ""}" data-pv-friend data-profile-user="${esc(f.id)}" data-profile-handle="${esc(f.handle)}" data-profile-name="${esc(f.name)}" data-profile-photo="${esc(f.photo)}" data-profile-bio="${esc(f.bio)}" data-profile-state="${state}" title="View @${esc(f.handle)}">`
+        + `<span class="pv-friend-ring${f.mutual ? " mutual" : ""}">${friendAvatarMarkup(f.id, f.handle, f.name)}</span>`
+        + `<strong>@${esc(String(f.handle).slice(0, 12))}</strong>`
+        + `<small>${esc(String(f.name).slice(0, 16))}</small>`
+        + (f.mutual ? `<span class="pv-mutual-tag">Mutual</span>` : "")
+        + `</button>`;
+    }).join("");
+    $$("[data-pv-friend]", strip).forEach((tile) => {
+      tile.addEventListener("click", () => {
+        const fd = profileDataFrom(tile);
+        if (!fd.id || fd.id === d.id) return;
+        closeProfilePop();
+        modal.remove();
+        openProfileView(fd);
+      });
+    });
+    bindHoverProfiles(strip);
+  } catch {
+    if (modal.isConnected) section.remove();
+  }
+}
 // Full read-only profile modal (open to everyone; only friends' data is rich).
 function openProfileView(d) {
   const photo = d.photo ? avatarPublicUrl(d.photo) : "";
   const isFriend = cloudFriends.some((f) => f.id === d.id);
   const isPending = cloudFriendReqs.some((r) => r.otherId === d.id);
   const stories = cloudStories.filter((s) => s.userId === d.id);
+  const canLoadFriends = signedIn() && d.id;
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
   modal.id = "profile-view-modal";
   modal.innerHTML = `<div class="modal profile-view"><span class="pv-cover"></span><div class="pv-head">${photo
     ? `<span class="pv-ava"><img src="${esc(photo)}" alt=""></span>`
-    : `<span class="pv-ava">${esc(((d.handle || "?")[0] || "?").toUpperCase())}</span>`}<div class="pv-id"><h2>@${esc(d.handle)}</h2><p class="muted">${esc(d.name)}</p>${d.bio ? `<p class="pv-bio">${esc(d.bio)}</p>` : ""}</div></div><div class="pv-facts"><span class="tag">${isFriend ? sicon("check") + " Connected" : isPending ? "Request pending" : "Not connected"}</span>${stories.length ? `<span class="tag">${stories.length} status update${stories.length === 1 ? "" : "s"}</span>` : ""}</div>${stories.length ? `<div class="pv-stories">${stories.slice(0, 6).map((s) => `<button type="button" class="pv-story${isSeen("cstory:" + s.id) ? " seen" : ""}" data-pv-story="${esc(s.id)}" title="View status">${s.kind === "image" ? `<img data-story-thumb="${esc(s.mediaPath)}" alt="">` : `<span>${escSnippet(s.text || "", 60)}</span>`}<small>${relTime(s.createdAt)}</small></button>`).join("")}</div>` : ""}<div class="modal-actions pv-actions">${!isFriend && !isPending ? `<button type="button" class="primary" data-pv-add>Add friend</button>` : ""}${isFriend ? `<button type="button" class="ghost" data-pv-msg>Message</button><button type="button" class="ghost" data-pv-story-all>View status</button>` : ""}<button type="button" class="ghost" data-pv-close>Close</button>${isFriend ? `<button type="button" class="danger-button" data-pv-block>Block</button>` : ""}</div></div>`;
+    : `<span class="pv-ava">${esc(((d.handle || "?")[0] || "?").toUpperCase())}</span>`}<div class="pv-id"><h2>@${esc(d.handle)}</h2><p class="muted">${esc(d.name)}</p>${d.bio ? `<p class="pv-bio">${esc(d.bio)}</p>` : ""}</div></div><div class="pv-facts"><span class="tag">${isFriend ? sicon("check") + " Connected" : isPending ? "Request pending" : "Not connected"}</span>${stories.length ? `<span class="tag">${stories.length} status update${stories.length === 1 ? "" : "s"}</span>` : ""}</div>${canLoadFriends ? `<div class="pv-friends" data-pv-friends><div class="pv-friends-head"><span class="eyebrow">Friends</span><span class="pv-friends-meta" data-pv-friends-meta>Loading…</span></div><div class="pv-friends-strip pv-friends-loading" data-pv-friends-strip><span class="pv-friend-skel"></span><span class="pv-friend-skel"></span><span class="pv-friend-skel"></span></div></div>` : ""}${stories.length ? `<div class="pv-stories">${stories.slice(0, 6).map((s) => `<button type="button" class="pv-story${isSeen("cstory:" + s.id) ? " seen" : ""}" data-pv-story="${esc(s.id)}" title="View status">${s.kind === "image" ? `<img data-story-thumb="${esc(s.mediaPath)}" alt="">` : `<span>${escSnippet(s.text || "", 60)}</span>`}<small>${relTime(s.createdAt)}</small></button>`).join("")}</div>` : ""}<div class="modal-actions pv-actions">${!isFriend && !isPending ? `<button type="button" class="primary" data-pv-add>Add friend</button>` : ""}${isFriend ? `<button type="button" class="ghost" data-pv-msg>Message</button><button type="button" class="ghost" data-pv-story-all>View status</button>` : ""}<button type="button" class="ghost" data-pv-close>Close</button>${isFriend ? `<button type="button" class="danger-button" data-pv-block>Block</button>` : ""}</div></div>`;
   $("#modal-root").append(modal);
   paintStoryThumbs(modal);
+  if (canLoadFriends) loadProfileFriends(modal, d);
   modal.addEventListener("click", (e) => {
     if (e.target === modal) modal.remove();
   });

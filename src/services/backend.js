@@ -1788,6 +1788,19 @@ export async function getPublicProfiles(ids) {
   return supabase.rpc("get_public_profiles", { p_ids: list });
 }
 
+// Another user's accepted friends (+ mutual flag vs the caller). Needs the
+// list_user_friends RPC (migration 026) — without it the profile friends
+// section simply stays hidden.
+export async function listUserFriends(userId) {
+  if (!supabase)
+    return { data: [], error: new Error("Backend is not configured") };
+  if (!userId) return { data: [], error: null };
+  const res = await supabase.rpc("list_user_friends", { p_user: String(userId) });
+  if (res.error && isMissingRpc(res.error))
+    return { data: null, error: new Error("Friends list needs migration 026 in Supabase") };
+  return res;
+}
+
 // --- groups (private + public, owner/admin/member roles) ---------------------
 
 export async function groupCreate({ name, description = "", logo = "book", topics = [], visibility = "private" } = {}) {

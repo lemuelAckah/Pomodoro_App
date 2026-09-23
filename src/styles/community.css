@@ -3364,6 +3364,162 @@ mark {
   padding: 12px 18px 0;
 }
 
+/* Friends + mutual strip (async — fills after list_user_friends RPC) */
+.profile-view .pv-friends {
+  padding: 14px 18px 0;
+}
+
+.profile-view .pv-friends-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.profile-view .pv-friends-meta {
+  font-size: 11.5px;
+  color: var(--muted, #66736a);
+}
+
+.profile-view .pv-mutual-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--gold, #d9a441);
+  background: rgba(217, 164, 65, 0.12);
+  border: 1px solid rgba(217, 164, 65, 0.45);
+}
+
+.profile-view .pv-mutual-pill .sicon {
+  width: 13px;
+  height: 13px;
+}
+
+.profile-view .pv-friends-strip {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+}
+
+.profile-view .pv-friends-empty {
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.profile-view .pv-friend {
+  flex: 0 0 auto;
+  width: 78px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 6px 8px;
+  border-radius: 14px;
+  border: 1.5px solid var(--line, #dfe6dc);
+  background: var(--panel, #fff);
+  cursor: pointer;
+  text-align: center;
+  transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.profile-view .pv-friend:hover {
+  transform: translateY(-2px);
+  border-color: var(--gold, #d9a441);
+  box-shadow: 0 6px 16px rgba(217, 164, 65, 0.18);
+}
+
+.profile-view .pv-friend.mutual {
+  border-color: rgba(217, 164, 65, 0.55);
+  background:
+    linear-gradient(180deg, rgba(217, 164, 65, 0.1), transparent 70%),
+    var(--panel, #fff);
+}
+
+.profile-view .pv-friend-ring {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  padding: 2px;
+  display: grid;
+  place-items: center;
+  background: var(--line, #dfe6dc);
+}
+
+.profile-view .pv-friend-ring.mutual {
+  background: conic-gradient(
+    from 210deg,
+    var(--gold, #d9a441),
+    #e8795b,
+    #c94f7c,
+    #8a5cf5,
+    var(--gold, #d9a441)
+  );
+}
+
+.profile-view .pv-friend-ring .friend-ava {
+  width: 100%;
+  height: 100%;
+  border: 2px solid var(--panel, #fff);
+  font-size: 15px;
+}
+
+.profile-view .pv-friend strong {
+  font-size: 11px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-view .pv-friend small {
+  font-size: 10px;
+  color: var(--muted, #66736a);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.profile-view .pv-mutual-tag {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--gold, #d9a441);
+  background: rgba(217, 164, 65, 0.15);
+  border-radius: 999px;
+  padding: 1px 6px;
+  margin-top: 2px;
+}
+
+/* Loading skeletons for the friends strip */
+.profile-view .pv-friends-loading {
+  gap: 10px;
+}
+
+.profile-view .pv-friend-skel {
+  flex: 0 0 auto;
+  width: 78px;
+  height: 108px;
+  border-radius: 14px;
+  background: linear-gradient(90deg, var(--line, #dfe6dc) 25%, rgba(217, 164, 65, 0.18) 50%, var(--line, #dfe6dc) 75%);
+  background-size: 200% 100%;
+  animation: pv-skel 1.2s ease-in-out infinite;
+}
+
+@keyframes pv-skel {
+  to { background-position: -200% 0; }
+}
+
 .profile-view .pv-stories {
   display: flex;
   gap: 8px;
