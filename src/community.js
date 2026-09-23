@@ -389,6 +389,7 @@ let ringPollT = 0; // realtime-failure backup poll for ringing rows
 // from ringing twice for the same miss/decline/end on one device.
 const callNotifKeys = new Set();
 // Per-call chat-log keys so realtime + poll + timeout never double-bubble.
+// (logCallEvent is a no-op — keys unused, kept only if call logging returns.)
 const callLogKeys = new Set();
 // Group/1:1 participant snapshot for the call UI (userId → status).
 let callParticipantStates = new Map();
@@ -458,33 +459,12 @@ function notifyCall(title, text, icon = "phone", eventKey) {
   }
 }
 
-// Local call-log bubble: rings, answers, misses and ends land in the chat so
-// neither side needs a second realtime channel to see what happened.
-// eventKey (e.g. `${callId}:missed`) makes the bubble idempotent across
-// realtime, poll and timeout paths.
-function logCallEvent(chatId, text, icon = "phone", me = false, eventKey) {
-  if (!chatId) return;
-  if (eventKey) {
-    const key = String(eventKey);
-    if (callLogKeys.has(key)) return;
-    callLogKeys.add(key);
-    if (callLogKeys.size > 160) {
-      const oldest = callLogKeys.values().next().value;
-      callLogKeys.delete(oldest);
-    }
-  }
-  const msg = {
-    id: uid(),
-    me,
-    sysName: "",
-    icon,
-    text,
-    kind: "call",
-    callKey: eventKey || undefined,
-    ts: Date.now(),
-  };
-  state.messages[chatId] = [...(state.messages[chatId] || []), msg].slice(-300);
-  if (state.activeChat === chatId) appendChatBubble(chatId, msg, chatRoot());
+// Call status is surfaced by the call UI (ring overlay, room, pill) and the
+// notification center only. It is NEVER injected as an ordinary chat bubble —
+// the conversation stream stays clean. Kept as a no-op so lifecycle call
+// sites remain one-liners without touching every branch.
+function logCallEvent(/* chatId, text, icon, me, eventKey */) {
+  return;
 }
 
 function rememberSectionBeforeCall() {
@@ -5777,7 +5757,8 @@ function chatReadMap() {
 }
 function markChatRead(chatId) {
   const map = chatReadMap();
-  const last = (state.messages[chatId] || []).at(-1);
+  const msgs = visibleMsgs(chatId);
+  const last = msgs.at(-1);
   const entry = { ts: Math.max(last?.ts || 0, Date.now()), id: last?.id || null };
   const prev = map[chatId];
   const prevTs = typeof prev === "number" ? prev : prev?.ts || 0;
@@ -5786,8 +5767,14 @@ function markChatRead(chatId) {
   save("sf-chat-read", map);
   return true;
 }
+// Messages shown in the conversation UI. Automatic call-status rows
+// (kind === "call") never appear in the normal chat stream.
+function visibleMsgs(chatId) {
+  return (state.messages[chatId] || []).filter((m) => m && m.kind !== "call");
+}
+
 function unreadCount(chatId) {
-  const msgs = state.messages[chatId] || [];
+  const msgs = visibleMsgs(chatId);
   const marker = chatReadMap()[chatId];
   // Preferred: count everything after the last-seen message in arrival order.
   if (marker && typeof marker === "object" && marker.id) {
@@ -5866,10 +5853,106 @@ let selectedChats = new Set();
 // Per-message checkbox selection inside ONE open conversation. Enter from
 // the chat menu ("Select messages") or after choosing Delete on a chat row.
 // Only the checked ids are removed — untouched bubbles stay put.
+//
+// Selection is LOCAL UI STATE. Toggling never remounts the message list,
+// never re-fetches history, never re-subscribes realtime, and never touches
+// chat-body scrollTop. The open DOM stays exactly where the user left it.
 let msgSelectMode = null; // { chatId, ids: Set<string> }
+
+function msgSelectRoot() {
+  return chatRoot();
+}
+
+function msgSelectChatEl() {
+  const root = msgSelectRoot();
+  if (!root) return null;
+  return root.querySelector(".wa-chat") || root.querySelector(".chat") || root;
+}
+
+// Show/hide the select toolbar + row checkbox affordance WITHOUT rebuilding
+// the conversation. Rows keep their existing nodes and scroll offset.
+function applyMsgSelectChrome(on) {
+  const chat = msgSelectChatEl();
+  if (!chat) return;
+  chat.classList.toggle("msg-selecting", Boolean(on));
+  const head = chat.querySelector(".msg-select-head");
+  if (head) head.hidden = !on;
+  if (!on) {
+    chat.querySelectorAll(".bubble-row.select, .bubble-row.selected").forEach((row) => {
+      row.classList.remove("select", "selected");
+    });
+    chat.querySelectorAll(".msg-check.on").forEach((c) => {
+      c.classList.remove("on");
+      c.innerHTML = "";
+    });
+    chat.querySelectorAll("[data-toggle-msg]").forEach((el) => {
+      el.removeAttribute("role");
+      el.removeAttribute("aria-checked");
+      el.removeAttribute("tabindex");
+    });
+  }
+}
+
+function updateMsgSelectHead() {
+  const head = msgSelectChatEl()?.querySelector(".msg-select-head");
+  if (!head || !msgSelectMode) return;
+  const n = msgSelectMode.ids.size;
+  const label = head.querySelector("strong");
+  if (label) label.textContent = n ? `${n} selected` : "Select messages";
+  const del = head.querySelector("[data-msg-select-delete]");
+  if (del) {
+    del.disabled = !n;
+    del.textContent = n ? `Delete (${n})` : "Delete";
+  }
+}
+
+// Paint ONE row's selected state in place — no list rebuild, no scroll change.
+function paintMsgSelectRow(mid) {
+  if (!msgSelectMode || !mid) return;
+  const root = msgSelectRoot();
+  const bubble = root?.querySelector(`[data-toggle-msg="${CSS.escape(String(mid))}"]`);
+  if (!bubble) return;
+  const on = msgSelectMode.ids.has(mid);
+  bubble.setAttribute("role", "checkbox");
+  bubble.setAttribute("tabindex", "0");
+  bubble.setAttribute("aria-checked", on ? "true" : "false");
+  const row = bubble.closest(".bubble-row") || bubble;
+  row.classList.toggle("select", true);
+  row.classList.toggle("selected", on);
+  const check = bubble.querySelector(".msg-check");
+  if (check) {
+    check.classList.toggle("on", on);
+    check.innerHTML = on ? sicon("check") : "";
+  }
+}
+
+function paintAllMsgSelectRows() {
+  if (!msgSelectMode) return;
+  const root = msgSelectRoot();
+  if (!root) return;
+  root.querySelectorAll("[data-toggle-msg]").forEach((bubble) => {
+    const mid = bubble.dataset.toggleMsg;
+    const on = msgSelectMode.ids.has(mid);
+    bubble.setAttribute("role", "checkbox");
+    bubble.setAttribute("tabindex", "0");
+    bubble.setAttribute("aria-checked", on ? "true" : "false");
+    const row = bubble.closest(".bubble-row") || bubble;
+    row.classList.add("select");
+    row.classList.toggle("selected", on);
+    const check = bubble.querySelector(".msg-check");
+    if (check) {
+      check.classList.toggle("on", on);
+      check.innerHTML = on ? sicon("check") : "";
+    }
+  });
+}
 
 function enterMsgSelectMode(chatId, preselectIds) {
   if (!chatId) return;
+  const alreadyOpen = state.activeChat === chatId
+    && state.tab === "community"
+    && state.subtab === "messages"
+    && Boolean(msgSelectChatEl()?.querySelector(".chat-body"));
   state.activeChat = chatId;
   groupNav = null;
   groupSearch = null;
@@ -5879,62 +5962,72 @@ function enterMsgSelectMode(chatId, preselectIds) {
   };
   chatSelectMode = false;
   selectedChats.clear();
+  if (alreadyOpen) {
+    // Chat already mounted: only flip chrome + row affordances. Scroll and
+    // bubble nodes are left untouched.
+    applyMsgSelectChrome(true);
+    paintAllMsgSelectRows();
+    updateMsgSelectHead();
+    return;
+  }
+  // First open of this conversation (or not on Messages yet): one render to
+  // land in the thread with the toolbar present.
   const body = $("#tab-messages") || $("#community-body");
   if (state.tab === "community" && state.subtab === "messages") renderCommunity();
   else if (body) renderMessages(body);
   else shell();
+  applyMsgSelectChrome(true);
+  paintAllMsgSelectRows();
+  updateMsgSelectHead();
 }
 
 function exitMsgSelectMode() {
   if (!msgSelectMode) return;
   msgSelectMode = null;
-  const body = $("#tab-messages") || $("#community-body");
-  if (state.tab === "community" && state.subtab === "messages") renderCommunity();
-  else if (body) renderMessages(body);
+  // Hide toolbar + clear row marks in place — never remount the list.
+  applyMsgSelectChrome(false);
 }
 
 function toggleMsgSelect(mid) {
   if (!msgSelectMode || !mid) return;
   if (msgSelectMode.ids.has(mid)) msgSelectMode.ids.delete(mid);
   else msgSelectMode.ids.add(mid);
-  const body = $("#tab-messages") || $("#community-body");
-  if (body) {
-    // Cheap in-place repaint of the open thread keeps scroll position.
-    if (state.tab === "community" && state.subtab === "messages") renderCommunity();
-    else renderMessages(body);
-  }
+  // Local checkbox flip only: same DOM nodes, same scrollTop.
+  paintMsgSelectRow(mid);
+  updateMsgSelectHead();
 }
 
 function selectAllMsgs(chatId) {
   if (!msgSelectMode) return;
-  const all = (state.messages[chatId] || []).map((m) => m.id);
+  const all = visibleMsgs(chatId).map((m) => m.id);
   const every = all.length && all.every((id) => msgSelectMode.ids.has(id));
   msgSelectMode.ids = every ? new Set() : new Set(all);
-  const body = $("#tab-messages") || $("#community-body");
-  if (body) {
-    if (state.tab === "community" && state.subtab === "messages") renderCommunity();
-    else renderMessages(body);
-  }
+  paintAllMsgSelectRows();
+  updateMsgSelectHead();
 }
 
 // Remove ONLY the checked messages from this conversation. Local first (so
 // the UI never waits on the network), cloud delete best-effort, and a
 // per-chat tombstone list stops history/realtime from resurrecting them
 // after a refresh ("ghost" bubbles).
+//
+// The open thread is patched in place: selected rows leave the DOM, every
+// other bubble node stays, and chat-body scrollTop is not reset.
 function deleteSelectedMessages(chatId) {
   if (!msgSelectMode || !msgSelectMode.ids.size) return;
   const ids = [...msgSelectMode.ids];
+  const idSet = new Set(ids);
   confirmBox(
     `Delete ${ids.length} message${ids.length === 1 ? "" : "s"}?`,
     "Only the selected messages are removed from this device. Others in the chat keep their copy unless you own them.",
     async () => {
-      const list = (state.messages[chatId] || []).filter((m) => !msgSelectMode.ids.has(m.id));
-      const cloudIds = (state.messages[chatId] || [])
-        .filter((m) => msgSelectMode.ids.has(m.id) && m.cloudId)
+      const before = state.messages[chatId] || [];
+      const cloudIds = before
+        .filter((m) => idSet.has(m.id) && m.cloudId)
         .map((m) => m.cloudId);
-      state.messages[chatId] = list;
+      state.messages[chatId] = before.filter((m) => !idSet.has(m.id));
       const pins = { ...(state.pins || {}) };
-      const keptPins = (pins[chatId] || []).filter((pid) => !msgSelectMode.ids.has(pid));
+      const keptPins = (pins[chatId] || []).filter((pid) => !idSet.has(pid));
       if (keptPins.length) pins[chatId] = keptPins;
       else delete pins[chatId];
       state.pins = pins;
@@ -5942,7 +6035,7 @@ function deleteSelectedMessages(chatId) {
       // inserts skip them on every later load.
       const tombs = { ...(state.deletedMsgs || {}) };
       const bag = { ...(tombs[chatId] || {}) };
-      for (const mid of msgSelectMode.ids) bag[mid] = Date.now();
+      for (const mid of ids) bag[mid] = Date.now();
       for (const cid of cloudIds) bag[cid] = Date.now();
       tombs[chatId] = bag;
       state.deletedMsgs = tombs;
@@ -5953,9 +6046,34 @@ function deleteSelectedMessages(chatId) {
           deleteCloudMessage(cid).catch(() => {});
         }
       }
-      const body = $("#tab-messages") || $("#community-body");
-      if (state.tab === "community" && state.subtab === "messages") renderCommunity();
-      else if (body) renderMessages(body);
+      // Surgical DOM update: drop only the deleted rows. Remaining bubbles
+      // keep their nodes; scroll offset stays put (content above the cut
+      // is unchanged, so the viewport does not jump).
+      const body = chatBodyEl();
+      if (body && state.activeChat === chatId) {
+        for (const mid of ids) {
+          const el = body.querySelector(`[data-toggle-msg="${CSS.escape(String(mid))}"]`);
+          const row = el?.closest(".bubble-row");
+          if (row) row.remove();
+          else if (el) el.remove();
+        }
+        if (body && !body.querySelector(".bubble-row")) {
+          body.innerHTML = '<span class="muted">No messages yet. Start the conversation.</span>';
+        }
+        // Drop the pin strip if it still lists a deleted id.
+        const pinBar = msgSelectChatEl()?.querySelector(".pin-bar");
+        if (pinBar && keptPins.length) {
+          // leave bar; pin jump targets may be stale until next full paint
+        } else if (pinBar && !keptPins.length) {
+          pinBar.remove();
+        }
+        applyMsgSelectChrome(false);
+      } else {
+        applyMsgSelectChrome(false);
+        const root = $("#tab-messages") || $("#community-body");
+        if (state.tab === "community" && state.subtab === "messages") renderCommunity();
+        else if (root) renderMessages(root);
+      }
       notify(`${ids.length} message${ids.length === 1 ? "" : "s"} deleted`);
     },
     { eyebrow: "Delete messages", yesLabel: "Delete", noLabel: "Keep" },
@@ -6023,7 +6141,7 @@ function deleteSelectedChats() {
 
 function conversationRow(c) {
   const isGroup = allGroups().some((g) => g.id === c.id);
-  const msgs = state.messages[c.id] || [];
+  const msgs = visibleMsgs(c.id);
   const last = msgs.at(-1);
   const unread = unreadCount(c.id);
   const muted = isChatMuted(c.id);
@@ -6062,8 +6180,8 @@ function renderMessages(body) {
   const totalUnread = chats.reduce((sum, c) => sum + (state.activeChat === c.id ? 0 : unreadCount(c.id)), 0);
   const sorted = [...chats].sort((a, b) => {
     if (isSelfChat(a.id) !== isSelfChat(b.id)) return isSelfChat(a.id) ? -1 : 1;
-    const ta = (state.messages[a.id] || []).at(-1)?.ts || 0;
-    const tb = (state.messages[b.id] || []).at(-1)?.ts || 0;
+    const ta = visibleMsgs(a.id).at(-1)?.ts || 0;
+    const tb = visibleMsgs(b.id).at(-1)?.ts || 0;
     return tb - ta;
   });
   body.innerHTML = `<div class="wa-root${state.activeChat ? " has-chat" : ""}${chatSelectMode ? " selecting" : ""}"><div class="wa-list">`
@@ -6273,19 +6391,24 @@ function messageAvatarHtml(id, m, isGroup) {
 }
 
 function bubbleRowHtml(chatId, m, i) {
+  // Automatic call-status rows are never part of the conversation stream.
+  if (m.kind === "call") return "";
   const isGroup = allGroups().some((g) => g.id === chatId);
   const isSelf = isSelfChat(chatId);
   const selectOn = msgSelectMode && msgSelectMode.chatId === chatId;
   const selected = selectOn && msgSelectMode.ids.has(m.id);
-  const ava = selectOn ? "" : messageAvatarHtml(chatId, m, isGroup && !isSelf);
-  const check = selectOn
-    ? `<span class="msg-check${selected ? " on" : ""}" aria-hidden="true">${selected ? sicon("check") : ""}</span>`
-    : "";
+  // Avatar + checkbox slots are ALWAYS in the markup (check hidden unless
+  // .msg-selecting). Entering select mode only toggles a class — no remount,
+  // no scroll change.
+  const ava = messageAvatarHtml(chatId, m, isGroup && !isSelf);
+  const check = `<span class="msg-check${selected ? " on" : ""}" aria-hidden="true">${selected ? sicon("check") : ""}</span>`;
   const rowCls = `bubble-row${m.me ? " me" : ""}${selectOn ? " select" : ""}${selected ? " selected" : ""}`;
-  const attrs = selectOn
-    ? `data-toggle-msg="${esc(m.id)}" role="checkbox" aria-checked="${selected ? "true" : "false"}" tabindex="0"`
-    : `data-midx="${i}"`;
-  const inner = `<div class="bubble ${m.me ? "me" : ""}" ${attrs}>${check}${messageHtml(m)}</div>`;
+  // data-toggle-msg + data-midx always present (select-mode target + pin/react
+  // index). role/aria only flip on while selecting so normal chat a11y is clean.
+  const a11y = selectOn
+    ? ` role="checkbox" aria-checked="${selected ? "true" : "false"}" tabindex="0"`
+    : "";
+  const inner = `<div class="bubble ${m.me ? "me" : ""}" data-toggle-msg="${esc(m.id)}" data-midx="${i}"${a11y}>${check}${messageHtml(m)}</div>`;
   if (m.me) return `<div class="${rowCls}">${inner}${ava}</div>`;
   return `<div class="${rowCls}">${ava}${inner}</div>`;
 }
@@ -6463,7 +6586,7 @@ function senderLabel(m) {
 }
 function groupRoster(id) {
   const roster = new Map();
-  for (const m of state.messages[id] || []) {
+  for (const m of visibleMsgs(id)) {
     const key = m.me ? `me:${chatKey()}` : `other:${m.sender_id || "member"}`;
     if (!roster.has(key)) {
       roster.set(key, { key, you: Boolean(m.me), count: 0, last: 0 });
@@ -6546,7 +6669,7 @@ function chatMarkup(id) {
   const info = chatDisplayInfo(id);
   const target = info.target;
   const isSelf = isSelfChat(id);
-  const msgs = state.messages[id] || [];
+  const msgs = visibleMsgs(id);
   const pinned = pinnedIdsFor(id)
     .map((pid) => msgs.find((m) => m.id === pid))
     .filter(Boolean);
@@ -6574,16 +6697,18 @@ function chatMarkup(id) {
   const rec = voiceRec
     ? `<div class="rec-bar${voiceRec.paused ? " paused" : ""}" role="status" aria-label="Recording voice note"><button type="button" class="icon-btn rec-btn" data-rec-cancel title="Discard recording" aria-label="Discard recording">${sicon("trash")}</button><span class="rec-dot" aria-hidden="true"></span><button type="button" class="icon-btn rec-pause" data-rec-pause title="Pause or resume recording" aria-label="Pause or resume recording">${sicon("pause")}${sicon("play")}</button><span class="rec-wave" data-rec-wave aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="rec-time" data-rec-time>00:00</span><span class="rec-hint">Recording… tap Send when done</span><button type="button" class="primary rec-send" data-rec-send>${sicon("check")} <span>Send</span></button></div>`
     : "";
-  const msgSelectBar = msgSelectMode && msgSelectMode.chatId === id
-    ? `<div class="msg-select-head" role="toolbar" aria-label="Select messages">
+  // Toolbar is ALWAYS in the markup (hidden unless selecting) so entering
+  // select mode is a class toggle — the conversation DOM is not rebuilt.
+  const selecting = Boolean(msgSelectMode && msgSelectMode.chatId === id);
+  const selCount = selecting ? msgSelectMode.ids.size : 0;
+  const msgSelectBar = `<div class="msg-select-head" role="toolbar" aria-label="Select messages"${selecting ? "" : " hidden"}>
         <button type="button" class="ghost" data-msg-select-cancel>Cancel</button>
-        <strong>${msgSelectMode.ids.size ? `${msgSelectMode.ids.size} selected` : "Select messages"}</strong>
+        <strong>${selCount ? `${selCount} selected` : "Select messages"}</strong>
         <span class="msg-select-actions">
           <button type="button" class="ghost" data-msg-select-all>Select all</button>
-          <button type="button" class="delete" data-msg-select-delete${msgSelectMode.ids.size ? "" : " disabled"}>Delete${msgSelectMode.ids.size ? ` (${msgSelectMode.ids.size})` : ""}</button>
+          <button type="button" class="delete" data-msg-select-delete${selCount ? "" : " disabled"}>Delete${selCount ? ` (${selCount})` : ""}</button>
         </span>
-      </div>`
-    : "";
+      </div>`;
   const isFriendChat = (state.friends || []).some((f) => f.id === id) || cloudFriends.some((f) => f.id === id) || isSelf;
   const isGroup = allGroups().some((g) => g.id === id);
   const mutedTag = (isGroup || isFriendChat) && isChatMuted(id) ? ' <span class="tag">muted</span>' : "";
@@ -6926,9 +7051,10 @@ function bindChat(root, id) {
     root.dataset.bubbleDelegated = "1";
     root.addEventListener("click", (e) => {
       const cid = root.dataset.chatDelegatedId;
-      // Message multi-select: checkbox rows take priority over bubble tools.
+      // Message multi-select: only intercept when THIS chat is selecting.
+      // Outside select mode the bubble keeps its normal pin/react/reply tools.
       const msgToggle = e.target.closest("[data-toggle-msg]");
-      if (msgToggle && root.contains(msgToggle)) {
+      if (msgToggle && root.contains(msgToggle) && msgSelectMode && msgSelectMode.chatId === cid) {
         e.stopPropagation();
         toggleMsgSelect(msgToggle.dataset.toggleMsg);
         return;
@@ -7058,9 +7184,6 @@ function bindChat(root, id) {
   $("[data-pins-all]", root)?.addEventListener("click", () => {
     openPinnedList(id);
   });
-  $("[data-pins-all]", root)?.addEventListener("click", () => {
-    openPinnedList(id);
-  });
   const callBtns = $$("[data-start-call]", root);
   callBtns.forEach((btn) => {
     btn.onclick = () => {
@@ -7104,7 +7227,7 @@ function groupShared(id) {
   const videos = [];
   const files = [];
   const links = [];
-  for (const [idx, m] of (state.messages[id] || []).entries()) {
+  for (const [idx, m] of visibleMsgs(id).entries()) {
     if (m.kind === "file" && m.url) {
       const item = {
         idx,
@@ -7379,7 +7502,7 @@ function openDmReport(id, name) {
 function openContactCard(id, info) {
   const target = info.target || {};
   const counts = groupMediaCounts(id);
-  const msgs = state.messages[id] || [];
+  const msgs = visibleMsgs(id);
   const sharedDays = msgs.length ? Math.max(1, Math.ceil((Date.now() - Math.min(...msgs.map((m) => m.ts || Date.now()))) / 86400000)) : 0;
   const photo = target.photo || cloudFriendPhoto(id) || "";
   const modal = document.createElement("div");
@@ -7957,7 +8080,7 @@ function flashBubble(idx) {
 }
 // Scroll the chat to a pinned message by id and flash it.
 function jumpToPinnedMessage(id, msgId) {
-  const msgs = state.messages[id] || [];
+  const msgs = visibleMsgs(id);
   const idx = msgs.findIndex((m) => m.id === msgId);
   if (idx < 0) {
     notify("That pinned message is no longer in this chat");
@@ -7977,7 +8100,7 @@ function jumpToPinnedMessage(id, msgId) {
 // Modal listing every pinned message in the chat, newest first.
 function openPinnedList(id) {
   $("#pins-modal")?.remove();
-  const msgs = state.messages[id] || [];
+  const msgs = visibleMsgs(id);
   const pinned = pinnedIdsFor(id)
     .map((pid) => msgs.find((m) => m.id === pid))
     .filter(Boolean);
@@ -8039,7 +8162,7 @@ function searchGroupMessages(id, q) {
   const needle = String(q || "").trim().toLowerCase();
   if (!needle) return [];
   const out = [];
-  for (const [idx, m] of (state.messages[id] || []).entries()) {
+  for (const [idx, m] of visibleMsgs(id).entries()) {
     const text = messageText(m);
     const hay = `${text} ${m.file || ""} ${senderLabel(m)} ${extractLinks(text).join(" ")}`.toLowerCase();
     if (!hay.includes(needle)) continue;
@@ -8406,7 +8529,7 @@ function paintChatBody(id, root, scrollBottom) {
   const body = chatBodyEl(root);
   if (!body) return;
   const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 120;
-  const msgs = state.messages[id] || [];
+  const msgs = visibleMsgs(id);
   body.innerHTML = msgs.map((m, i) => bubbleRowHtml(id, m, i)).join("")
     || '<span class="muted">No messages yet. Start the conversation.</span>';
   if (scrollBottom || nearBottom) body.scrollTop = body.scrollHeight;
@@ -8414,9 +8537,10 @@ function paintChatBody(id, root, scrollBottom) {
 function appendChatBubble(id, m, root) {
   const body = chatBodyEl(root);
   if (!body) return false;
+  if (m.kind === "call") return false;
   const empty = body.querySelector(":scope > .muted");
   if (empty) empty.remove();
-  const idx = (state.messages[id] || []).length - 1;
+  const idx = Math.max(0, visibleMsgs(id).length - 1);
   const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 160;
   body.insertAdjacentHTML("beforeend", bubbleRowHtml(id, m, idx));
   if (nearBottom || m.me) body.scrollTop = body.scrollHeight;
@@ -8489,6 +8613,7 @@ function mergeCloudRows(id, rows, names, me) {
   const merged = [...(state.messages[id] || [])];
   for (const r of rows) {
     if (!r || !r.id || seen.has(r.id)) continue;
+    if (r.kind === "call") continue;
     if (tombs && (tombs[r.id] || tombs[r.cloudId])) continue;
     seen.add(r.id);
     merged.push({
@@ -8728,6 +8853,8 @@ function subscribeToChat(id) {
     myUserId: state.user?.id,
     onMessage: (message) => {
       if (!message || !message.id) return;
+      // Call lifecycle rows never enter the conversation stream.
+      if (message.kind === "call") return;
       // Own echo: Postgres realtime delivers MY writes back to my other
       // devices/tabs. Without this, a message typed here appears twice (once
       // optimistically, once from the echo) and my own reply never made it

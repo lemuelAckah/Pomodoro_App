@@ -4180,6 +4180,9 @@ html[data-night="1"] .bubble-ava.me-ava {
   align-items: center;
   gap: 6px;
 }
+.msg-select-head[hidden] {
+  display: none !important;
+}
 .msg-select-head .delete,
 .msg-select-actions .delete {
   background: none;
@@ -4207,13 +4210,20 @@ html[data-night="1"] .bubble-ava.me-ava {
 .wa-root .chat-body .bubble-row.selected {
   background: color-mix(in srgb, var(--sage) 14%, transparent);
 }
-.msg-check {
+/* Checkbox slots exist in every row markup but stay hidden until the chat
+   enters select mode — entering/exiting never remounts the conversation. */
+.wa-chat .msg-check {
+  display: none;
+}
+.wa-chat.msg-selecting .msg-check {
+  display: grid;
+}
+.wa-root .chat-body .msg-check {
   flex: none;
   width: 20px;
   height: 20px;
   border-radius: 50%;
   border: 2px solid color-mix(in srgb, var(--sage) 70%, var(--line));
-  display: grid;
   place-items: center;
   margin: 0 6px 4px 0;
   background: var(--card);
