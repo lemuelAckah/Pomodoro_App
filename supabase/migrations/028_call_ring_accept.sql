@@ -5,8 +5,11 @@
 -- policy and initiator-only participant insert made accept impossible from
 -- the callee side. Mesh needs indexes for "any ringing calls for me" and
 -- per-call participant status lookups.
+--
+-- Safe to re-run: drop both the old and new policy names before create.
 
 drop policy if exists call_history_initiator_update on public.call_history;
+drop policy if exists call_history_participant_update on public.call_history;
 create policy call_history_participant_update on public.call_history
   for update
   using (
@@ -27,6 +30,7 @@ create policy call_history_participant_update on public.call_history
   );
 
 drop policy if exists call_participants_initiator_insert on public.call_participants;
+drop policy if exists call_participants_insert on public.call_participants;
 create policy call_participants_insert on public.call_participants
   for insert
   with check (
