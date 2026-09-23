@@ -2152,6 +2152,228 @@ html[data-night="1"] .poll-add:hover {
   margin-top: 16px;
 }
 .incoming-call .modal-actions button { min-width: 120px; }
+
+/* ---------- Global incoming-call ring (body-level, above every overlay) ---------- */
+.call-ring-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background:
+    radial-gradient(900px 500px at 50% 0%, #47765a2e 0%, transparent 60%),
+    #0b1210cc;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  animation: call-ring-fade 0.22s ease;
+}
+@keyframes call-ring-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.call-ring-card {
+  width: min(400px, 100%);
+  text-align: center;
+  padding: 28px 24px 24px;
+  border-radius: 28px;
+  background: linear-gradient(180deg, #16241c 0%, #101a15 100%);
+  border: 1px solid #47765a66;
+  color: #f4faf6;
+  box-shadow:
+    0 40px 100px #04100acc,
+    inset 0 1px 0 #ffffff18,
+    0 0 0 1px #47765a22;
+  animation: call-pop 0.3s cubic-bezier(0.2, 0.9, 0.25, 1.15);
+}
+.call-ring-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font:
+    700 11px "Space Mono",
+    monospace;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #8fd4b0;
+  margin-bottom: 22px;
+}
+.call-ring-eyebrow svg { width: 14px; height: 14px; }
+.call-ring-avatar {
+  position: relative;
+  width: 112px;
+  height: 112px;
+  margin: 0 auto 16px;
+}
+.call-ring-avatar .wave {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid #5ecf9a;
+  opacity: 0;
+  animation: ring-wave 2s ease-out infinite;
+  pointer-events: none;
+}
+.call-ring-avatar .wave.w2 { animation-delay: 1s; }
+@keyframes ring-wave {
+  0% { transform: scale(0.85); opacity: 0.75; }
+  100% { transform: scale(1.65); opacity: 0; }
+}
+.call-ring-avatar .friend-ava,
+.call-ring-avatar .avatar,
+.call-ring-avatar img {
+  width: 96px !important;
+  height: 96px !important;
+  border-radius: 50% !important;
+  object-fit: cover;
+  display: grid;
+  place-items: center;
+  font:
+    700 2rem "Space Mono",
+    monospace;
+  background: #47765a;
+  color: #fff;
+  border: 3px solid #8fd4b0;
+  box-shadow: 0 12px 40px #00000066;
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
+}
+.call-ring-card h2 {
+  margin: 0;
+  font:
+    600 1.55rem "Fraunces",
+    serif;
+}
+.call-ring-card p {
+  margin: 8px 0 24px;
+  font-size: 14px;
+  color: #b7cfc3;
+}
+.call-ring-actions {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+}
+.call-ring-btn {
+  min-width: 132px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 18px;
+  border: 0;
+  border-radius: 999px;
+  font:
+    700 14px "Space Mono",
+    monospace;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+}
+.call-ring-btn svg { width: 16px; height: 16px; }
+.call-ring-btn:active { transform: scale(0.97); }
+.call-ring-btn.accept {
+  background: linear-gradient(180deg, #3d9b6f, #2f7a57);
+  color: #fff;
+  box-shadow: 0 12px 30px #2f7a5766, inset 0 1px 0 #ffffff33;
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+.call-ring-btn.decline {
+  background: #2a1a1a;
+  color: #ffb4a8;
+  border: 1px solid #ff6b5b44;
+  box-shadow: inset 0 1px 0 #ffffff12;
+}
+.call-ring-btn:hover { filter: brightness(1.08); }
+
+/* ---------- Ongoing-call pill (any section, above status/books/focus) ---------- */
+#ongoing-call-pill {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 860;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border: 1px solid #47765a88;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #16241fee, #101a15f5);
+  color: #f4faf6;
+  box-shadow: 0 16px 40px #04100aaa, inset 0 1px 0 #ffffff18;
+  font:
+    700 13px "Space Mono",
+    monospace;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  animation: recipientInUp 0.25s ease;
+}
+#ongoing-call-pill span { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#ongoing-call-pill small {
+  color: #8fd4b0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+#ongoing-call-pill svg { width: 16px; height: 16px; color: #5ecf9a; }
+#ongoing-call-pill .pill-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #3ab07a;
+  box-shadow: 0 0 0 0 #3ab07a88;
+  animation: live-pulse 1.4s ease-in-out infinite;
+  flex-shrink: 0;
+}
+#ongoing-call-pill:hover { filter: brightness(1.08); }
+
+/* ---------- Activity-centre live call banner ---------- */
+.notif-live-call {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: #47765a1a;
+  border: 1px solid #47765a44;
+}
+.notif-live-call.live {
+  background: #1d4d3629;
+  border-color: #3ab07a66;
+}
+.notif-live-ico {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #2f7a57;
+  color: #fff;
+  flex-shrink: 0;
+}
+.notif-live-ico svg { width: 18px; height: 18px; }
+.notif-live-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.notif-live-txt strong { font-size: 14px; }
+.notif-live-txt small { color: var(--muted, #6b7f74); font-size: 12px; }
+.notif-live-btn { padding: 8px 14px; font-size: 12px; flex-shrink: 0; }
+
+/* ---------- Chat call-log bubbles ---------- */
+.bubble.call-log .sys-ico,
+.bubble .sys-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #47765a22;
+  color: #2f7a57;
+  margin-right: 6px;
+  vertical-align: -5px;
+}
+.bubble.call-log .sys-ico svg { width: 13px; height: 13px; }
 .call-video {
   position: absolute;
   inset: 0;

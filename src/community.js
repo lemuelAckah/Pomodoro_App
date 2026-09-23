@@ -1,12 +1,13 @@
 /* community.js — community, chat, groups, stories/status loop, calls, sprints */
 import {
-  state, $, $$, uid, get, save, esc, sicon, stripIcon, persist, notify, confirmBox, viewHead,
+  state, $, $$, uid, get, save, esc, sicon, stripIcon, persist, notify, toast, confirmBox, viewHead,
   addCoins, addNotification, browserNotify, celebrate, fmt, fmtSize, avatarMarkup, dayKey, notifOn,
   setGroupLookup, fitTextarea, requireAuth, fmtClock, paintBackendPill, registerBackendPillResolver,
 } from "./core.js";
 import {
   sendCloudMessage, markMessageRead, subscribeToConversation, subscribeToPresence, avatarPublicUrl,
   createWebRtcPeer, recordCall, updateCall, upsertCallParticipant, getCallById, listCallParticipants,
+  listMyRingingCalls,
   dmCallRoomId, subscribeToIncomingCalls,
   uploadUserFile, getUserFileUrl, backendConfigured, reportUser, listPublicGroups,
   createCloudGroup, joinCloudGroup, leaveCloudGroup, deleteCloudGroup,
@@ -380,6 +381,143 @@ let outgoingRingT = 0;
 let meshWatchT = 0; // periodic mid-call peer discovery (cap 6)
 let connectInFlight = false;
 let forceConnectPending = false; // Accept raced a live connect — re-offer after
+let ringChimeT = 0; // repeating ring tone while the global ring is up
+let ringTimeoutT = 0; // auto-miss if nobody answers
+let ringPollT = 0; // realtime-failure backup poll for ringing rows
+
+// Shell badge only rebuilds on shell() — refresh the unread count in place so
+// a ring / missed / ended call lights the bell without wiping open overlays.
+function refreshNotifBadge() {
+  const n = state.notifications.filter((x) => !x.read).length;
+  $$(".notification-dot").forEach((el) => {
+    el.textContent = n || "";
+  });
+}
+
+function notifyCall(title, text, icon = "phone") {
+  addNotification(title, text, icon);
+  refreshNotifBadge();
+  try {
+    browserNotify(title, text);
+  } catch {
+    /* permission / headless — in-app ring is enough */
+  }
+}
+
+// Local call-log bubble: rings, answers, misses and ends land in the chat so
+// neither side needs a second realtime channel to see what happened.
+function logCallEvent(chatId, text, icon = "phone", me = false) {
+  if (!chatId) return;
+  const msg = {
+    id: uid(),
+    me,
+    sysName: "",
+    icon,
+    text,
+    kind: "call",
+    ts: Date.now(),
+  };
+  state.messages[chatId] = [...(state.messages[chatId] || []), msg].slice(-300);
+  if (state.activeChat === chatId) appendChatBubble(chatId, msg, chatRoot());
+}
+
+function callChatIdFor(call, fallback) {
+  // 1:1 → peer id; group/room → room id (group rooms use the group id).
+  return call?.peerId || call?.id || fallback || null;
+}
+
+function callDurationLabel(ms) {
+  const sec = Math.max(0, Math.round(ms / 1000));
+  if (sec < 60) return `${sec}s`;
+  return `${Math.floor(sec / 60)}m ${sec % 60}s`;
+}
+
+function startRingChime() {
+  stopRingChime();
+  try {
+    playChime("focus");
+  } catch {
+    /* silent */
+  }
+  ringChimeT = setInterval(() => {
+    try {
+      playChime("focus");
+    } catch {
+      /* silent */
+    }
+  }, 2200);
+}
+
+function stopRingChime() {
+  if (ringChimeT) {
+    clearInterval(ringChimeT);
+    ringChimeT = 0;
+  }
+}
+
+function dismissIncomingRing() {
+  stopRingChime();
+  if (ringTimeoutT) {
+    clearTimeout(ringTimeoutT);
+    ringTimeoutT = 0;
+  }
+  $("#incoming-call-ring")?.remove();
+}
+
+// Floating "on a call" pill — stays above status/books/focus overlays so a
+// minimized room is never invisible while the user is elsewhere in the app.
+function updateOngoingCallPill() {
+  const pill = $("#ongoing-call-pill");
+  if (!state.call) {
+    pill?.remove();
+    return;
+  }
+  const should = Boolean(state.callMinimized) || !$("#call-window");
+  if (!should) {
+    pill?.remove();
+    return;
+  }
+  let el = pill;
+  if (!el) {
+    el = document.createElement("button");
+    el.id = "ongoing-call-pill";
+    el.type = "button";
+    document.body.append(el);
+  }
+  const live = state.callStatus === "connected";
+  const label = live
+    ? "On a call"
+    : state.callStatus === "connecting"
+      ? "Connecting…"
+      : "Ringing…";
+  el.innerHTML = `<i class="pill-dot"></i><span>${esc(state.call.name || "Call")}</span><small>${label}</small>${sicon("phone")}`;
+  el.setAttribute("aria-label", `Return to call with ${state.call.name || "study partner"}`);
+  el.onclick = () => {
+    state.callMinimized = false;
+    persist();
+    renderCall();
+    updateOngoingCallPill();
+  };
+}
+
+// Realtime can miss an INSERT (tab sleep, dropped channel). Poll so a
+// one-sided call always surfaces a ring even without a live event.
+function startRingPoll() {
+  if (ringPollT) return;
+  ringPollT = setInterval(async () => {
+    if (!backendConfigured || !state.user) return;
+    if (state.call || pendingIncomingCall || navigator.onLine === false) return;
+    try {
+      const { data } = await listMyRingingCalls(state.user.id);
+      const row = (data || []).find(
+        (r) => r?.id && r.status === "ringing" && r.initiator_id !== state.user.id,
+      );
+      if (row) showIncomingCall(row);
+    } catch {
+      /* next tick */
+    }
+  }, 4500);
+}
 
 function callRoomSignalingId(roomId, a, b) {
   // Pair-scoped channel inside a shared call room so group mesh signals
@@ -440,22 +578,32 @@ async function ensureCallPeer(peerId, stream) {
         remoteStream = callRemotes.values().next().value || remoteStream;
         if (state.callStatus !== "connected") {
           state.callStatus = "connected";
-          notify(sicon("user") + " A study partner joined the call");
+          if (!state.callStartedAt) state.callStartedAt = Date.now();
+          startCallClock();
+          toast("A study partner joined the call");
+          logCallEvent(callChatIdFor(state.call), "Video call connected", "phone", true);
         }
         renderCall();
+        updateOngoingCallPill();
       },
       onStateChange: (status) => {
         if (status === "connected") {
-          if (state.callStatus !== "connected") state.callStatus = "connected";
+          if (state.callStatus !== "connected") {
+            state.callStatus = "connected";
+            if (!state.callStartedAt) state.callStartedAt = Date.now();
+            startCallClock();
+            logCallEvent(callChatIdFor(state.call), "Video call connected", "phone", true);
+          }
           startMeshWatch();
         } else if (status === "failed" || status === "disconnected") {
           callRemotes.delete(peerId);
           if (!callRemotes.size && state.callStatus === "connected") {
             state.callStatus = "connecting";
-            notify("Call connection lost. Press Connect to retry.");
+            toast("Call connection lost. Press Connect to retry.");
           }
         }
         renderCall();
+        updateOngoingCallPill();
       },
     });
     callPeers.set(peerId, handle);
@@ -494,7 +642,10 @@ function stopMeshWatch() {
 }
 
 function ensureIncomingCallSubscription() {
-  if (!backendConfigured || !state.user || incomingCallSub) return;
+  if (!backendConfigured || !state.user || incomingCallSub) {
+    if (backendConfigured && state.user) startRingPoll();
+    return;
+  }
   incomingCallSub = subscribeToIncomingCalls(state.user.id, {
     onRinging: async (row) => {
       if (!row?.id || pendingIncomingCall?.id === row.id) return;
@@ -521,6 +672,8 @@ function ensureIncomingCallSubscription() {
       // They accepted — we offer (or re-offer if our early timeout offer
       // went out before their signaling channel was up).
       callIsInitiator = true;
+      const peerName = state.call.name || "Your partner";
+      logCallEvent(callChatIdFor(state.call), `${peerName} answered`, "phone", false);
       if (state.callStatus === "connected" && activeCallStream) {
         meshMissingPeers().catch(() => {});
       } else {
@@ -529,22 +682,46 @@ function ensureIncomingCallSubscription() {
     },
     onCancelled: (row) => {
       if (!row?.id) return;
+      const friend = cloudFriends.find((f) => f.id === row.initiator_id)
+        || cloudFriends.find((f) => f.id === row.recipient_id)
+        || null;
+      const who = friend?.name || friend?.handle || "Study partner";
       if (pendingIncomingCall?.id === row.id) {
+        const chatId = row.group_id || row.initiator_id;
         pendingIncomingCall = null;
-        $("#incoming-call-modal")?.remove();
-        notify("Missed call");
-      }
-      if (activeCallHistoryId && row.id === activeCallHistoryId && state.call) {
+        dismissIncomingRing();
+        notifyCall("Missed video call", `${who} ended the ring before you answered`, "phone");
+        logCallEvent(chatId, "Missed video call", "phone", false);
+        toast("Missed call");
+      } else if (row.initiator_id === state.user?.id) {
+        // Callee declined / timed out — we are the initiator still waiting.
+        notifyCall("Call declined", `${who} did not answer`, "phone");
+        if (state.call && activeCallHistoryId === row.id) teardownCall(false);
+        else {
+          logCallEvent(row.group_id || row.recipient_id, "Call declined — no answer", "phone", true);
+          toast("Call declined");
+        }
+      } else if (activeCallHistoryId && row.id === activeCallHistoryId && state.call) {
+        // Far side hung up mid-call — still log the end on this side.
         teardownCall(false);
-        notify("The other side ended the call");
       }
     },
   });
+  startRingPoll();
 }
 
 function teardownCall(notifyEnd = true) {
   clearTimeout(outgoingRingT);
   stopMeshWatch();
+  dismissIncomingRing();
+  const callMeta = state.call
+    ? {
+        name: state.call.name || "Study partner",
+        chatId: callChatIdFor(state.call),
+        status: state.callStatus,
+        startedAt: state.callStartedAt || 0,
+      }
+    : null;
   callPeers.forEach((p) => {
     try { p.close(); } catch { /* ignore */ }
   });
@@ -562,6 +739,7 @@ function teardownCall(notifyEnd = true) {
   state.callMinimized = false;
   stopCallClock();
   $("#call-window")?.remove();
+  updateOngoingCallPill();
   if (activeCallHistoryId) {
     updateCall(activeCallHistoryId, { status: "ended", ended_at: new Date().toISOString() }).catch(() => {});
     if (state.user)
@@ -573,23 +751,87 @@ function teardownCall(notifyEnd = true) {
       }).catch(() => {});
     activeCallHistoryId = null;
   }
-  if (notifyEnd) notify("Call ended — great studying together " + sicon("check"));
+  if (callMeta) {
+    const wasLive = callMeta.status === "connected";
+    const dur = callMeta.startedAt ? callDurationLabel(Date.now() - callMeta.startedAt) : "";
+    const mine = Boolean(notifyEnd);
+    if (wasLive && dur) {
+      logCallEvent(callMeta.chatId, `Video call ended · ${dur}`, "phone", mine);
+      if (notifyEnd) {
+        notifyCall("Video call ended", `with ${callMeta.name} · ${dur}`, "phone");
+        toast("Call ended — great studying together");
+      }
+    } else if (callMeta.status === "connecting" || callMeta.status === "ringing") {
+      logCallEvent(callMeta.chatId, "Call ended before connecting", "phone", mine);
+      if (notifyEnd) {
+        notifyCall("Call ended", `with ${callMeta.name} — no connection`, "phone");
+        toast("Call ended");
+      } else {
+        toast("The other side ended the call");
+      }
+    } else {
+      logCallEvent(callMeta.chatId, "Video call ended", "phone", mine);
+      if (notifyEnd) {
+        notifyCall("Video call ended", `with ${callMeta.name}`, "phone");
+        toast("Call ended — great studying together");
+      }
+    }
+  }
 }
 
+// Global high-z ring: lives on <body> at z-index 900 so it paints over the
+// status viewer (400), focus view, books, tour, audio sheets and the old
+// modal stack (50) — the callee sees it in ANY section, not only beside chat.
 function showIncomingCall(row) {
-  if ($("#incoming-call-modal")) return;
+  if ($("#incoming-call-ring") || pendingIncomingCall?.id === row?.id) return;
   pendingIncomingCall = row;
   const friend = cloudFriends.find((f) => f.id === row.initiator_id) || null;
   const name = friend?.name || friend?.handle || "Someone";
   const handle = friend?.handle || "";
-  const modal = document.createElement("div");
-  modal.className = "modal-backdrop";
-  modal.id = "incoming-call-modal";
-  modal.innerHTML = `<div class="modal incoming-call"><div class="eyebrow">Incoming call</div><div class="incoming-call-who">${friendAvatarMarkup(row.initiator_id, handle || "?", name)}<div><h2>${esc(name)}</h2><p class="muted">${handle ? "@" + esc(handle) : ""} is calling you</p></div></div><div class="modal-actions"><button type="button" class="danger-button" data-ic-decline>${sicon("x")} Decline</button><button type="button" class="primary" data-ic-accept>${sicon("phone")} Accept</button></div></div>`;
-  $("#modal-root")?.append(modal);
-  modal.querySelector("[data-ic-decline]").onclick = async () => {
+  const chatId = row.group_id || row.initiator_id;
+  const ring = document.createElement("div");
+  ring.id = "incoming-call-ring";
+  ring.className = "call-ring-overlay";
+  ring.setAttribute("role", "alertdialog");
+  ring.setAttribute("aria-modal", "true");
+  ring.setAttribute("aria-label", `Incoming video call from ${name}`);
+  ring.innerHTML = `
+    <div class="call-ring-card" role="document">
+      <div class="call-ring-eyebrow">${sicon("phone")} Incoming video call</div>
+      <div class="call-ring-avatar">
+        <span class="wave w1"></span><span class="wave w2"></span>
+        ${friendAvatarMarkup(row.initiator_id, handle || "?", name)}
+      </div>
+      <h2>${esc(name)}</h2>
+      <p>${handle ? "@" + esc(handle) + " · " : ""}is calling you</p>
+      <div class="call-ring-actions">
+        <button type="button" class="call-ring-btn decline" data-ic-decline>${sicon("x")} Decline</button>
+        <button type="button" class="call-ring-btn accept" data-ic-accept>${sicon("phone")} Accept</button>
+      </div>
+    </div>`;
+  document.body.append(ring);
+  startRingChime();
+  notifyCall("Incoming video call", `${name} is calling you now`, "phone");
+  logCallEvent(chatId, `Incoming video call from ${name}`, "phone", false);
+  toast(`${name} is calling`);
+  if (ringTimeoutT) clearTimeout(ringTimeoutT);
+  ringTimeoutT = setTimeout(async () => {
+    if (pendingIncomingCall?.id !== row.id) return;
     pendingIncomingCall = null;
-    modal.remove();
+    dismissIncomingRing();
+    await updateCall(row.id, { status: "missed", ended_at: new Date().toISOString() }).catch(() => {});
+    await upsertCallParticipant({
+      call_id: row.id,
+      user_id: state.user?.id,
+      status: "declined",
+      left_at: new Date().toISOString(),
+    }).catch(() => {});
+    notifyCall("Missed video call", `${name} rang but nobody answered`, "phone");
+    logCallEvent(chatId, "Missed video call (timed out)", "phone", false);
+  }, 45000);
+  ring.querySelector("[data-ic-decline]").onclick = async () => {
+    pendingIncomingCall = null;
+    dismissIncomingRing();
     await updateCall(row.id, { status: "missed", ended_at: new Date().toISOString() }).catch(() => {});
     await upsertCallParticipant({
       call_id: row.id,
@@ -597,10 +839,13 @@ function showIncomingCall(row) {
       status: "declined",
       left_at: new Date().toISOString(),
     }).catch(() => {});
+    notifyCall("Call declined", `You declined ${name}`, "phone");
+    logCallEvent(chatId, "Video call declined", "phone", true);
   };
-  modal.querySelector("[data-ic-accept]").onclick = async () => {
+  ring.querySelector("[data-ic-accept]").onclick = async () => {
     pendingIncomingCall = null;
-    modal.remove();
+    dismissIncomingRing();
+    logCallEvent(chatId, "Video call accepted", "phone", true);
     await acceptIncomingCall(row);
   };
 }
@@ -623,6 +868,7 @@ async function acceptIncomingCall(row) {
   activeCallHistoryId = row.id;
   callIsInitiator = false; // callee waits for the offer
   renderCall();
+  updateOngoingCallPill();
   // Join signaling BEFORE flipping history: the initiator's onAccepted
   // offer must not race an empty channel.
   try {
@@ -654,6 +900,16 @@ async function startOutgoingCall(chatId) {
   callIsInitiator = true;
   activeCallHistoryId = null;
   renderCall();
+  updateOngoingCallPill();
+  const partnerLabel = isGroup
+    ? group?.name || "your group"
+    : peer?.name || peer?.handle || "your partner";
+  logCallEvent(
+    chatId,
+    isGroup ? `Calling the group “${partnerLabel}”…` : `Calling ${partnerLabel}…`,
+    "phone",
+    true,
+  );
   if (backendConfigured && state.user && navigator.onLine !== false) {
     try {
       const result = await recordCall({
@@ -8090,6 +8346,7 @@ function renderCall() {
   if (!state.call) {
     stopCallClock();
     remoteStream = null;
+    updateOngoingCallPill();
     return;
   }
   const q = callQualityMeta();
@@ -8286,7 +8543,7 @@ function renderCall() {
   );
   $("[data-call-chat]", call).onclick = () => {
     if (!state.call) return;
-    const chatId = state.call.peerId || state.call.id;
+    const chatId = callChatIdFor(state.call);
     state.callMinimized = true;
     state.tab = "community";
     state.subtab = "messages";
@@ -8294,8 +8551,18 @@ function renderCall() {
     persist();
     call.remove();
     shell();
+    updateOngoingCallPill();
   };
+  updateOngoingCallPill();
 }
+
+// Activity centre / notifications → jump back into the live room.
+window.addEventListener("sf-call-focus", () => {
+  if (!state.call) return;
+  state.callMinimized = false;
+  renderCall();
+  updateOngoingCallPill();
+});
 
 // Mid-call invite: ring extra friends into the current room (group or 1:1
 // upgraded). Each invitee gets a ringing participant row + call_history echo
@@ -8416,7 +8683,7 @@ async function connectCall({ force = false } = {}) {
 
 
 
-export { allGroups, sprintTicker, weekKey, logFocusDay, weekMinutes, progressChallenges, fmtCountdown, clearSprintTicker, ensureSprintTicker, renderCommunity, groupMatches, groupCardWithReason, renderSprints, leaderboardMarkup, sprintGroupName, sprintBoardMarkup, challengeRow, challengeMarkup, eventWhen, eventMarkup, postGroupMessage, bindSprints, timeAgo, isSeen, markSeen, statusDuration, buildStatusSequence, pruneExpiredStories, ownStory, deleteStatus, liveStories, storiesMarkup, bindStories, statusSeq, statusIdx, statusTimer, statusItemStart, statusItemDur, statusElapsed, statusPaused, statusHoldTimer, statusHolding, statusTouch, statusNavToken, statusNextIdx, statusPrevIdx, statusRemaining, clearStatusTimer, openStatus, closeStatus, closeStatusMenu, toggleStatusMenu, askDeleteStatus, afterStatusDeleted, statusKeys, goStatus, showStatusItem, renderStatusProgress, setStatusFill, startStatusPlayback, pauseStatus, resumeStatus, statusPointerDown, statusPointerUp, statusPointerCancel, renderDiscover, bindFeed, renderComments, subjectForGroup, groupCard, bindGroupButtons, renderMyGroups, inviteText, myReferralCode, referralMarkup, redeemReferral, conversationSubscription, renderFriends, renderMessages, chatKey, REACT_EMOJI, escSnippet, messageText, pollVotes, messageHtml, chatMarkup, bindChat, openPollBuilder, startRecording, stopRecording, saveVoice, subscribePresenceFor, sendChat, subscribeToChat, activePeer, activeCallHistoryId, chatReply, voiceRec, presenceSub, presenceInfo, renderCall, connectCall, ensureIncomingCallSubscription, startOutgoingCall, teardownCall, inviteToActiveCall };
+export { allGroups, sprintTicker, weekKey, logFocusDay, weekMinutes, progressChallenges, fmtCountdown, clearSprintTicker, ensureSprintTicker, renderCommunity, groupMatches, groupCardWithReason, renderSprints, leaderboardMarkup, sprintGroupName, sprintBoardMarkup, challengeRow, challengeMarkup, eventWhen, eventMarkup, postGroupMessage, bindSprints, timeAgo, isSeen, markSeen, statusDuration, buildStatusSequence, pruneExpiredStories, ownStory, deleteStatus, liveStories, storiesMarkup, bindStories, statusSeq, statusIdx, statusTimer, statusItemStart, statusItemDur, statusElapsed, statusPaused, statusHoldTimer, statusHolding, statusTouch, statusNavToken, statusNextIdx, statusPrevIdx, statusRemaining, clearStatusTimer, openStatus, closeStatus, closeStatusMenu, toggleStatusMenu, askDeleteStatus, afterStatusDeleted, statusKeys, goStatus, showStatusItem, renderStatusProgress, setStatusFill, startStatusPlayback, pauseStatus, resumeStatus, statusPointerDown, statusPointerUp, statusPointerCancel, renderDiscover, bindFeed, renderComments, subjectForGroup, groupCard, bindGroupButtons, renderMyGroups, inviteText, myReferralCode, referralMarkup, redeemReferral, conversationSubscription, renderFriends, renderMessages, chatKey, REACT_EMOJI, escSnippet, messageText, pollVotes, messageHtml, chatMarkup, bindChat, openPollBuilder, startRecording, stopRecording, saveVoice, subscribePresenceFor, sendChat, subscribeToChat, activePeer, activeCallHistoryId, chatReply, voiceRec, presenceSub, presenceInfo, renderCall, connectCall, ensureIncomingCallSubscription, startOutgoingCall, teardownCall, inviteToActiveCall, updateOngoingCallPill, logCallEvent, refreshNotifBadge };
 export { postOwnerId, isOwnPost, visiblePosts, postMenuMarkup, closePostMenus, togglePostMenu, startPostEdit, askDeletePost, BLOCK_REASONS, isUuid, blockKeyFor, isBlockedKey, askBlockUser, blockReasonDialog, submitBlock, unblockUser, blockedSectionMarkup };
 export { isGroupChat, groupById, isGroupOwner, isChatMuted, setChatMute, clearChatMute, muteLabel, searchGroupMessages, extractLinks, groupShared, groupRoster, senderLabel, groupMenuMarkup, leaveGroupById, openGroupSearch, jumpToGroupMessage, openGroupMedia, openMuteModal, openGroupInfo, openGroupMembers, openGroupSettings, openGroupReport, askClearGroupHistory, askLeaveGroup, askDisbandGroup, closeGroupMedia, closeMediaViewer };
 export { sanitizeSprint, ensureSprintFields, isSprintOwner, sprintCrewWithMe, crewPaceMarkup, inviteInboxMarkup, resolveOneInvite, openSprintEditor, missionDeskMarkup, bindMissionDesk };

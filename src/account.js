@@ -358,6 +358,7 @@ function notifIcon(item) {
   // unknown names, so stored markup can never leak through here.
   if (item && /^[a-z0-9-]{1,24}$/i.test(item.icon || "")) return item.icon;
   const t = `${item?.title || ""} ${item?.text || ""}`.toLowerCase();
+  if (t.includes("call") || t.includes("ringing") || t.includes("video call")) return "phone";
   if (t.includes("crown")) return "crown";
   if (t.includes("achievement")) return "medal";
   if (t.includes("streak") || t.includes("milestone")) return "fire";
@@ -374,8 +375,30 @@ function notifIcon(item) {
 function openNotifications() {
   const modal = document.createElement("div");
   modal.className = "modal-backdrop";
-  modal.innerHTML = `<div class="modal notification-modal"><div class="eyebrow">Activity centre</div><div class="section-row"><h2>Notifications</h2><button type="button" class="ghost" data-read-all>Mark all read</button></div><div class="notification-list">${state.notifications.length ? state.notifications.map((item) => `<div class="notification ${item.read ? "read" : "unread"}"><div class="notification-ico">${sicon(notifIcon(item))}</div><div><strong>${esc(stripIcon(item.title))}</strong><p>${esc(stripIcon(item.text))}</p><small>${new Date(item.time).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</small></div><div class="notification-mark">${item.read ? sicon("check") : "•"}</div></div>`).join("") : '<p class="muted">You are all caught up.</p>'}</div><div class="modal-actions"><button type="button" class="primary" data-notification-close>Done</button></div></div>`;
+  // Live call banner: an ongoing room is as important as unread history —
+  // surface it at the top of the activity centre so the user can jump back.
+  const liveCall = state.call
+    ? `<div class="notif-live-call${state.callStatus === "connected" ? " live" : ""}" data-notif-live-call role="status">
+        <span class="notif-live-ico">${sicon("phone")}</span>
+        <div class="notif-live-txt">
+          <strong>${esc(state.call.name || "Study partner")}</strong>
+          <small>${state.callStatus === "connected" ? "On a video call" : state.callStatus === "connecting" ? "Connecting…" : "Ringing…"}</small>
+        </div>
+        <button type="button" class="primary notif-live-btn" data-notif-live-open>${state.callStatus === "connected" ? "Open call" : "View"}</button>
+      </div>`
+    : "";
+  modal.innerHTML = `<div class="modal notification-modal"><div class="eyebrow">Activity centre</div><div class="section-row"><h2>Notifications</h2><button type="button" class="ghost" data-read-all>Mark all read</button></div>${liveCall}<div class="notification-list">${state.notifications.length ? state.notifications.map((item) => `<div class="notification ${item.read ? "read" : "unread"}"><div class="notification-ico">${sicon(notifIcon(item))}</div><div><strong>${esc(stripIcon(item.title))}</strong><p>${esc(stripIcon(item.text))}</p><small>${new Date(item.time).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</small></div><div class="notification-mark">${item.read ? sicon("check") : "•"}</div></div>`).join("") : '<p class="muted">You are all caught up.</p>'}</div><div class="modal-actions"><button type="button" class="primary" data-notification-close>Done</button></div></div>`;
   $("#modal-root").append(modal);
+  $("[data-notif-live-open]", modal)?.addEventListener("click", () => {
+    modal.remove();
+    // Surface the floating call window (or open it if it was minimized).
+    if (state.call) {
+      state.callMinimized = false;
+      persist();
+      // Re-render via a lightweight custom event the call module listens for.
+      window.dispatchEvent(new CustomEvent("sf-call-focus"));
+    }
+  });
   $("[data-read-all]", modal).onclick = () => {
     state.notifications.forEach((item) => (item.read = true));
     persist();

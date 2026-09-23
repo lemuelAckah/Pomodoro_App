@@ -1048,6 +1048,46 @@ export async function listCallParticipants(callId) {
     .limit(24);
 }
 
+// Poll fallback: rings I should be seeing right now (recipient OR participant).
+// Realtime can miss an INSERT during tab sleep / a dropped channel — this
+// keeps one-sided calls from requiring both sides to press Call together.
+export async function listMyRingingCalls(userId) {
+  if (!supabase || !userId) return { data: [], error: null };
+  try {
+    const [asRecipient, parts] = await Promise.all([
+      supabase
+        .from("call_history")
+        .select("*")
+        .eq("recipient_id", userId)
+        .eq("status", "ringing")
+        .order("started_at", { ascending: false })
+        .limit(5),
+      supabase
+        .from("call_participants")
+        .select("call_id")
+        .eq("user_id", userId)
+        .eq("status", "ringing")
+        .limit(10),
+    ]);
+    const rows = asRecipient.data || [];
+    const known = new Set(rows.map((r) => r.id));
+    const missing = [...new Set((parts.data || []).map((p) => p.call_id))]
+      .filter((id) => id && !known.has(id));
+    if (missing.length) {
+      const extra = await supabase
+        .from("call_history")
+        .select("*")
+        .in("id", missing)
+        .eq("status", "ringing")
+        .limit(5);
+      rows.push(...(extra.data || []));
+    }
+    return { data: rows, error: null };
+  } catch (err) {
+    return { data: [], error: err };
+  }
+}
+
 export async function updateCall(callId, updates) {
   if (!supabase)
     return { data: null, error: new Error("Call history is not configured") };
