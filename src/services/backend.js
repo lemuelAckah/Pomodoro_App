@@ -899,52 +899,84 @@ export function subscribeToConversation({
   const channelName = groupId
     ? `studyflow-messages:group:${groupId}`
     : `studyflow-messages:dm:${[myUserId, recipientId].filter(Boolean).sort().join("--")}`;
-  // DM filter: both directions. The old recipient-only filter never matched
-  // messages addressed TO me, so incoming DMs arrived only on the next full
-  // history reload — the classic "I sent it but they see nothing" flaw.
-  const msgFilter = groupId
-    ? { filter: `group_id=eq.${groupId}` }
-    : myUserId
-      ? { filter: `or(and(sender_id.eq.${myUserId},recipient_id.eq.${recipientId}),and(sender_id.eq.${recipientId},recipient_id.eq.${myUserId}))` }
-      : { filter: `recipient_id=eq.${recipientId}` };
-  const channel = supabase
-    .channel(channelName)
-    .on(
-      "postgres_changes",
-      {
-        event: "INSERT",
-        schema: "public",
-        table: "messages",
-        ...msgFilter,
-      },
-      (payload) => onMessage?.(payload.new),
-    )
-    .on(
-      "postgres_changes",
-      {
-        event: "UPDATE",
-        schema: "public",
-        table: "messages",
-        ...msgFilter,
-      },
-      // Soft-deletes and edits arrive here; callers paint them in place.
-      (payload) => onUpdate?.(payload.new),
-    )
-    .on(
-      "postgres_changes",
-      { event: "UPDATE", schema: "public", table: "message_receipts" },
-      (payload) => onRead?.(payload.new),
-    )
-    .on("broadcast", { event: "typing" }, ({ payload }) => onTyping?.(payload))
-    .subscribe();
+  // Realtime filters: ONE simple column per listener. The old nested
+  // `or(and(...),and(...))` DM filter matched nothing on several realtime
+  // versions — the channel stayed healthy (typing broadcasts worked) but
+  // every INSERT was silently dropped, so recipients only saw new messages
+  // after a full history reload. Two single-column listeners + a client-side
+  // scope guard are universally supported and equivalent:
+  //   recipient = me   → incoming (guard: the other person sent it to me)
+  //   recipient = them → my own echo (guard: I sent it to them)
+  const dmSpecs =
+    myUserId && recipientId
+      ? [
+          { filter: `recipient_id=eq.${myUserId}`, guard: (r) => r.sender_id === recipientId && r.recipient_id === myUserId },
+          { filter: `recipient_id=eq.${recipientId}`, guard: (r) => r.sender_id === myUserId && r.recipient_id === recipientId },
+        ]
+      : [{ filter: `recipient_id=eq.${recipientId}`, guard: null }];
+  const specs = groupId
+    ? [{ filter: `group_id=eq.${groupId}`, guard: (r) => r.group_id === groupId }]
+    : dmSpecs;
+  let channel = null;
+  let retried = false;
+  const join = () => {
+    channel = supabase.channel(channelName);
+    for (const spec of specs) {
+      channel
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "messages", filter: spec.filter },
+          (payload) => {
+            const row = payload.new;
+            if (!row || (spec.guard && !spec.guard(row))) return;
+            onMessage?.(row);
+          },
+        )
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "messages", filter: spec.filter },
+          (payload) => {
+            const row = payload.new;
+            if (!row || (spec.guard && !spec.guard(row))) return;
+            onUpdate?.(row);
+          },
+        );
+    }
+    channel
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "message_receipts" },
+        (payload) => onRead?.(payload.new),
+      )
+      .on("broadcast", { event: "typing" }, ({ payload }) => onTyping?.(payload))
+      .subscribe((status) => {
+        // A dead channel must not silently swallow live messages: retry the
+        // join once, then give up (history/polling still cover delivery).
+        if ((status === "CHANNEL_ERROR" || status === "TIMED_OUT") && !retried) {
+          retried = true;
+          setTimeout(() => {
+            try {
+              supabase.removeChannel(channel);
+            } catch {
+              /* already gone */
+            }
+            join();
+          }, 3500);
+        }
+      });
+  };
+  join();
   return {
     sendTyping: (userId, isTyping) =>
-      channel.send({
+      channel?.send({
         type: "broadcast",
         event: "typing",
         payload: { userId, isTyping },
       }),
-    unsubscribe: () => supabase.removeChannel(channel),
+    unsubscribe: () => {
+      if (channel) supabase.removeChannel(channel);
+      channel = null;
+    },
   };
 }
 
@@ -1218,7 +1250,12 @@ export async function unlockAchievementRpc(achievementId, refKey) {
 }
 
 export async function recordStreakDayRpc(refKey, day = null) {
-  return callRewardsFn("sf_streak_day", { p_ref_key: String(refKey || "").slice(0, 128), p_day: day });
+  // p_day must be OMITTED when null — passing it as JSON null overrides the
+  // SQL default CURRENT_DATE and sf_streak_day raises INVALID_DAY, which
+  // silently failed every cloud streak sync.
+  const args = { p_ref_key: String(refKey || "").slice(0, 128) };
+  if (day != null && day !== "") args.p_day = day;
+  return callRewardsFn("sf_streak_day", args);
 }
 
 export async function openMysteryBoxRpc(boxType, refKey) {

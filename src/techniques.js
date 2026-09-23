@@ -2,6 +2,7 @@
 import {
   state, $, $$, uid, get, save, esc, sicon, persist, notify, confirmBox, viewHead,
   iconStar, bindFavorites, fmtDur, celebrate, checkReminder, maybeWhatsNew, requireAuth,
+  isDarkPaper,
 } from "./core.js";
 import {
   mirrorNotes, deleteNoteEverywhere, mirrorAssessment, mirrorTechniqueUsage,
@@ -438,6 +439,10 @@ let quizView = false;
 let quizState = null;
 
 let duckIdx = 0;
+// Generation token — bumped on every send/edit/delete/clear. A pending reply's
+// setTimeout checks it before writing, so a retracted answer can never
+// reappear after an edit (the old splice+append race that resurrected it).
+let duckGen = 0;
 
 const TECH_DETAILS = {
   pomodoro: {
@@ -1466,116 +1471,260 @@ const DUCK_LINES = [
 // and judges from what it actually observed — code, errors, questions,
 // certainty language, numbers. Deterministic, private, no network, and it
 // never invents a fact it does not have.
+// `terms` are the concepts a correct definition/explanation must touch — the
+// judge scores a user's own definition against them for a factual verdict.
 const DUCK_FACTS = [
   {
     keys: ["chain rule", "chainrule"],
     fact: "The chain rule says rates multiply along a composition: the derivative of the outside (with the inside left unchanged) times the derivative of the inside.",
     probe: "Which function is the 'outside' one in your case?",
+    terms: ["composition", "outside", "inside", "multiply", "derivative"],
   },
   {
     keys: ["derivative", "differentiate", "tangent line"],
     fact: "A derivative is an instantaneous rate of change — geometrically, the slope of the tangent line at a single point.",
     probe: "Is your function a product, a quotient, or a composition? Each one has its own rule.",
+    terms: ["rate", "change", "slope", "tangent", "point"],
   },
   {
     keys: ["integral", "antiderivative", "integration"],
     fact: "A definite integral accumulates a quantity over an interval — geometrically, the signed area between the curve and the axis.",
     probe: "What are your bounds, and does the curve cross the axis between them?",
+    terms: ["area", "interval", "accumulat", "bounds", "curve"],
   },
   {
     keys: ["photosynthesis"],
     fact: "Photosynthesis is 6CO₂ + 6H₂O + light → C₆H₁₂O₆ + 6O₂ — the light reactions capture energy, the Calvin cycle fixes that energy into sugar.",
     probe: "Which stage are you asked about — the light reactions or the Calvin cycle?",
+    terms: ["light", "energy", "glucose", "co2", "oxygen", "chlorophyll", "calvin"],
   },
   {
     keys: ["mitosis", "meiosis"],
     fact: "Mitosis makes two genetically identical diploid cells; meiosis makes four genetically unique haploid gametes.",
     probe: "Does your question care about identical copies (mitosis) or diversity (meiosis)?",
+    terms: ["cell", "division", "chromosome", "daughter", "haploid", "diploid", "identical", "gamete"],
   },
   {
     keys: ["newton", "action and reaction", "third law", "force pair"],
     fact: "Newton's third law: action–reaction pairs are equal and opposite but act on DIFFERENT objects — which is exactly why they never cancel out on one object.",
     probe: "Which two objects is the pair acting on in your problem?",
+    terms: ["force", "equal", "opposite", "pair", "object", "interaction"],
   },
   {
     keys: ["mole ", "avogadro", "molar mass"],
     fact: "One mole is 6.022×10²³ particles, and mass ÷ molar mass = moles — that conversion is the backbone of stoichiometry.",
     probe: "Are you converting grams to moles, or moles to particles?",
+    terms: ["6.022", "avogadro", "particles", "molar mass", "amount", "gram"],
   },
   {
     keys: ["recursion", "recursive", "base case"],
     fact: "Every recursive function needs a base case, and every recursive call must make progress toward it — otherwise the call stack overflows.",
     probe: "What exactly is your base case, and does every call get closer to it?",
+    terms: ["base case", "progress", "call", "itself", "stack"],
   },
   {
     keys: ["infinite loop", "loops forever", "never terminates"],
     fact: "A loop that never exits means its controlling variable isn't changing inside the body — or the exit condition can never be true.",
     probe: "Print the loop variable on each pass — is it moving toward the exit?",
+    terms: ["condition", "variable", "exit", "change", "body"],
   },
   {
     keys: ["null", "undefined", "cannot read", "nan"],
     fact: "In JavaScript, null means 'intentionally empty' while undefined means 'never assigned' — and 'Cannot read properties of null' means code read a property off that emptiness.",
     probe: "Which line was supposed to create the value you're reading — and did it run before that line?",
+    terms: ["null", "undefined", "empty", "assigned", "value"],
   },
   {
     keys: ["async", "await", "promise"],
     fact: "await schedules the rest of the function to run only after the promise settles — and it only works inside an async function.",
     probe: "Are you awaiting the call, or just calling it and reading the result too early?",
+    terms: ["async", "await", "promise", "settle", "later", "order"],
   },
   {
     keys: ["closure"],
     fact: "A closure is a function bundled with the variables it captured at definition — those variables stay alive between calls.",
     probe: "Which variables is your inner function capturing, and when do they get their value?",
+    terms: ["function", "variable", "captured", "definition", "alive", "scope"],
   },
   {
     keys: ["big-o", "time complexity", "o(n", "o(log"],
     fact: "Big-O rates how cost GROWS with input size, not raw speed — an O(n²) algorithm can absolutely beat O(n log n) on small inputs.",
     probe: "How many times does your innermost step run, in terms of n?",
+    terms: ["growth", "input", "size", "upper bound", "complexity", "n"],
   },
   {
     keys: ["stack trace", "traceback", "error message", "exception"],
     fact: "A stack trace reads top-down: the top line names where it broke, and the lines beneath it are the path that led there.",
     probe: "What does the very first line say, word for word?",
+    terms: ["top", "where", "broke", "path", "call", "line"],
   },
   {
     keys: ["git revert", "git reset", "git merge", "git rebase"],
     fact: "git revert adds a new commit that undoes an old one — safe for shared branches; git reset moves the branch pointer and rewrites history — keep it local.",
     probe: "Has this branch been pushed and shared, or is it just yours?",
+    terms: ["undo", "commit", "history", "branch", "safe", "local", "shared"],
   },
   {
     keys: ["css", "selector", "specificity", "flexbox", "grid"],
     fact: "In CSS, higher specificity beats later order — only EQUAL specificity falls back to source order.",
     probe: "Which two rules are fighting, and which one has more classes or IDs?",
+    terms: ["specificity", "selector", "rule", "order", "priority", "class", "id"],
   },
   {
     keys: ["rest api", "endpoint", "http request", "fetch("],
     fact: "REST is stateless: every request must carry everything the server needs — including your authentication — because the server remembers nothing between calls.",
     probe: "Does your request carry its token and full context every time?",
+    terms: ["stateless", "request", "server", "authentication", "client", "resource"],
   },
   {
     keys: ["cors"],
     fact: "CORS is enforced by the browser, not the server — the server must send Access-Control-Allow-Origin for the browser to hand you the response; curl and Postman never hit it.",
     probe: "Does it also fail in curl, or only in the browser? That tells you if it's really CORS.",
+    terms: ["browser", "header", "allow", "origin", "client", "enforced"],
   },
   {
     keys: ["sql", "join", "query", "database"],
     fact: "A JOIN duplicates rows when the key repeats on either side — a count that suddenly explodes almost always means a one-to-many fan-out.",
     probe: "Run the count on each table separately — where does the number first grow?",
+    terms: ["table", "row", "key", "match", "combine", "duplicate"],
   },
   {
     keys: ["thesis", "essay", "introduction paragraph"],
     fact: "A thesis is a debatable claim — if nobody could reasonably disagree with it, it's a summary, not a thesis.",
     probe: "Say your thesis, then add 'but…' — can you complete that sentence? If yes, you have an argument.",
+    terms: ["claim", "arguable", "main", "position", "essay", "debatable"],
   },
   {
     keys: ["active recall", "re-reading", "rereading", "highlighting"],
     fact: "The testing effect is one of the best-replicated findings in memory research: retrieving from memory beats re-reading for long-term retention.",
     probe: "Could you close the book right now and state the three main points aloud?",
+    terms: ["retriev", "memory", "practice", "test", "forget", "retention"],
   },
   {
     keys: ["forgetting curve", "ebbinghaus", "spaced repetition", "spaced"],
     fact: "Ebbinghaus showed retention falls steeply within the first day; a same-day review flattens the curve, and each spaced review pushes the next forgetting point further out.",
     probe: "When did you last review this — and did you review it from memory or from the page?",
+    terms: ["retention", "time", "review", "forget", "spacing", "curve"],
+  },
+  {
+    keys: ["natural selection", "darwin", "evolution"],
+    fact: "Natural selection: organisms with heritable traits that improve survival and reproduction leave more offspring — allele frequencies shift across generations, not within one lifetime.",
+    probe: "Which specific trait is being selected in your example?",
+    terms: ["variation", "inherit", "survival", "reproduction", "trait", "generation", "environment"],
+  },
+  {
+    keys: ["dna", "gene", "chromosome", "rna"],
+    fact: "DNA stores information as base pairs (A-T, G-C); genes are transcribed to mRNA and translated into proteins — the central dogma: DNA → RNA → protein.",
+    probe: "Is your question about storage (DNA), transmission (RNA), or the product (protein)?",
+    terms: ["base", "sequence", "gene", "protein", "transcri", "translat", "遗传", "heredity"],
+  },
+  {
+    keys: ["atom", "molecule", "element", "compound"],
+    fact: "An atom is the smallest unit of an element; molecules are two or more atoms bonded; a compound is a molecule with two or more different elements.",
+    probe: "Are the bonded atoms the same element or different ones?",
+    terms: ["nucleus", "proton", "neutron", "electron", "bond", "element", "smallest"],
+  },
+  {
+    keys: ["ph ", "acid", "base ", "alkaline"],
+    fact: "pH = −log₁₀[H⁺]; below 7 is acidic, above 7 is basic, and the scale is logarithmic — each step is a tenfold change in hydrogen-ion concentration.",
+    probe: "Is your problem asking about concentration (log scale) or just comparing two samples?",
+    terms: ["hydrogen", "log", "acid", "base", "concentration", "7", "scale"],
+  },
+  {
+    keys: ["entropy", "thermodynamic", "second law"],
+    fact: "The second law: the entropy of an isolated system never decreases — heat flows spontaneously from hot to cold, never the reverse without external work.",
+    probe: "Is your system isolated, or is energy being added/removed?",
+    terms: ["disorder", "entropy", "increase", "heat", "isolated", "spontaneous", "second law"],
+  },
+  {
+    keys: ["gravity", "gravitational"],
+    fact: "Gravity attracts every pair of masses: F = G·m₁m₂/r² — it weakens with the SQUARE of the distance, so doubling the distance quarters the force.",
+    probe: "Is distance changing in your problem? The square is usually where the numbers go wrong.",
+    terms: ["mass", "attract", "distance", "square", "force", "newton"],
+  },
+  {
+    keys: ["velocity", "acceleration", "speed "],
+    fact: "Speed is distance per time (scalar); velocity adds direction; acceleration is the rate of CHANGE of velocity — not of speed alone.",
+    probe: "Is your object turning? Turning means velocity changed even if the speed didn't.",
+    terms: ["rate", "change", "direction", "vector", "time", "distance", "speed"],
+  },
+  {
+    keys: ["pythagoras", "pythagorean", "right triangle", "hypotenuse"],
+    fact: "For a right triangle only: a² + b² = c², where c is the hypotenuse opposite the 90° angle.",
+    probe: "Is there actually a right angle? The theorem fails without one.",
+    terms: ["right", "triangle", "square", "hypotenuse", "side", "90"],
+  },
+  {
+    keys: ["quadratic", "parabola", "discriminant"],
+    fact: "A quadratic ax²+bx+c=0 has roots x = (−b ± √(b²−4ac)) / 2a; the discriminant b²−4ac tells you: positive = two real roots, zero = one, negative = none real.",
+    probe: "What's your discriminant — do you even expect real roots?",
+    terms: ["root", "parabola", "discriminant", "coefficient", "plus", "minus", "real"],
+  },
+  {
+    keys: ["probability", "independent", "chance"],
+    fact: "Independent events: P(A and B) = P(A)×P(B). Mutually exclusive events: P(A or B) = P(A)+P(B) — mixing these two rules is the classic mistake.",
+    probe: "Can both events happen together? That decides which rule you use.",
+    terms: ["independent", "multiply", "exclusive", "outcome", "event", "fraction"],
+  },
+  {
+    keys: ["mean", "median", "mode", "average"],
+    fact: "Mean uses every value (sensitive to outliers); the median is the middle value (outlier-proof); the mode is the most frequent.",
+    probe: "Are there extreme values pulling the mean? If so, the median is your honest number.",
+    terms: ["middle", "most", "sum", "outlier", "typical", "divide"],
+  },
+  {
+    keys: ["ohm", "voltage", "current ", "resistance"],
+    fact: "Ohm's law: V = I·R — voltage across a resistor equals current times resistance; raise resistance at fixed voltage and the current falls.",
+    probe: "Which quantity is held fixed in your circuit?",
+    terms: ["voltage", "current", "resistance", "volt", "ampere", "ohm", "proportional"],
+  },
+  {
+    keys: ["http ", "status code", "404", "500", "api response"],
+    fact: "HTTP codes are three-digit class signals: 2xx success, 3xx redirection, 4xx the request is wrong (client), 5xx the server broke while handling a valid request.",
+    probe: "Is the code 4xx or 5xx? That tells you who needs to change something.",
+    terms: ["2xx", "4xx", "5xx", "client", "server", "request", "response", "class"],
+  },
+  {
+    keys: ["sql injection", "prepared statement", "parameterized"],
+    fact: "SQL injection works by mixing CODE and DATA in one string; parameterized queries keep them separate so user input can never become executable SQL.",
+    probe: "Is any user input concatenated directly into the query string?",
+    terms: ["code", "data", "parameter", "query", "input", "separate", "escape"],
+  },
+  {
+    keys: ["hash table", "hashmap", "dictionary ", "o(1)"],
+    fact: "A hash table maps key → bucket via a hash function: average O(1) lookup, but collisions degrade it toward O(n) — and iteration order is not guaranteed.",
+    probe: "What's the load factor, and do you rely on any ordering?",
+    terms: ["key", "hash", "bucket", "average", "lookup", "collision"],
+  },
+  {
+    keys: ["binary search", "sorted array"],
+    fact: "Binary search halves the search space each step on SORTED data — O(log n) — but it silently returns wrong answers on unsorted input.",
+    probe: "Is the array actually sorted the way you search it?",
+    terms: ["sorted", "half", "log", "middle", "compare", "range"],
+  },
+  {
+    keys: ["compiler", "interpreter"],
+    fact: "A compiler translates the whole program before running it; an interpreter executes statement by statement. JIT compilers sit between: translate at runtime, then optimize hot paths.",
+    probe: "When does the translation happen in your toolchain?",
+    terms: ["translate", "whole", "runtime", "machine", "code", "before", "execute"],
+  },
+  {
+    keys: ["osmosis", "cell membrane", "diffusion", "hypertonic"],
+    fact: "Diffusion moves particles from high to low concentration; osmosis is water doing the same THROUGH a semipermeable membrane — from hypotonic to hypertonic side.",
+    probe: "Is water the thing moving, and is there a membrane? That's osmosis specifically.",
+    terms: ["water", "membrane", "concentration", "high", "low", "semipermeable", "gradient"],
+  },
+  {
+    keys: ["supply and demand", "equilibrium price"],
+    fact: "Demand slopes down (higher price → less quantity demanded), supply slopes up; the market price settles where the two curves cross — a shortage or surplus pushes it back.",
+    probe: "Which curve shifted — supply or demand? A shift moves price differently than a movement along the curve.",
+    terms: ["price", "quantity", "curve", "equilibrium", "shortage", "surplus", "shift"],
+  },
+  {
+    keys: ["opportunity cost"],
+    fact: "Opportunity cost is the value of the BEST alternative given up — it exists even when no money changes hands, because time and attention are scarce.",
+    probe: "What is the next-best option you're trading away here?",
+    terms: ["alternative", "given up", "best", "choice", "value", "scarc", "trade"],
   },
 ];
 
@@ -1586,6 +1735,26 @@ function duckMatchFact(s) {
   return null;
 }
 
+// Score the user's OWN definition against a fact's `terms` — a deterministic,
+// fully offline verdict. Professional, specific, and grounded in the KB:
+// it says exactly which key ideas landed and which are still missing.
+function duckJudge(raw, fact) {
+  if (!fact || !Array.isArray(fact.terms) || !fact.terms.length) return null;
+  const s = raw.toLowerCase();
+  const hits = fact.terms.filter((t) => s.includes(String(t).toLowerCase()));
+  const misses = fact.terms.filter((t) => !s.includes(String(t).toLowerCase()));
+  const ratio = hits.length / fact.terms.length;
+  const verdict = ratio >= 0.8 ? "solid" : ratio >= 0.45 ? "partially correct" : "off the mark";
+  const list = (xs) => xs.map((x) => `"${x}"`).join(", ");
+  let out = `Judging that against the facts — verdict: ${verdict} `
+    + `(${hits.length}/${fact.terms.length} key ideas present).`;
+  if (hits.length) out += ` Correctly covered: ${list(hits)}.`;
+  if (misses.length) out += ` Still missing: ${list(misses)}.`;
+  out += ` Ground truth: ${fact.fact}`;
+  if (misses.length) out += ` Give me one clean sentence now that folds in "${misses[0]}".`;
+  return out;
+}
+
 function duckAnalyze(text, ctx = {}) {
   const raw = String(text || "").trim();
   const s = raw.toLowerCase();
@@ -1594,6 +1763,11 @@ function duckAnalyze(text, ctx = {}) {
   // --- signals ---------------------------------------------------------
   const isQuestion = /\?\s*$/.test(raw) || /^(how|why|what|when|where|which|who|should|can|could|does|do|is|are)\b/.test(s);
   const asksDefinition = /(what (is|are)|define|definition of|meaning of|explain( to me)?( what| how)?)/.test(s);
+  // A statement-form definition ("X is…", "X refers to…") that lands on a
+  // known topic gets judged against the knowledge base instead of ignored.
+  const statesDefinition = /\b(is|are|means?|refers to|consists of|described as|defined as|used to|involves|depends on)\b/.test(s)
+    && wordCount >= 6
+    && !isQuestion;
   const compare = /difference between\s+(.+?)\s+(?:and|vs\.?|versus)\s+([a-z0-9\- ]{2,40})/.exec(s);
   const hasCode = /(function\s+\w+|=>|console\.|def\s+\w+|class\s+\w+|```|[{};]\s*$)/.test(raw)
     || (/[=(){};]/.test(raw) && /\b(const|let|var|if|for|while|return|import|print)\b/.test(s));
@@ -1606,32 +1780,39 @@ function duckAnalyze(text, ctx = {}) {
   // --- assembly ---------------------------------------------------------
   // Each branch returns opening + optional fact + ONE pointed probe.
   if (fixFound)
-    return "QUACK! Knew you had it in you. "
-      + "Before it flies away: write the fix down in one sentence — what was broken, and what changed? "
+    return "Excellent — that closes it. "
+      + "Before it evaporates: write the fix down in one sentence — what was broken, and what changed? "
       + "Future-you rereads that note, not this chat.";
+  // Judge a user's own definition FIRST (when it lands on a known topic) —
+  // before the question branch, so statements never fall through to generic
+  // prompts. Falls through to the question/fact branches when no fact matches.
+  if (statesDefinition && fact) {
+    const judged = duckJudge(raw, fact);
+    if (judged) return judged;
+  }
   if (errorSignal)
     return "You pasted an error — good, errors are confessions. "
       + "Fact: a stack trace reads top-down — the first line names where it broke, the lines beneath show the path that led there. "
       + "So: what does the very FIRST line say, word by word?";
   if (asksDefinition) {
     if (fact)
-      return `Here's the real answer, not a guess. ${fact.fact} ${fact.probe}`;
+      return `Here is the accurate answer from my knowledge base. ${fact.fact} ${fact.probe}`;
     const topic = (/(?:what (?:is|are)|define|definition of|meaning of)\s+(?:a |an |the )?([a-z0-9\- ]{2,50})/.exec(s)?.[1] || "that").trim();
-    return `You're asking for a definition of “${topic}” — and I keep my facts offline, so I won't invent one and dress it up as knowledge. `
-      + "Instead: give me the definition in your own words, no peeking. I'll pressure-test every part of it.";
+    return `You're asking for a definition of “${topic}” — my facts are curated offline, so I won't invent one and present it as knowledge. `
+      + "Give me the definition in your own words instead. I will check every part of it against what I actually know and mark what's missing.";
   }
   if (compare)
     return `Comparing “${compare[1].trim()}” with “${compare[2].trim()}” — good instinct, differences clarify. `
       + "Define each side in ONE sentence, then say what only one of them can do. "
       + "The difference usually falls out on its own before you finish.";
   if (fact)
-    return `You mentioned ${fact.keys[0].trim()} — here's the fact that matters: ${fact.fact} ${fact.probe}`;
+    return `You mentioned ${fact.keys[0].trim()} — here is the fact that matters: ${fact.fact} ${fact.probe}`;
   if (hasCode)
-    return "I can see code in there. Walk me through it like I'm a very literal bird — line by line, what is each part SUPPOSED to do? "
+    return "I can see code in there. Walk me through it line by line — what is each part SUPPOSED to do? "
       + "The line you explain fastest is usually the one hiding the bug.";
   if (certainty)
     return "Careful — you used strong words like 'always' or 'never'. Absolute claims are exactly where bugs and wrong answers hide. "
-      + "Which part are you MOST sure about? Doubt that one out loud for me.";
+      + "Which part are you MOST sure about? Try to doubt that one out loud for me.";
   if (stuckLong)
     return "You've been at this a while — that's almost never ability, it's an unverified assumption wearing a disguise. "
       + "Name the one thing you've believed since the start but never actually tested. Test THAT next.";
@@ -1642,9 +1823,9 @@ function duckAnalyze(text, ctx = {}) {
         : "")
       + "What would the answer let you DO that you can't do right now?";
   if (wordCount < 12)
-    return "Too short, human — I'm smart but I'm not psychic. Give me the whole story: what you did, what you expected, what happened instead.";
+    return "That's too brief for me to work with. Give me the whole picture: what you did, what you expected, and what happened instead.";
   if (wordCount > 120)
-    return "Big download — I caught maybe a third of it. Compress it: what is the ONE-sentence version of the problem? Detail the rest only if I ask.";
+    return "Large message — I caught maybe a third of it. Compress it: what is the ONE-sentence version of the problem? Detail the rest only if I ask.";
   if (turn >= 4)
     return "We're several rounds deep now — that's how the good discoveries happen. "
       + "Summarize where you are in one sentence: what do you know now that you didn't when we started?";
@@ -1653,8 +1834,8 @@ function duckAnalyze(text, ctx = {}) {
 }
 
 // Legacy shim — older callers and tests still import duckReply.
-function duckReply(text) {
-  return duckAnalyze(text);
+function duckReply(text, ctx) {
+  return duckAnalyze(text, ctx);
 }
 
 function renderDuck(t) {
@@ -1671,6 +1852,7 @@ function renderDuck(t) {
   };
   $("[data-duck-clear]", t).onclick = () =>
     confirmBox("Clear the duck chat?", "Your conversation will be gone.", () => {
+      duckGen++; // kill any pending reply timer — its chat no longer exists
       state.duckChat = [];
       persist();
       renderDuck(t);
@@ -1678,6 +1860,7 @@ function renderDuck(t) {
   $$("[data-duck-del]", t).forEach(
     (b) =>
       (b.onclick = () => {
+        duckGen++;
         state.duckChat = state.duckChat.filter((_, i) => i !== Number(b.dataset.duckDel));
         persist();
         renderDuck(t);
@@ -1685,6 +1868,10 @@ function renderDuck(t) {
   );
   // Edit a message you sent: the duck RETRACTS its old reply (the answer was
   // built for a message that no longer exists) and re-answers the new text.
+  // The fresh reply replaces the old one IN PLACE (same slot after the
+  // message) — never appended at the end of the thread. A generation token
+  // invalidates any still-pending timer from a previous edit/send so a
+  // retracted answer can never race back in.
   // Duck messages are not editable — the duck never revises its own wisdom.
   $$("[data-duck-edit]", t).forEach(
     (b) =>
@@ -1709,24 +1896,37 @@ function renderDuck(t) {
           const next = String(box?.value || "").trim();
           if (!next) return notify("Message can't be empty");
           if (next === original) return renderDuck(t);
-          const chat = [...(state.duckChat || [])];
-          chat[idx] = { ...chat[idx], text: next, ts: Date.now(), edited: true };
-          // Drop the duck's reply to the OLD message (and any stale thinking
-          // placeholder) — the next reply must answer what the message NOW says.
-          chat.splice(idx + 1, 1).filter((m) => m?.from === "duck");
-          state.duckChat = chat.filter((m) => !(m.thinking && m.from === "duck"));
-          persist();
-          renderDuck(t);
-          // Fresh answer for the edited message, with the conversation depth
-          // as context so follow-ups stay coherent.
-          const turn = (state.duckChat || []).filter((m) => m.from === "duck").length + 1;
-          state.duckChat = [...state.duckChat, { from: "duck", text: "…re-thinking…", ts: Date.now(), thinking: true }];
+          duckGen++;
+          const gen = duckGen;
+          const src = [...(state.duckChat || [])];
+          src[idx] = { ...src[idx], text: next, ts: Date.now(), edited: true };
+          // Retract: drop stale thinking placeholders after idx, and the FIRST
+          // real duck reply after idx (the answer to the OLD wording). Stop at
+          // the next user message — later turns are untouched.
+          const out = src.slice(0, idx + 1);
+          let j = idx + 1;
+          let retracted = false;
+          while (j < src.length) {
+            const m = src[j];
+            if (m?.from === "duck" && m.thinking) { j++; continue; }
+            if (!retracted && m?.from === "duck") { retracted = true; j++; continue; }
+            break;
+          }
+          out.push(...src.slice(j));
+          const turn = out.filter((m) => m.from === "duck").length + 1;
+          out.push({ from: "duck", text: "…re-thinking…", ts: Date.now(), thinking: true });
+          state.duckChat = out;
           persist();
           renderDuck(t);
           setTimeout(() => {
-            state.duckChat = (state.duckChat || [])
-              .filter((m) => !m.thinking)
-              .concat([{ from: "duck", text: duckAnalyze(next, { turn }), ts: Date.now() }]);
+            if (gen !== duckGen) return; // superseded — never resurrect stale text
+            const base = (state.duckChat || []).filter((m) => !(m.from === "duck" && m.thinking));
+            const at = Math.min(idx + 1, base.length);
+            state.duckChat = [
+              ...base.slice(0, at),
+              { from: "duck", text: duckAnalyze(next, { turn }), ts: Date.now() },
+              ...base.slice(at),
+            ];
             persist();
             if (duckView && $("#tab-techniques")) renderDuck($("#tab-techniques"));
           }, 800);
@@ -1737,17 +1937,23 @@ function renderDuck(t) {
     const input = $("#duck-input", t);
     const text = input.value.trim();
     if (!text) return;
+    duckGen++;
+    const gen = duckGen;
+    const base = (state.duckChat || []).filter((m) => !(m.from === "duck" && m.thinking));
+    const turn = base.filter((m) => m.from === "duck").length + 1;
     state.duckChat = [
-      ...state.duckChat,
+      ...base,
       { from: "you", text, ts: Date.now() },
       { from: "duck", text: "…thinking…", ts: Date.now(), thinking: true },
     ];
     persist();
     renderDuck(t);
     setTimeout(() => {
-      state.duckChat = state.duckChat
-        .filter((m) => !m.thinking)
-        .concat([{ from: "duck", text: duckReply(text), ts: Date.now() }]);
+      if (gen !== duckGen) return;
+      state.duckChat = [
+        ...(state.duckChat || []).filter((m) => !(m.from === "duck" && m.thinking)),
+        { from: "duck", text: duckReply(text, { turn }), ts: Date.now() },
+      ];
       persist();
       if (duckView && $("#tab-techniques")) renderDuck($("#tab-techniques"));
     }, 800);
@@ -1839,7 +2045,13 @@ function mindSvg(map, selectedId) {
       const sy = pp.y + (dy / dist) * pr;
       const ex = cp.x - (dx / dist) * cr;
       const ey = cp.y - (dy / dist) * cr;
-      return `<line x1="${sx}" y1="${sy}" x2="${ex}" y2="${ey}" stroke="#c3d4c8" stroke-width="2" stroke-linecap="round"/>`;
+      let edgePaper = "";
+      try { edgePaper = getComputedStyle(document.documentElement).getPropertyValue("--paper").trim(); } catch { /* ignore */ }
+      const edgeDark = Boolean(state.night)
+        || document.documentElement.dataset?.night === "1"
+        || (edgePaper && isDarkPaper(edgePaper));
+      const edgeStroke = edgeDark ? "#3f4f46" : "#c3d4c8";
+      return `<line x1="${sx}" y1="${sy}" x2="${ex}" y2="${ey}" stroke="${edgeStroke}" stroke-width="2" stroke-linecap="round"/>`;
     })
     .join("");
   const dots = nodes
@@ -1855,11 +2067,16 @@ function mindSvg(map, selectedId) {
       const rx = p.depth === 0 ? 14 : 10;
       const sel = selectedId === n.id;
       const selPad = sel ? 5 : 0;
-      // Selection dashes must survive every theme. The hardcoded dark-green
-      // stroke vanished on the night palette (dark stroke on dark paper), so
-      // the stroke follows the theme: dark ink in light mode, light ink in
-      // night mode / dark custom skins.
-      const darkUi = state.night || (document.documentElement.dataset?.night === "1");
+      // Selection dashes must survive EVERY dark variant — night mode AND
+      // dark equipped skins (midnight/neon set --paper dark WITHOUT the
+      // night flag, so the old state.night check alone left a dark stroke
+      // on dark paper). Judge from the effective paper color.
+      const root = document.documentElement;
+      let paper = "";
+      try { paper = getComputedStyle(root).getPropertyValue("--paper").trim(); } catch { /* ignore */ }
+      const darkUi = Boolean(state.night)
+        || root.dataset?.night === "1"
+        || (paper && isDarkPaper(paper));
       const selStroke = darkUi ? "#f2f0e4" : "#17221d";
       return `<g data-mind-node="${n.id}" style="cursor:pointer">${sel ? `<rect x="${p.x - boxW / 2 - selPad}" y="${p.y - boxH / 2 - selPad}" width="${boxW + selPad * 2}" height="${boxH + selPad * 2}" rx="${rx + 3}" fill="none" stroke="${selStroke}" stroke-width="2.5" stroke-dasharray="7 4" opacity="0.95"/>${sel ? `<rect x="${p.x - boxW / 2 - selPad - 2}" y="${p.y - boxH / 2 - selPad - 2}" width="${boxW + selPad * 2 + 4}" height="${boxH + selPad * 2 + 4}" rx="${rx + 4}" fill="none" stroke="${selStroke}" stroke-width="1" stroke-dasharray="2 5" opacity="0.45"/>` : ""}` : ""}<rect x="${p.x - boxW / 2}" y="${p.y - boxH / 2}" width="${boxW}" height="${boxH}" rx="${rx}" fill="${c.fill}" stroke="${c.ring}" stroke-width="2"/><text x="${p.x}" y="${p.y}" text-anchor="middle" dominant-baseline="central" font-size="${fontSize}" font-weight="700" fill="${c.text}" font-family="DM Sans, sans-serif">${esc(label)}</text></g>`;
     })

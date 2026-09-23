@@ -584,6 +584,35 @@ function cloudSnapshot() {
 
 let cloudSyncTimer;
 
+// The streak lives in two places: local sf-streak (this device's day-dots and
+// count) and the server streaks table (authoritative, advanced via sf_streak_day).
+// Generic user_state payloads may carry a STALE streak snapshot (older clients
+// used to include it) — a blind Object.assign then wiped a just-earned count
+// back to 0. Merge instead: higher count wins, later lastDate wins, days union.
+function applyRemoteStreak(remoteStreak) {
+  const local = state.streak && typeof state.streak === "object" && !Array.isArray(state.streak)
+    ? state.streak
+    : { count: 0, lastDate: "", days: [] };
+  const remote = remoteStreak && typeof remoteStreak === "object" && !Array.isArray(remoteStreak)
+    ? remoteStreak
+    : null;
+  const rc = Number(remote?.count);
+  const lc = Number(local.count);
+  const rLast = String(remote?.lastDate || "");
+  const lLast = String(local.lastDate || "");
+  const days = [
+    ...new Set([
+      ...(Array.isArray(local.days) ? local.days : []),
+      ...(Array.isArray(remote?.days) ? remote.days : []),
+    ]),
+  ].sort().slice(-60);
+  state.streak = {
+    count: Math.max(Number.isFinite(rc) ? rc : 0, Number.isFinite(lc) ? lc : 0),
+    lastDate: rLast > lLast ? rLast : lLast,
+    days,
+  };
+}
+
 // Highest user_state version written or applied on this device. Supabase
 // realtime echoes our own writes back to us; without this guard every local
 // persist rebuilds the entire app ~1s later (destroying drags, modals, input
@@ -824,7 +853,10 @@ async function hydrateCloudState(user) {
   if (result.error) return notify("Cloud sync could not be loaded");
   if (result.data?.state) {
     if (Number.isFinite(+result.data.version)) lastCloudVersion = +result.data.version;
+    const remoteStreak = result.data.state.streak;
     Object.assign(state, result.data.state);
+    applyRemoteStreak(remoteStreak);
+    save("sf-streak", state.streak);
     save("sf-tasks", state.tasks);
     save("sf-coins", state.coins);
     save("sf-sessions", state.sessions);
@@ -897,7 +929,10 @@ async function hydrateCloudState(user) {
     }
     lastAppliedCloudSig = incomingSig;
     lastCloudVersion = remoteVersion;
+    const remoteStreak = remoteState.streak;
     Object.assign(state, remoteState);
+    applyRemoteStreak(remoteStreak);
+    save("sf-streak", state.streak);
     save("sf-tasks", state.tasks);
     save("sf-coins", state.coins);
     save("sf-sessions", state.sessions);

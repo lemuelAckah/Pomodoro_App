@@ -6,8 +6,13 @@
 -- the bucket is public-read and contains nothing but avatar images. The
 -- columns are still never exposed by raw table reads — the directory lockdown
 -- RPCs remain the only read path.
+--
+-- Adding photo_path changes the OUT row type, which CREATE OR REPLACE refuses
+-- (42P13). Drop first, then recreate; both functions rely on the default
+-- EXECUTE-to-PUBLIC grant, which the recreate restores automatically.
 
-create or replace function public.get_public_profiles(p_ids uuid[])
+drop function if exists public.get_public_profiles(uuid[]);
+create function public.get_public_profiles(p_ids uuid[])
 returns table (id uuid, handle text, name text, avatar text, bio text, photo_path text)
 language sql stable security definer set search_path = public as $$
   select p.id, p.handle, p.name, p.avatar, p.bio, p.photo_path
@@ -21,7 +26,8 @@ language sql stable security definer set search_path = public as $$
   limit 100
 $$;
 
-create or replace function public.search_users(q text, p_limit integer default 8)
+drop function if exists public.search_users(text, integer);
+create function public.search_users(q text, p_limit integer default 8)
 returns table (id uuid, handle text, name text, avatar text, bio text, photo_path text)
 language sql stable security definer set search_path = public as $$
   select p.id, p.handle, p.name, p.avatar, p.bio, p.photo_path

@@ -318,10 +318,18 @@ export async function secureStreak(refKey) {
   save("sf-balance", serverCoins);
   displayBalance(serverCoins);
   try {
+    // The server just recorded TODAY, so a successful call can never mean a
+    // zero streak. Guard the mirror against a malformed payload (missing /
+    // non-numeric `current`) — writing undefined here used to wipe the local
+    // count back to a displayed 0 right after a completed session.
+    const served = Number(res?.data?.current);
+    const localCount = Number(state.streak?.count);
     state.streak = {
-      count: res.data.current,
+      count: Number.isFinite(served) && served >= 1
+        ? served
+        : Math.max(1, Number.isFinite(localCount) ? localCount : 0),
       lastDate: state.streak?.lastDate || "",
-      days: state.streak?.days || [],
+      days: Array.isArray(state.streak?.days) ? state.streak.days : [],
     };
     if (res.data.longest > (state.bestStreak || 0)) state.bestStreak = res.data.longest;
     save("sf-streak", state.streak);

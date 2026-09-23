@@ -57,6 +57,14 @@ function friendPhotoUrl(id) {
   friendPhotoUrls.set(id, url);
   return url;
 }
+// cloudFriends[].photo / profile.photo often hold a storage PATH — feeding it
+// straight to <img src> renders a broken image. Resolve to a public URL once;
+// already-absolute URLs and data/blob URIs pass through untouched.
+function resolvePhoto(p) {
+  if (!p) return "";
+  if (/^(https?:|data:|blob:)/.test(p)) return p;
+  return avatarPublicUrl(p) || "";
+}
 function friendAvatarMarkup(id, handle, name, cls) {
   const url = friendPhotoUrl(id);
   const initial = esc(((handle || name || "?")[0] || "?").toUpperCase());
@@ -73,10 +81,12 @@ function friendStatusRing(id, handle, name, stories) {
     + `<small>@${esc(String(handle || name || "?").slice(0, 9))}</small></button>`;
 }
 // Grouped stories by author: [{ author:{id,handle,name}, items:[...] }]
-// Friends first (most recent), then public authors without a connection.
+// Friends first (most recent). Statuses are friends-only: a non-friend's
+// update never even enters a group here (defence in depth on top of RLS).
 function cloudStoryGroups() {
   const groups = new Map();
   for (const s of cloudStories) {
+    if (!s.mine && !cloudFriends.some((f) => f.id === s.userId)) continue;
     if (!groups.has(s.userId)) {
       groups.set(s.userId, {
         author: { id: s.userId, handle: s.handle || "member", name: s.name || s.handle || "member", photo: friendPhotoUrl(s.userId) },
@@ -985,7 +995,7 @@ function paintMessagesBadge(count) {
 // Story strip on the Messages tab: friend rings with live seen-state.
 function messagesStoryStrip() {
   if (!signedIn()) return "";
-  const groups = cloudStoryGroups();
+  const groups = friendsWithStories();
   if (!groups.length) return "";
   return `<div class="msg-story-strip">${groups
     .map((g) => friendStatusRing(g.author.id, g.author.handle, g.author.name, g.items))
@@ -994,7 +1004,11 @@ function messagesStoryStrip() {
 // Open one author's grouped stories in the cloud viewer.
 function bindFriendStoryRings(root) {
   $$('[data-friend-stories]', root).forEach((b) => (b.onclick = () => {
-    const hit = cloudStories.find((s) => s.userId === b.dataset.friendStories);
+    const userId = b.dataset.friendStories;
+    // Friends-only statuses: a friendship removed since render must not
+    // open a stale ring.
+    if (!cloudFriends.some((f) => f.id === userId)) return;
+    const hit = cloudStories.find((s) => s.userId === userId);
     if (!hit) return;
     const items = cloudStories
       .filter((s) => s.userId === hit.userId)
@@ -2271,7 +2285,7 @@ function storiesMarkup() {
   const live = liveStories();
   const unseen = live.filter((s) => !isSeen("story:" + s.id)).length;
   const unseenCloud = cloudStories.filter((s) => !isSeen("cstory:" + s.id)).length;
-  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Stories</h2><span class="tag">24h${unseen + unseenCloud ? ` · ${unseen + unseenCloud} new` : ""}</span></div><div class="story-strip"><button type="button" class="story-add" data-status-play title="Play the full status loop">${sicon("play")}<small>Status</small></button><button type="button" class="story-add" data-story-photo title="Post a photo or video">${sicon("camera")}<small>Photo</small></button><input type="file" id="story-file" accept="image/*,video/*" hidden>${localStoryRings(live)}${cloudStoryGroups().filter((g) => cloudFriends.some((f) => f.id === g.author.id)).map((g) => friendStatusRing(g.author.id, g.author.handle, g.author.name, g.items)).join("")}</div>${signedIn() ? `<div class="input-row" style="margin-top:10px;flex-wrap:wrap"><input class="input" id="cloud-story-text" maxlength="500" placeholder="Share a text story with your circle…" aria-label="Share a text story" value="${esc(state.storyDraft?.text || "")}" style="flex:1 1 160px;min-width:0"><select class="select" id="cloud-story-vis" aria-label="Story visibility" style="max-width:150px"><option value="connections">Connections</option><option value="public">Public</option><option value="private">Only me</option></select><button type="button" class="ghost" id="cloud-story-photo" title="Attach a photo" aria-label="Attach a photo">${sicon("camera")}</button><button type="button" class="primary" id="cloud-story-post">Post</button></div><input type="file" id="cloud-story-file" accept="image/jpeg,image/png,image/webp,image/gif" hidden aria-label="Choose a story photo"><div data-cloud-story-preview style="margin-top:8px">${cloudStoryPhoto?.url ? `<img src="${cloudStoryPhoto.url}" class="story-photo-preview" alt="Story photo preview"><div style="margin-top:6px"><button type="button" class="ghost" id="cloud-story-photo-remove">Remove photo</button></div>` : ""}</div><p class="muted" style="margin:6px 0 0">${state.storyDraft?.text ? "Draft restored — post when you're back online. " : ""}Photo stories upload to your private library and follow the same 24h + visibility rules as text.</p>` : ""}</div>`;
+  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Stories</h2><span class="tag">24h${unseen + unseenCloud ? ` · ${unseen + unseenCloud} new` : ""}</span></div><div class="story-strip"><button type="button" class="story-add" data-status-play title="Play the full status loop">${sicon("play")}<small>Status</small></button><button type="button" class="story-add" data-story-photo title="Post a photo or video">${sicon("camera")}<small>Photo</small></button><input type="file" id="story-file" accept="image/*,video/*" hidden>${localStoryRings(live)}${cloudStoryGroups().filter((g) => cloudFriends.some((f) => f.id === g.author.id)).map((g) => friendStatusRing(g.author.id, g.author.handle, g.author.name, g.items)).join("")}</div>${signedIn() ? `<div class="input-row" style="margin-top:10px;flex-wrap:wrap"><input class="input" id="cloud-story-text" maxlength="500" placeholder="Share a text story with your circle…" aria-label="Share a text story" value="${esc(state.storyDraft?.text || "")}" style="flex:1 1 160px;min-width:0"><select class="select" id="cloud-story-vis" aria-label="Story visibility" style="max-width:150px"><option value="connections">Connections</option><option value="private">Only me</option></select><button type="button" class="ghost" id="cloud-story-photo" title="Attach a photo" aria-label="Attach a photo">${sicon("camera")}</button><button type="button" class="primary" id="cloud-story-post">Post</button></div><input type="file" id="cloud-story-file" accept="image/jpeg,image/png,image/webp,image/gif" hidden aria-label="Choose a story photo"><div data-cloud-story-preview style="margin-top:8px">${cloudStoryPhoto?.url ? `<img src="${cloudStoryPhoto.url}" class="story-photo-preview" alt="Story photo preview"><div style="margin-top:6px"><button type="button" class="ghost" id="cloud-story-photo-remove">Remove photo</button></div>` : ""}</div><p class="muted" style="margin:6px 0 0">${state.storyDraft?.text ? "Draft restored — post when you're back online. " : ""}Photo stories upload to your private library and follow the same 24h + visibility rules as text.</p>` : ""}</div>`;
 }
 
 // Shared cloud-story post path (Discover composer + Status home composer).
@@ -2562,7 +2576,7 @@ function renderStatus(body) {
   const device = liveStories();
   const unseenMine = mine.filter((s) => !isSeen("cstory:" + s.id)).length;
   const latestMine = mine.length ? mine[mine.length - 1].createdAt : null;
-  body.innerHTML = `${signedIn() ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>New status</h2><span class="tag" data-st-mode>${cloudStoryPhoto ? "photo" : "text"}</span></div><textarea class="textarea" id="st-text" rows="3" maxlength="500" placeholder="What's on your mind?" aria-label="Write a status">${esc(state.storyDraft?.text || "")}</textarea><div class="st-composer-meta"><span><span data-st-count>0</span>/500 · 24h</span><span class="st-composer-actions"><select class="select" id="st-vis" aria-label="Status visibility"><option value="connections">Connections</option><option value="public">Public</option><option value="private">Only me</option></select><button type="button" class="ghost" id="st-photo" aria-label="Add photo">${sicon("camera")} Photo</button><button type="button" class="primary" id="st-post">Post</button></span></div><input type="file" id="st-file" accept="image/jpeg,image/png,image/webp,image/gif" hidden aria-label="Choose a status photo"><div data-st-preview>${cloudStoryPhoto?.url ? `<img src="${cloudStoryPhoto.url}" class="story-photo-preview" alt="Status photo preview"><div style="margin-top:6px"><button type="button" class="ghost" id="st-photo-remove">Remove</button></div>` : ""}</div>${state.storyDraft?.text ? `<p class="muted" style="margin:6px 0 0">Draft restored — post when you're back online.</p>` : ""}</div>` : `<div class="card" style="margin-bottom:18px"><h2>Status</h2><p class="muted">Sign in to post 24h statuses for your circle.</p></div>`}`
+  body.innerHTML = `${signedIn() ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>New status</h2><span class="tag" data-st-mode>${cloudStoryPhoto ? "photo" : "text"}</span></div><textarea class="textarea" id="st-text" rows="3" maxlength="500" placeholder="What's on your mind?" aria-label="Write a status">${esc(state.storyDraft?.text || "")}</textarea><div class="st-composer-meta"><span><span data-st-count>0</span>/500 · 24h</span><span class="st-composer-actions"><select class="select" id="st-vis" aria-label="Status visibility"><option value="connections">Connections</option><option value="private">Only me</option></select><button type="button" class="ghost" id="st-photo" aria-label="Add photo">${sicon("camera")} Photo</button><button type="button" class="primary" id="st-post">Post</button></span></div><input type="file" id="st-file" accept="image/jpeg,image/png,image/webp,image/gif" hidden aria-label="Choose a status photo"><div data-st-preview>${cloudStoryPhoto?.url ? `<img src="${cloudStoryPhoto.url}" class="story-photo-preview" alt="Status photo preview"><div style="margin-top:6px"><button type="button" class="ghost" id="st-photo-remove">Remove</button></div>` : ""}</div>${state.storyDraft?.text ? `<p class="muted" style="margin:6px 0 0">Draft restored — post when you're back online.</p>` : ""}</div>` : `<div class="card" style="margin-bottom:18px"><h2>Status</h2><p class="muted">Sign in to post 24h statuses for your circle.</p></div>`}`
     + `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>My Status</h2><span class="tag">${mine.length ? `${mine.length} update${mine.length === 1 ? "" : "s"}` : "none yet"}</span></div>${mine.length ? `<button type="button" class="status-row" data-status-mine><span class="status-avatar" style="--sv-accent:${svAccent(state.profile.handle)}">${avatarMarkup(state.profile.photo, state.profile.avatar)}</span><span class="status-meta"><strong>My Status</strong><small>${relTime(latestMine)}${unseenMine ? ` · ${unseenMine} new` : ""}</small></span>${unseenMine ? '<span class="status-dot" aria-label="Unseen updates"></span>' : `<span class="tag">${sicon("check")}</span>`}</button>` : `<p class="muted">Share your first update above — text or photo, live for 24h.</p>`}</div>`
     + (device.length ? `<div class="card"><div class="section-row"><h2>On this device</h2><span class="tag">local</span></div><div class="story-strip">${localStoryRings(device)}</div></div>` : "");
   bindStatusHome(body);
@@ -2623,6 +2637,8 @@ function playAllStatuses() {
   const others = new Map();
   for (const s of cloudStories) {
     if (s.mine) continue;
+    // The one-tap loop plays friends' statuses only — never a stranger's.
+    if (!cloudFriends.some((f) => f.id === s.userId)) continue;
     if (!others.has(s.userId)) others.set(s.userId, []);
     others.get(s.userId).push(s);
   }
@@ -4306,7 +4322,19 @@ function closeFriendsPicker() {
 // opens the full profile with an Add friend / Message / Block action bar.
 // Read-only by design: visitors can never edit someone else's profile.
 let profilePop = null;
+// Shared close timer: the row's mouseleave STARTS it, the popup's mouseenter
+// CLEARS it. (The old `pop._bye` was never assigned anywhere — mouseenter's
+// clearTimeout(undefined) was a no-op — so the popup always closed while the
+// pointer was still travelling toward "View profile", making the button
+// unreachable by mouse.)
+let popCloseT = 0;
+// Touch devices fire a synthetic mouseenter ~350ms after a tap — gating hover
+// on a fine pointer stops a ghost popup dropping over the opened modal.
+const canHoverProfile = () =>
+  Boolean(window.matchMedia?.("(hover: hover) and (pointer: fine)")?.matches);
+
 function closeProfilePop() {
+  clearTimeout(popCloseT);
   if (profilePop) profilePop.remove();
   profilePop = null;
 }
@@ -4322,15 +4350,31 @@ function bindHoverProfiles(root) {
     if (el.dataset.profileBound) return;
     el.dataset.profileBound = "1";
     let hoverT = 0;
-    el.addEventListener("mouseenter", () => {
+    // Hover only fires on the avatar/name zones — brushing the row's action
+    // buttons (Message / Block / Remove) must not float the card up over them.
+    const zones = $$(".avatar, .friend-ava, .task-text, .conv-ava", el);
+    const targets = zones.length ? zones : [el];
+    const enter = () => {
+      if (!canHoverProfile()) return;
       clearTimeout(hoverT);
+      clearTimeout(popCloseT);
       hoverT = setTimeout(() => openProfilePop(el), 350);
-    });
-    el.addEventListener("mouseleave", () => {
+    };
+    const leave = () => {
       clearTimeout(hoverT);
-      hoverT = setTimeout(() => closeProfilePop(), 220);
+      if (!canHoverProfile()) return;
+      popCloseT = setTimeout(() => closeProfilePop(), 220);
+    };
+    targets.forEach((z) => {
+      z.addEventListener("mouseenter", enter);
+      z.addEventListener("mouseleave", leave);
     });
-    el.addEventListener("click", () => {
+    el.addEventListener("click", (e) => {
+      // Buttons/links inside the row handle themselves — only a click on the
+      // row itself opens the full profile.
+      if (e.target.closest?.("button, a, input, select, textarea")) return;
+      clearTimeout(hoverT);
+      clearTimeout(popCloseT);
       closeProfilePop();
       openProfileView(profileDataFrom(el));
     });
@@ -4361,8 +4405,10 @@ function openProfilePop(el) {
   if (y + h > window.innerHeight - 12) y = Math.max(12, r.top - h - 8);
   pop.style.left = Math.max(12, x) + "px";
   pop.style.top = y + "px";
-  pop.addEventListener("mouseenter", () => clearTimeout(pop._bye));
-  pop.addEventListener("mouseleave", () => closeProfilePop());
+  pop.addEventListener("mouseenter", () => clearTimeout(popCloseT));
+  pop.addEventListener("mouseleave", () => {
+    popCloseT = setTimeout(() => closeProfilePop(), 220);
+  });
   pop.querySelector("[data-pp-view]")?.addEventListener("click", () => {
     closeProfilePop();
     openProfileView(d);
@@ -4755,8 +4801,9 @@ function convAvatarHtml(c, size) {
   }
   const name = c.name || c.username || "?";
   const letter = esc((name.replace(/^@/, "")[0] || "?").toUpperCase());
-  if (c.photo) {
-    return `<span class="conv-ava" style="width:${size}px;height:${size}px"><img src="${esc(c.photo)}" alt="" loading="lazy"></span>`;
+  const src = resolvePhoto(c.photo);
+  if (src) {
+    return `<span class="conv-ava" style="width:${size}px;height:${size}px"><img src="${esc(src)}" alt="" loading="lazy"></span>`;
   }
   return `<span class="conv-ava" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.42)}px">${letter}</span>`;
 }
@@ -4766,7 +4813,7 @@ function chatDisplayInfo(id) {
       isGroup: false,
       target: { id: SELF_CHAT_ID, username: state.profile.handle || "me", name: "You (Message yourself)" },
       name: "You (Message yourself)",
-      photo: state.profile.photo || "",
+      photo: resolvePhoto(state.profile.photo),
     };
   const isGroup = allGroups().some((g) => g.id === id);
   const target =
@@ -4776,7 +4823,9 @@ function chatDisplayInfo(id) {
   const name = isGroup
     ? (target?.name || "Group")
     : target?.name || (target ? "@" + (target.username || target.handle) : "") || "Chat";
-  const photo = !isGroup ? target?.photo || (target?.cloud && cloudFriendPhoto?.(target.id)) || "" : "";
+  const photo = !isGroup
+    ? resolvePhoto(target?.photo || (target?.cloud && cloudFriendPhoto?.(target.id)) || "")
+    : "";
   return { isGroup, target, name, photo };
 }
 // cloudFriends entries may carry an avatar path; resolve to a public URL once.
@@ -4821,7 +4870,7 @@ function conversationRow(c) {
 function renderMessages(body) {
   const cloudConns = cloudFriends
     .filter((f) => !cloudBlocked.has(f.id))
-    .map((f) => ({ id: f.id, username: f.handle, name: f.name || "@" + f.handle, photo: f.photo || cloudFriendPhoto(f.id), cloud: true }));
+    .map((f) => ({ id: f.id, username: f.handle, name: f.name || "@" + f.handle, photo: resolvePhoto(f.photo) || cloudFriendPhoto(f.id), cloud: true }));
   const chats = [
     ...allGroups().filter((g) => get("sf-joined", []).includes(g.id)),
     ...(state.friends || []).filter((f) => !isBlockedKey(f.id)),
@@ -4839,9 +4888,12 @@ function renderMessages(body) {
     + `<div class="wa-list-head"><h2>Chats</h2>${signedIn() ? "" : `<span class="tag">local</span>`}</div>`
     + messagesStoryStrip()
     + `<div class="wa-search"><span class="wa-search-ico">${sicon("search")}</span><input id="wa-chat-filter" type="search" placeholder="Search or start a new chat" aria-label="Search chats" autocomplete="off"></div>`
-    + `<div class="wa-rows" id="wa-rows">${conversationRow({ id: SELF_CHAT_ID, name: "You (Message yourself)", emoji: avatarMarkup(state.profile.photo, (state.profile.name || "Y")[0].toUpperCase()) })}${sorted.map(conversationRow).join("") || ""}</div></div>`
+    + `<div class="wa-rows" id="wa-rows">${conversationRow({ id: SELF_CHAT_ID, name: "You (Message yourself)", emoji: avatarMarkup(resolvePhoto(state.profile.photo), (state.profile.name || "Y")[0].toUpperCase()) })}${sorted.map(conversationRow).join("") || ""}</div></div>`
     + `<div class="chat wa-chat">${state.activeChat ? (groupSearch && groupSearch.id === state.activeChat ? groupSearchMarkup(state.activeChat) : chatMarkup(state.activeChat)) : waPlaceholderMarkup()}</div></div>`;
   paintMessagesBadge(totalUnread);
+  // The story rings under the "Chats" heading only worked on the Status tab
+  // (bindFriendStoryRings was never called here) — clicking them did nothing.
+  bindFriendStoryRings(body);
   $$("[data-select-chat]", body).forEach(
     (b) =>
       (b.onclick = () => {
@@ -5275,8 +5327,8 @@ function chatMarkup(id) {
     ? `<span class="post-menu-wrap"><button type="button" class="icon-btn wa-menu-btn" data-chat-menu="${id}" title="Group options" aria-label="Group options" aria-haspopup="true">${sicon("gear")}</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden>${groupMenuMarkup(id)}</span></span>`
     : `<span class="post-menu-wrap"><button type="button" class="icon-btn wa-menu-btn" data-chat-menu="${id}" title="Conversation options" aria-label="Conversation options" aria-haspopup="true">${sicon("gear")}</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden>${dmMenuMarkup(id)}</span></span>`;
   const headPhoto = isGroup ? "" : isSelf
-    ? `<span class="chat-avatar">${avatarMarkup(state.profile.photo, (state.profile.name || "Y")[0].toUpperCase())}</span>`
-    : `<span class="chat-avatar">${avatarMarkup(target?.photo || "", (info.name.replace(/^@/, "")[0] || "?").toUpperCase())}</span>`;
+    ? `<span class="chat-avatar">${avatarMarkup(resolvePhoto(state.profile.photo), (state.profile.name || "Y")[0].toUpperCase())}</span>`
+    : `<span class="chat-avatar">${avatarMarkup(info.photo || "", (info.name.replace(/^@/, "")[0] || "?").toUpperCase())}</span>`;
   return `<div class="chat-head wa-head"><button type="button" class="wa-back" data-wa-back title="Back to chats" aria-label="Back to chats">${sicon("reply")}<span>Chats</span></button><button type="button" class="chat-head-who" data-chat-profile="${id}" title="Open profile"><span class="chat-ava">${isGroup ? groupAvatarMarkup(allGroups().find((g) => g.id === id)) : headPhoto}</span><span class="chat-head-txt"><strong>${esc(info.name || "@" + (target?.username || target?.handle || "?"))}</strong>${mutedTag}${typing}${presence}</span></button><span class="friend-actions"><button type="button" class="primary wa-call" data-start-call="${id}">${sicon("phone")} <span>Call</span></button>${menu}</span></div>${pinbar}${nav}<div class="chat-body">${msgs.map((m, i) => `<div class="bubble ${m.me ? "me" : ""}" data-midx="${i}">${messageHtml(m)}</div>`).join("") || '<span class="muted">No messages yet. Start the conversation.</span>'}</div>${reply}${rec}<div class="chat-input"><textarea class="input autogrow chat-textarea" id="chat-text" rows="1" data-grow-max="150" placeholder="type a message" aria-label="Type a message"></textarea><div class="chat-extras-wrap"><button type="button" class="icon-btn chat-extras-toggle" data-chat-extras title="Add to your message" aria-label="Add to your message" aria-haspopup="true" aria-expanded="false"><span class="chat-extras-plus">${sicon("plus")}</span></button><div class="chat-extras-menu" data-chat-extras-pop hidden role="dialog" aria-label="Add to your message"><div class="chat-extras-head"><strong>Add to chat</strong><button type="button" class="icon-btn chat-extras-close" data-chat-extras-close title="Close" aria-label="Close menu">${sicon("x")}</button></div><div class="chat-extras-grid"><label class="chat-extras-item" title="Attach a file up to 3 MB"><input type="file" id="chat-file" hidden><span class="chat-extras-ic file">${sicon("clip")}</span><span>File</span></label><button type="button" class="chat-extras-item" id="poll-button" title="Create a poll"><span class="chat-extras-ic poll">${sicon("chart")}</span><span>Poll</span></button><button type="button" class="chat-extras-item" id="voice-button" title="Record a voice note"><span class="chat-extras-ic voice">${sicon("mic")}</span><span>Voice</span></button></div><div class="chat-extras-foot">Files up to 3 MB. Attach documents, start a poll, or record a voice note.</div></div></div><button type="button" class="primary wa-send" id="send-message" aria-label="Send message">Send</button></div>`;
 }
 
@@ -5293,6 +5345,20 @@ function bindChat(root, id) {
   subscribeToChat(id);
   subscribePresenceFor(id);
   loadCloudHistory(id, root).catch(() => {});
+  // Realtime gaps (laptop sleep, a dropped channel, a missed INSERT) close
+  // silently: when the tab becomes visible again, refetch history for the
+  // conversation that is open — no navigating away and back required.
+  window.__sfChatVisRefresh = () => {
+    if (state.activeChat === id) loadCloudHistory(id, chatRoot()).catch(() => {});
+  };
+  if (!window.__sfChatVisHook) {
+    window.__sfChatVisHook = true;
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && typeof window.__sfChatVisRefresh === "function") {
+        window.__sfChatVisRefresh();
+      }
+    });
+  }
   $("#send-message", root).onclick = () => {
     const input = $("#chat-text", root);
     const value = input.value;
@@ -5324,6 +5390,7 @@ function bindChat(root, id) {
   // (all viewports; the list simply stays visible on wide screens).
   $("[data-wa-back]", root)?.addEventListener("click", () => {
     state.activeChat = null;
+    window.__sfChatVisRefresh = null;
     // Immersive mode: returning from a chat must restore the community
     // heading + subtabs, not just swap the panes.
     if (state.tab === "community" && state.subtab === "messages") renderCommunity();

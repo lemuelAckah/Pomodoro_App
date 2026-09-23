@@ -72,7 +72,9 @@ function recordFocusDay(sessionRef) {
     // empty until the RPC answered meant the server streak existed while the
     // UI kept reading a zeroed local mirror (the "stuck at 0" bug).
     state.streak.lastDate = today;
-    if (state.streak.count < 1) state.streak.count = 1;
+    // `count < 1` never catches undefined/NaN (undefined < 1 is false) — a
+    // malformed mirror kept displaying 0. Any completed day counts as ≥1.
+    if (!(Number(state.streak.count) >= 1)) state.streak.count = 1;
     persist();
     try {
       secureStreak(`day:${today}:${sessionRef || "na"}`).then((r) => {
@@ -81,6 +83,7 @@ function recordFocusDay(sessionRef) {
         // The server owns the count for cloud members — mirror it locally,
         // otherwise the UI keeps showing a stale/zero streak.
         if (Number.isFinite(+r.current)) state.streak.count = Math.max(1, +r.current);
+        else state.streak.count = Math.max(1, Number(state.streak.count) || 0);
         if (r.longest > (state.bestStreak || 0)) state.bestStreak = r.longest;
         persist();
         if (r.bonus > 0) {
@@ -111,8 +114,8 @@ function recordFocusDay(sessionRef) {
   }
   // A completed session ALWAYS counts as today's activity — belt and braces
   // for the fresh-install case where a cloud mirror or a restored archive
-  // produced a structurally valid but zeroed streak.
-  if (state.streak.count < 1) state.streak.count = 1;
+  // produced a structurally valid but zeroed streak (undefined/NaN safe).
+  if (!(Number(state.streak.count) >= 1)) state.streak.count = 1;
   if (!state.streak.days.includes(today)) {
     state.streak.days.push(today);
     state.streak.days = state.streak.days.slice(-30);
@@ -640,7 +643,6 @@ function applyTemplate(t) {
   state.sessionTech = null;
   persist();
   renderTimer();
-  notify(`${t.name} set — press Start when ready`);
 }
 
 function applyCustomDuration(root) {
@@ -681,9 +683,8 @@ function applyCustomDuration(root) {
   persist();
   renderTimer();
   renderMiniTimer();
-  // Quiet confirmation: a non-blocking toast. A blocking "OK" dialog for a
-  // routine save made the user dismiss a popup every single time.
-  toast(`${modeLabels[mode]} set to ${fmt(durations[mode])} — press Start when ready`);
+  // Silent apply — the ring and inputs visibly update in place. A toast after
+  // every routine duration change was noise the user asked to remove.
 }
 
 function restoreSession() {
