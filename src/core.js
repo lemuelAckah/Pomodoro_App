@@ -798,6 +798,17 @@ async function pullCloudProfile() {
     } catch {
       /* keep local photo */
     }
+    // Offline safety: the avatar bucket is public, so the URL is a pure
+    // derivation of the path — rebuild it without any network round-trip.
+    // While online the fetch above already set the canonical URL; the last
+    // derived value (or the browser's HTTP cache) keeps the photo visible
+    // with no connection.
+    if (!navigator.onLine && !state.profile.photo) {
+      try {
+        const offlineUrl = avatarPublicUrl(data.photo_path);
+        if (offlineUrl) state.profile.photo = offlineUrl;
+      } catch { /* keep whatever stands */ }
+    }
   } else {
     state.profile.photoPath = "";
   }

@@ -19,7 +19,7 @@ import {
 import { CHIMES, playChime, clearSongDatabase, stopAllLayers } from "./audio.js";
 import { applyDurations, haltTimer, durations, renderTimer, sessionInProgress, timerHandle } from "./timer.js";
 import { startTechCheck, techInfo, enterApp } from "./techniques.js";
-import { equippedAvatarEmoji, equippedBadgeEmoji, showcasedBadgeIds, toggleShowcaseBadge, ownedBadges, MAX_SHOWCASE_BADGES } from "./store.js";
+import { equippedAvatarEmoji, equippedBadgeEmoji, showcasedBadgeIds, toggleShowcaseBadge, ownedBadges } from "./store.js";
 import { disconnectRealtime, conversationSubscription, presenceSub } from "./community.js";
 import { shell } from "./app.js";
 
@@ -205,7 +205,7 @@ function openProfile() {
     const prevPath = state.profile.photoPath || "";
     let uploadedNewPath = null;
     if (photoDirty) {
-      if (pendingPhoto && backendConfigured && state.user) {
+      if (pendingPhoto && backendConfigured && state.user && navigator.onLine) {
         try {
           const blob = await (await fetch(pendingPhoto)).blob();
           const up = await uploadAvatar(
@@ -223,8 +223,13 @@ function openProfile() {
           state.profile.photo = pendingPhoto;
           notify("Photo saved on this device; cloud upload failed");
         }
+      } else if (photoDirty && pendingPhoto && backendConfigured && state.user && !navigator.onLine) {
+        // Offline: keep the new photo locally (data URL) — it shows right
+        // away and uploads on the next online save instead of failing.
+        state.profile.photo = pendingPhoto;
+        notify("Photo saved on this device — it uploads when you're back online");
       } else {
-        if (prevPath && backendConfigured && state.user)
+        if (prevPath && backendConfigured && state.user && navigator.onLine)
           await removeAvatar(prevPath).catch(() => {});
         state.profile.photo = pendingPhoto || "";
         state.profile.photoPath = "";
@@ -239,7 +244,14 @@ function openProfile() {
     persist();
     let cloudOk = true;
     if (state.user) {
-      const res = await syncProfile(state.profile);
+      if (!navigator.onLine) {
+        // Offline: nothing to send — the profile stays on this device and
+        // syncs on the next online save. Never block the user on it.
+        cloudOk = false;
+      }
+      const res = cloudOk
+        ? await syncProfile(state.profile)
+        : { error: null };
       if (res.error) {
         cloudOk = false;
         // Don't leave an orphaned fresh upload behind when the row save fails.
@@ -254,7 +266,13 @@ function openProfile() {
     }
     modal.remove();
     shell();
-    notify(cloudOk ? "Profile updated" : "Profile kept on this device");
+    notify(
+      !navigator.onLine && state.user
+        ? "Offline — profile saved on this device and will sync when you're back online"
+        : cloudOk
+          ? "Profile updated"
+          : "Profile kept on this device",
+    );
   };
 }
 
@@ -564,12 +582,12 @@ function renderAccount() {
   const sidePanel = !user
     ? `<aside class="auth-side" aria-label="Why join StudyFlow"><div class="auth-side-glow" aria-hidden="true"></div><div class="eyebrow">Why join</div><h3>Everything you do here, kept.</h3><p class="muted">A free account follows you across devices and keeps every streak, coin and highlight safe.</p><div class="auth-side-stats"><div class="auth-side-stat"><b>${(state.sessions || []).length}</b><small>session${(state.sessions || []).length === 1 ? "" : "s"} focused so far</small></div><div class="auth-side-stat"><b>${state.coins || 0}</b><small>coins ready to sync</small></div><div class="auth-side-stat"><b>${(state.books || []).length}</b><small>book${(state.books || []).length === 1 ? "" : "s"} on your shelf</small></div></div><ul class="auth-side-perks"><li><span>${sicon("fire")}</span><div><strong>Streaks that travel</strong><small>Your garden and streak survive a lost laptop.</small></div></li><li><span>${sicon("users")}</span><div><strong>Study together</strong><small>Sprint rooms, gifts and group challenges.</small></div></li><li><span>${sicon("refresh")}</span><div><strong>Cloud save</strong><small>Pick up on your phone mid-revision.</small></div></li><li><span>${sicon("shield")}</span><div><strong>Private by default</strong><small>You choose who sees your activity.</small></div></li></ul></aside>`
     : "";
-  target.innerHTML = `<div class="account-page"><div class="account-hero"><div><div class="eyebrow">StudyFlow identity</div><h1>${user ? "Your account, your space." : "A calmer way to sign in."}</h1><p class="lede">${user ? "Manage your profile, privacy, and connected sessions from one secure place." : "Join your focused workspace and keep your progress with you across devices."}</p></div><div class="account-orbit"><span>◷</span><i></i><b></b></div></div>${completenessMarkup()}<div class="auth-split"><div class="card auth-card">${user ? accountSignedInMarkup(user) : accountAuthMarkup()}</div>${sidePanel}</div>${user ? badgeShelfMarkup() : ""}${!user ? `<div class="privacy-consent" style="margin-top:16px">${privacyAgreementMarkup("account-privacy")}</div>` : ""}${dataMarkup()}${privacyCard()}</div>`;
+  target.innerHTML = `<div class="account-page"><div class="account-hero"><div><div class="eyebrow">StudyFlow identity</div><h1>${user ? "Your account, your space." : "A calmer way to sign in."}</h1><p class="lede">${user ? "Manage your profile, privacy, and connected sessions from one secure place." : "Join your focused workspace and keep your progress with you across devices."}</p></div><div class="account-orbit"><span>◷</span><i></i><b></b></div></div>${completenessMarkup()}<div class="auth-split"><div class="card auth-card">${user ? accountSignedInMarkup(user) : accountAuthMarkup()}</div>${sidePanel}</div>${user ? badgeShelfMarkup() : ""}${dataMarkup()}${privacyCard()}</div>`;
   bindAccount(target);
 }
 
-// Badge shelf: every acquired badge on display, tap to showcase (up to
-// MAX_SHOWCASE_BADGES ride beside your name). Rarity ring glows for tiered
+// Badge shelf: every acquired badge on display, tap to showcase — there is
+// NO cap, showcase as many as you own. Rarity ring glows for tiered
 // box exclusives; plain badges get the sage ring.
 function badgeShelfMarkup() {
   const owned = ownedBadges();
@@ -579,7 +597,7 @@ function badgeShelfMarkup() {
     const tier = String(b.tier || "").toLowerCase();
     return `<button type="button" class="badge-tile${on ? " on" : ""}${tier ? ` tier-${tier}` : ""}" data-shelf-badge="${esc(b.id)}" aria-pressed="${on}" title="${esc(b.name)} — ${on ? "tap to remove from showcase" : "tap to showcase"}"><span class="badge-medal">${b.emoji}</span>${on ? `<span class="badge-check">${sicon("check")}</span>` : ""}<strong>${esc(b.name.replace(/\s*badge\s*/i, ""))}</strong>${tier ? `<small class="rarity-${tier}">${esc(b.tier)}</small>` : `<small>${on ? "showcased" : "tap to showcase"}</small>`}</button>`;
   }).join("");
-  return `<div class="card badge-shelf"><div class="section-row"><h2>${sicon("trophy")} Badge shelf</h2><span class="tag" data-shelf-count>${ids.length}/${MAX_SHOWCASE_BADGES} showcased</span></div>${owned.length ? `<p class="muted">Your collection — tap badges to line them up beside your name.</p><div class="badge-grid">${tiles}</div>` : `<div class="empty-state"><div class="emoji">${sicon("medal")}</div><h3>No badges yet</h3><p class="muted">Earn them in focus sessions, events and mystery boxes — then showcase your favorites here.</p><button type="button" class="primary" data-goto-store>Earn badges</button></div>`}</div>`;
+  return `<div class="card badge-shelf"><div class="section-row"><h2>${sicon("trophy")} Badge shelf</h2><span class="tag" data-shelf-count>${ids.length} showcased</span></div>${owned.length ? `<p class="muted">Your collection — tap badges to line them up beside your name. Showcase as many as you like.</p><div class="badge-grid">${tiles}</div>` : `<div class="empty-state"><div class="emoji">${sicon("medal")}</div><h3>No badges yet</h3><p class="muted">Earn them in focus sessions, events and mystery boxes — then showcase your favorites here.</p><button type="button" class="primary" data-goto-store>Earn badges</button></div>`}</div>`;
 }
 function bindBadgeShelf(root) {
   const grid = $("[data-shelf-badge]", root);
@@ -594,10 +612,10 @@ function bindBadgeShelf(root) {
         renderAccount();
         notify(
           result === "added"
-            ? `${item.name} showcased (${showcasedBadgeIds().length}/${MAX_SHOWCASE_BADGES})`
+            ? `${item.name} showcased`
             : result === "removed"
               ? "Badge removed from showcase"
-              : `Showcase is full (${MAX_SHOWCASE_BADGES} badges) — remove one first`,
+              : "That isn't a badge",
         );
       }),
   );
@@ -611,7 +629,7 @@ function bindBadgeShelf(root) {
 function accountAuthMarkup() {
   const reset = state.accountView === "reset";
   const create = state.accountView === "create";
-  return `<div class="auth-header"><span class="auth-kicker">${reset ? "Account recovery" : create ? "Start your journey" : "Welcome back"}</span><h2>${reset ? "Reset your password" : create ? "Create your StudyFlow account" : "Sign in to StudyFlow"}</h2><p class="muted">${reset ? "We will send a secure reset link to your email." : create ? "Your focus history should travel with you." : "Pick up exactly where your attention left off."}</p></div><div class="auth-tabs"><button type="button" data-auth-view="welcome" class="${!create && !reset ? "active" : ""}">Sign in</button><button type="button" data-auth-view="create" class="${create ? "active" : ""}">Create account</button><button type="button" data-auth-view="reset" class="${reset ? "active" : ""}">Reset password</button></div>${reset ? `<label class="field-label">Email<input class="input" id="account-email" type="email" placeholder="you@example.com"></label><button type="button" class="primary auth-submit" data-reset-password>Send reset link</button>` : `<label class="field-label">Email<input class="input" id="account-email" type="email" placeholder="you@example.com"></label>${pwFieldMarkup("account-password", "Password", "At least 6 characters", create ? "new-password" : "current-password")}${create ? `<label class="field-label">Display name<input class="input" id="account-name" placeholder="How should we call you?"></label>${handleFieldMarkup("account-handle", "", "Claim it now, or roll for ideas")}<label class="field-label">Country (optional)<input class="input" id="account-country" placeholder="e.g. Ghana"></label><label class="field-label">Phone number (optional)<input class="input" id="account-phone" type="tel" placeholder="e.g. +233 ..."></label><label class="field-label">University (optional)<input class="input" id="account-university" placeholder="Where do you school?"></label><label class="field-label">Subjects you study (optional)<input class="input" id="account-subjects" placeholder="e.g. Calculus, Web Development"></label>` : ""}<button type="button" class="primary auth-submit" data-email-auth>${create ? "Create account" : "Sign in"}</button><div class="auth-divider"><span>or continue with</span></div><div class="oauth-row"><button type="button" class="oauth google" data-provider="google"><b>G</b> Google</button><button type="button" class="oauth apple" data-provider="apple"><b>●</b> Apple</button></div><p class="auth-foot">Already have a verification email? <button type="button" class="text-button" data-resend>Resend it</button></p>`}`;
+  return `<div class="auth-header"><span class="auth-kicker">${reset ? "Account recovery" : create ? "Start your journey" : "Welcome back"}</span><h2>${reset ? "Reset your password" : create ? "Create your StudyFlow account" : "Sign in to StudyFlow"}</h2><p class="muted">${reset ? "We will send a secure reset link to your email." : create ? "Your focus history should travel with you." : "Pick up exactly where your attention left off."}</p></div><div class="auth-tabs"><button type="button" data-auth-view="welcome" class="${!create && !reset ? "active" : ""}">Sign in</button><button type="button" data-auth-view="create" class="${create ? "active" : ""}">Create account</button><button type="button" data-auth-view="reset" class="${reset ? "active" : ""}">Reset password</button></div>${reset ? `<label class="field-label">Email<input class="input" id="account-email" type="email" placeholder="you@example.com"></label><button type="button" class="primary auth-submit" data-reset-password>Send reset link</button>` : `<label class="field-label">Email<input class="input" id="account-email" type="email" placeholder="you@example.com"></label>${pwFieldMarkup("account-password", "Password", "At least 6 characters", create ? "new-password" : "current-password")}${create ? `<label class="field-label">Display name<input class="input" id="account-name" placeholder="How should we call you?"></label>${handleFieldMarkup("account-handle", "", "Claim it now, or roll for ideas")}<label class="field-label">Country (optional)<input class="input" id="account-country" placeholder="e.g. Ghana"></label><label class="field-label">Phone number (optional)<input class="input" id="account-phone" type="tel" placeholder="e.g. +233 ..."></label><label class="field-label">University (optional)<input class="input" id="account-university" placeholder="Where do you school?"></label><label class="field-label">Subjects you study (optional)<input class="input" id="account-subjects" placeholder="e.g. Calculus, Web Development"></label>${create ? privacyConsentMarkup("account-privacy") : ""}` : ""}<button type="button" class="primary auth-submit" data-email-auth>${create ? "Create account" : "Sign in"}</button><div class="auth-divider"><span>or continue with</span></div><div class="oauth-row"><button type="button" class="oauth google" data-provider="google"><b>G</b> Google</button><button type="button" class="oauth apple" data-provider="apple"><b>●</b> Apple</button></div><p class="auth-foot">Already have a verification email? <button type="button" class="text-button" data-resend>Resend it</button></p>`}`;
 }
 
 function accountSignedInMarkup(user) {
@@ -630,14 +648,29 @@ function bindAccount(root) {
         renderAccount();
       }),
   );
+  // Consent gate: the Create-account button dims until the mandatory box is
+  // ticked. The button stays clickable so an unticked tap can explain itself.
+  const paintConsentGate = () => {
+    const box = $("#account-privacy", root);
+    const btn = $("[data-email-auth]", root);
+    if (!box || !btn || state.accountView !== "create") return;
+    btn.classList.toggle("gated", !box.checked);
+    const wrap = box.closest("[data-consent-wrap]");
+    if (wrap) wrap.dataset.unticked = box.checked ? "0" : "1";
+  };
+  $("#account-privacy", root)?.addEventListener("change", paintConsentGate);
+  paintConsentGate();
   $("[data-email-auth]", root)?.addEventListener("click", async (e) => {
     const btn = e.currentTarget;
     const email = $("#account-email", root).value.trim();
     const password = $("#account-password", root).value;
-    if (!email || !password) return notify("Enter your email and password");
     const create = state.accountView === "create";
-    if (create && !$("#account-privacy", root)?.checked)
-      return notify("Tick the Privacy & Guidelines box to create your account");
+    if (create && !$("#account-privacy", root)?.checked) {
+      notify("Please tick “I agree to the Privacy & Community Guidelines” first — it's required to create your account.");
+      $("#account-privacy", root)?.closest("[data-consent-wrap]")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
+    if (!email || !password) return notify("Enter your email and password");
     btn.disabled = true;
     const label = btn.textContent;
     btn.textContent = "Signing in…";
@@ -710,8 +743,11 @@ function bindAccount(root) {
   $$("[data-provider]", root).forEach(
     (button) =>
       (button.onclick = async () => {
-        if (state.accountView === "create" && !$("#account-privacy", root)?.checked)
-          return notify("Tick the Privacy & Guidelines box to create your account");
+        if (state.accountView === "create" && !$("#account-privacy", root)?.checked) {
+          notify("Please tick “I agree to the Privacy & Community Guidelines” first — it's required to create your account.");
+          $("#account-privacy", root)?.closest("[data-consent-wrap]")?.scrollIntoView({ behavior: "smooth", block: "center" });
+          return;
+        }
         const result = await signInWithProvider(button.dataset.provider);
         if (result.error) notify(friendlyAuthError(result.error));
         else if (state.accountView === "create") markPrivacyAccepted();
@@ -807,6 +843,14 @@ function privacyAccepted() {
 
 function privacyAgreementMarkup(boxId) {
   return `<div class="agree-row"><input type="checkbox" id="${boxId}"><span>I agree to the <button type="button" class="linklike" data-privacy-open>Privacy &amp; Community Guidelines</button></span></div>`;
+}
+
+// Mandatory consent block, shown ONLY inside the Create-account form,
+// immediately above the Create account button. The checkbox gates the
+// button until ticked (top-notch UX: the state is visible at a glance),
+// and "Privacy & Community Guidelines" opens the full document.
+function privacyConsentMarkup(boxId) {
+  return `<div class="privacy-consent in-form" data-consent-wrap><label class="agree-row"><input type="checkbox" id="${boxId}" data-consent-check><span>I agree to the <button type="button" class="linklike" data-privacy-open>Privacy &amp; Community Guidelines</button> — required to create an account</span></label></div>`;
 }
 
 function privacyDocSections() {
@@ -965,7 +1009,7 @@ function comfortCard() {
 }
 
 function shortcutsCard() {
-  return `<div class="card"><div class="section-row"><h2>Shortcuts</h2><span class="tag">keys</span></div><div class="shortcut-list"><div><kbd>Space</kbd><span>Start / pause the timer</span></div><div><kbd>Ctrl K</kbd><span>Search everything</span></div><div><kbd>Esc</kbd><span>Close the search</span></div></div><button type="button" class="ghost" data-whatsnew style="margin-top:12px">See what's new</button> <button type="button" class="ghost" data-tour-replay style="margin-top:12px">Replay tour</button></div>`;
+  return `<div class="card"><div class="section-row"><h2>Shortcuts</h2><span class="tag">keys</span></div><div class="shortcut-list"><div><kbd>Space</kbd><span>Start / pause the timer</span></div><div><kbd>R</kbd><span>Reset the focus session</span></div><div><kbd>F</kbd><span>Focus view</span></div><div><kbd>Ctrl K</kbd><span>Search everything</span></div><div><kbd>Esc</kbd><span>Close the search</span></div></div><button type="button" class="ghost" data-whatsnew style="margin-top:12px">See what's new</button> <button type="button" class="ghost" data-tour-replay style="margin-top:12px">Replay tour</button></div>`;
 }
 
 function appearanceCard() {

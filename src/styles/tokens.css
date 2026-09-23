@@ -5,6 +5,7 @@
   --muted: #66736a;
   --paper: #f6f7f2;
   --panel: #ffffff;
+  --panel-2: #f4f6f1; /* recessed surface: playlist rows, wells, tiles */
   --line: #dfe6dc;
   --sage: #47765a;
   --lime: #b8d77c;
@@ -18,6 +19,7 @@ html[data-night="1"] {
   color-scheme: dark;
   --paper: #0f141c;
   --panel: #1a2230;
+  --panel-2: rgba(255, 255, 255, 0.045); /* same surface, dark-tinted */
   --ink: #e9edf5;
   --muted: #8f99ad;
   --line: #2b3549;

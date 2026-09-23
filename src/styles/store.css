@@ -368,11 +368,13 @@ html[data-night="1"] .box-legendary {
 }
 
 /* Showcased badges lined up next to a display name (profile, session card).
-   Token-driven; caps naturally via the MAX_SHOWCASE_BADGES limit. */
+   Token-driven; wraps cleanly no matter how many badges are showcased. */
 .showcase-badges {
   display: inline-flex;
   align-items: center;
   gap: 3px;
+  flex-wrap: wrap;
+  max-width: 220px;
   vertical-align: -3px;
   margin-left: 2px;
 }

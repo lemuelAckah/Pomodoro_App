@@ -1104,7 +1104,7 @@ function resetFocusSession() {
   persist();
   updateTimerDom();
   renderMiniTimer();
-  notify("Focus session reset — stay on the Focus Desk to finish a session.");
+  // Deliberately silent — the timer snapping back to full IS the feedback.
 }
 
 function handleWindowHidden() {

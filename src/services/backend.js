@@ -963,7 +963,19 @@ export async function sendCloudMessage(message) {
       p_text: String(message.text || ""),
       p_metadata: message.metadata && typeof message.metadata === "object" ? message.metadata : {},
     }).single();
-    if (error && isMissingRpc(error)) return supabase.from("messages").insert(message).select().single();
+    if (error && isMissingRpc(error)) {
+      // Raw insert keeps the client id — the RPC fallback must NOT, or the
+      // INSERT..RETURNING on that id would come back empty under the delete
+      // policy and this very fallback would fire again (duplicate rows).
+      const { id: _ignored, ...rest } = message;
+      const cid = crypto.randomUUID();
+      const ins = await supabase.from("messages").insert({ ...rest, id: cid });
+      // Plain insert (no .select()): PostgREST RETURNING runs through the
+      // row-security SELECT policy, which can't see the just-inserted row —
+      // it would report an error for a row that actually landed. We know
+      // the id we assigned, so hand it back directly.
+      return ins.error ? ins : { data: { id: cid }, error: null };
+    }
     return { data, error };
   }
   return supabase.from("messages").insert(message).select().single();

@@ -935,8 +935,13 @@ function paintMessagesBadge(count) {
 
 function renderCommunity() {
   clearSprintTicker();
+  // Immersive messaging: while a conversation is open, the community page
+  // drops its own heading, subtabs and spacing so the chat owns the screen
+  // (WhatsApp behaviour). The back chip / Esc returns everything.
+  const immersive = state.tab === "community" && state.subtab === "messages" && Boolean(state.activeChat);
   const t = $("#tab-community");
-  t.innerHTML = `${viewHead("Community", "Find people who are learning what you are learning, make a group, and keep the conversation moving.")}<div class="subnav">${[
+  t.classList.toggle("immersive-chat", immersive);
+  t.innerHTML = `${immersive ? "" : viewHead("Community", "Find people who are learning what you are learning, make a group, and keep the conversation moving.")}${immersive ? "" : `<div class="subnav">${[
     ["discover", "Discover"],
     ["status", "Status"],
     ["mygroups", "My groups"],
@@ -949,7 +954,7 @@ function renderCommunity() {
       (x) =>
         `<button type="button" data-subtab="${x[0]}" class="${state.subtab === x[0] ? "active" : ""}">${x[1]}</button>`,
     )
-    .join("")}</div><div id="community-body"></div>`;
+    .join("")}</div>`}<div id="community-body"></div>`;
   $$("[data-subtab]", t).forEach(
     (b) =>
       (b.onclick = () => {
@@ -2237,13 +2242,16 @@ async function postCloudStory({ text, vis = "connections", file = null, btn = nu
     return false;
   }
   if (!navigator.onLine) {
+    // Offline: posting is blocked (statuses need the server), but nothing is
+    // lost — text is kept as a draft that survives reloads, and the user is
+    // told exactly why. Previously posted statuses stay visible above.
     if (clean) {
       state.storyDraft = { text: clean, vis: visibility, ts: Date.now() };
       persist();
     }
     notify(file
       ? "You're offline — photo stories need a connection. Your photo is still attached for when you're back."
-      : "You're offline — text saved as a draft.");
+      : "You're offline — posting needs a connection. Your text is saved as a draft and your earlier statuses are still visible.");
     return false;
   }
   if (btn) {
@@ -2423,10 +2431,19 @@ function bindStories(body) {
 // server-side views. Local photo/video stories above are untouched.
 async function refreshCloudStories(force) {
   if (!signedIn()) return;
+  // Offline: the in-memory cache (cloudStories) is exactly what should stay
+  // on screen — statuses posted before the connection dropped keep showing.
+  // Skip the network entirely rather than risk an offline response being
+  // mistaken for "no stories".
+  if (!navigator.onLine) return;
   if (!force && Date.now() - cloudStoriesAt < 60000 && cloudStoriesAt) return;
   try {
     const { data, error } = await listStories(60);
-    if (error) throw error;
+    if (error) {
+      // A real error keeps the stale cache too — an empty list is only
+      // adopted from a successful read.
+      return;
+    }
     const rows = Array.isArray(data) ? data : [];
     const { data: profiles } = await getPublicProfiles(rows.map((r) => r.user_id)).catch(() => ({ data: [] }));
     const byId = new Map((profiles || []).map((p) => [p.id, p]));
@@ -4428,39 +4445,99 @@ function previewLabel(chatId, m, isGroup) {
   return "";
 }
 
+// WhatsApp-style avatar for a conversation: profile photo when we have one,
+// group logo/emoji for groups, else a tinted initial disc.
+function convAvatarHtml(c, size) {
+  if (typeof c.emoji === "string" && c.emoji.includes("<svg")) {
+    return `<span class="conv-ava group-logo" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.5)}px" data-av-wrap="">${c.emoji}</span>`;
+  }
+  const name = c.name || c.username || "?";
+  const letter = esc((name.replace(/^@/, "")[0] || "?").toUpperCase());
+  if (c.photo) {
+    return `<span class="conv-ava" style="width:${size}px;height:${size}px"><img src="${esc(c.photo)}" alt="" loading="lazy"></span>`;
+  }
+  return `<span class="conv-ava" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.42)}px">${letter}</span>`;
+}
+function chatDisplayInfo(id) {
+  if (isSelfChat(id))
+    return {
+      isGroup: false,
+      target: { id: SELF_CHAT_ID, username: state.profile.handle || "me", name: "You (Message yourself)" },
+      name: "You (Message yourself)",
+      photo: state.profile.photo || "",
+    };
+  const isGroup = allGroups().some((g) => g.id === id);
+  const target =
+    (isGroup && allGroups().find((g) => g.id === id)) ||
+    state.friends.find((f) => f.id === id) ||
+    cloudFriends.find((f) => f.id === id);
+  const name = isGroup
+    ? (target?.name || "Group")
+    : target?.name || (target ? "@" + (target.username || target.handle) : "") || "Chat";
+  const photo = !isGroup ? target?.photo || (target?.cloud && cloudFriendPhoto?.(target.id)) || "" : "";
+  return { isGroup, target, name, photo };
+}
+// cloudFriends entries may carry an avatar path; resolve to a public URL once.
+let cloudPhotoCache = new Map();
+function cloudFriendPhoto(id) {
+  if (cloudPhotoCache.has(id)) return cloudPhotoCache.get(id);
+  const f = cloudFriends.find((x) => x.id === id);
+  if (!f?.avatar) return "";
+  import("./services/backend.js").then(({ getGroupAvatarUrl }) =>
+    getGroupAvatarUrl(f.avatar).then(({ data } = {}) => {
+      if (data?.publicUrl || data?.signedUrl) cloudPhotoCache.set(id, data.publicUrl || data.signedUrl);
+      rerenderChat();
+    }).catch(() => {}),
+  ).catch(() => {});
+  cloudPhotoCache.set(id, "");
+  return "";
+}
 function conversationRow(c) {
   const isGroup = allGroups().some((g) => g.id === c.id);
   const msgs = state.messages[c.id] || [];
   const last = msgs.at(-1);
   const unread = unreadCount(c.id);
   const muted = isChatMuted(c.id);
-  const draft = state.activeChat === c.id ? "active" : "";
+  const active = state.activeChat === c.id ? "active" : "";
   const preview = last
-    ? previewLabel(c.id, last, isGroup) + escSnippet(messageText(last), 46)
+    ? esc(previewLabel(c.id, last, isGroup)) + escSnippet(messageText(last), 46)
     : '<em class="conv-empty">No messages yet</em>';
-  return `<button type="button" class="conv-row ${draft}${unread ? " has-unread" : ""}" data-select-chat="${c.id}">`
-    + `<span class="conv-ava">${c.emoji || "●"}</span>`
+  const tick = last && last.me ? `<span class="conv-tick${state.messageStatus[last.id] === "read" ? " read" : ""}" aria-hidden="true">${sicon("checkDouble")}</span>` : "";
+  return `<button type="button" class="conv-row ${active}${unread ? " has-unread" : ""}" data-select-chat="${c.id}">`
+    + convAvatarHtml(c, 49)
     + `<span class="conv-main">`
     + `<span class="conv-top"><span class="conv-name">${esc(c.name || "@" + c.username)}${muted ? ` <span class="mute-ico" title="Muted">${sicon("mute")}</span>` : ""}</span>`
-    + `<span class="conv-time">${last ? relTime(last.ts) : ""}</span></span>`
-    + `<span class="conv-preview">${preview}</span></span>`
+    + `<span class="conv-time${unread ? " unread-time" : ""}">${last ? relTime(last.ts) : ""}</span></span>`
+    + `<span class="conv-preview">${tick}${preview}</span></span>`
     + (unread ? `<span class="conv-unread" title="${unread} unread message${unread === 1 ? "" : "s"}">${unread > 99 ? "99+" : unread}</span>` : "")
     + `</button>`;
 }
 
+// Messages tab — a fullscreen WhatsApp-style surface: chat list on its own
+// at first ("Message yourself" pinned at top), then the open conversation
+// takes over the whole panel with a back affordance. Works on every width.
 function renderMessages(body) {
   const cloudConns = cloudFriends
     .filter((f) => !cloudBlocked.has(f.id))
-    .map((f) => ({ id: f.id, username: f.handle, name: f.name, cloud: true }));
+    .map((f) => ({ id: f.id, username: f.handle, name: f.name || "@" + f.handle, photo: f.photo || cloudFriendPhoto(f.id), cloud: true }));
   const chats = [
     ...allGroups().filter((g) => get("sf-joined", []).includes(g.id)),
     ...(state.friends || []).filter((f) => !isBlockedKey(f.id)),
     ...cloudConns.filter((c) => !(state.friends || []).some((f) => f.id === c.id)),
   ];
   if (state.activeChat && (isBlockedKey(state.activeChat) || cloudBlocked.has(state.activeChat))) state.activeChat = null;
-  if (state.activeChat) markChatRead(state.activeChat);
   const totalUnread = chats.reduce((sum, c) => sum + (state.activeChat === c.id ? 0 : unreadCount(c.id)), 0);
-  body.innerHTML = `<div class="card messages"><div class="conversation">${chats.map(conversationRow).join("") || '<span class="muted">No conversations yet.</span>'}</div><div class="chat">${state.activeChat ? (groupSearch && groupSearch.id === state.activeChat ? groupSearchMarkup(state.activeChat) : chatMarkup(state.activeChat)) : '<div style="margin:auto" class="muted">Select a group or friend to start messaging.</div>'}</div></div>`;
+  const sorted = [...chats].sort((a, b) => {
+    if (isSelfChat(a.id) !== isSelfChat(b.id)) return isSelfChat(a.id) ? -1 : 1;
+    const ta = (state.messages[a.id] || []).at(-1)?.ts || 0;
+    const tb = (state.messages[b.id] || []).at(-1)?.ts || 0;
+    return tb - ta;
+  });
+  body.innerHTML = `<div class="wa-root${state.activeChat ? " has-chat" : ""}"><div class="wa-list">`
+    + `<div class="wa-list-head"><h2>Chats</h2>${signedIn() ? "" : `<span class="tag">local</span>`}</div>`
+    + `<div class="wa-search"><span class="wa-search-ico">${sicon("search")}</span><input id="wa-chat-filter" type="search" placeholder="Search or start a new chat" aria-label="Search chats" autocomplete="off"></div>`
+    + `<div class="wa-rows" id="wa-rows">${conversationRow({ id: SELF_CHAT_ID, name: "You (Message yourself)", emoji: avatarMarkup(state.profile.photo, (state.profile.name || "Y")[0].toUpperCase()) })}${sorted.map(conversationRow).join("") || ""}</div></div>`
+    + `<div class="chat wa-chat">${state.activeChat ? (groupSearch && groupSearch.id === state.activeChat ? groupSearchMarkup(state.activeChat) : chatMarkup(state.activeChat)) : waPlaceholderMarkup()}</div></div>`;
   paintMessagesBadge(totalUnread);
   $$("[data-select-chat]", body).forEach(
     (b) =>
@@ -4474,6 +4551,15 @@ function renderMessages(body) {
         renderMessages(body);
       }),
   );
+  const filter = $("#wa-chat-filter", body);
+  if (filter) {
+    filter.oninput = () => {
+      const q = filter.value.trim().toLowerCase();
+      $$("[data-select-chat]", body).forEach((row) => {
+        row.style.display = !q || (row.textContent || "").toLowerCase().includes(q) ? "" : "none";
+      });
+    };
+  }
   if (state.activeChat) {
     if (groupSearch && groupSearch.id === state.activeChat) bindGroupSearch(body, state.activeChat);
     else bindChat(body, state.activeChat);
@@ -4484,6 +4570,9 @@ function renderMessages(body) {
     bindEdgeSwipeBack(body);
   }
   paintGroupAvatars(body);
+}
+function waPlaceholderMarkup() {
+  return `<div class="wa-intro"><div class="wa-intro-art">${sicon("chat")}</div><h2>StudyFlow for Messaging</h2><p class="muted">Send and receive messages with your study partners — and with yourself. Pick a chat on the left, or start a new one from Friends.</p><div class="wa-intro-note">${sicon("lock")} Your chats stay on this device unless both of you are signed in.</div></div>`;
 }
 
 // Edge-swipe back (phones): swiping right from the left edge of an open chat
@@ -4731,7 +4820,7 @@ function muteLabel(id) {
   return `Muted · ${Math.round(hours / 24)}d left`;
 }
 function setChatMute(id, choiceId) {
-  if (!isGroupChat(id)) return false;
+  // DMs and self-chat mute locally (cloud push only applies to groups).
   const c = MUTE_CHOICES.find((x) => x.id === choiceId);
   if (!c) return false;
   state.mutedChats = {
@@ -4818,11 +4907,33 @@ function togglePinMessage(id, msgId) {
   persist();
 }
 
+// Three-dot menu inside an open chat. Friends get the full WhatsApp set
+// (contact info, media, search, mute, report, block, delete); groups keep
+// their existing menu.
+function dmMenuMarkup(id) {
+  const isFriendChat = (state.friends || []).some((f) => f.id === id) || cloudFriends.some((f) => f.id === id) || isSelfChat(id);
+  const self = isSelfChat(id);
+  const muted = isChatMuted(id);
+  const item = (act, icon, label, sub) => `<button type="button" data-gact="${act}" data-gid="${esc(id)}"><span class="gact-ico">${sicon(icon)}</span><span class="gact-txt"><strong>${label}</strong>${sub ? `<small>${sub}</small>` : ""}</span></button>`;
+  // Media & docs stay available in every chat (self-chat included) — notes
+  // with files/links are exactly what the doc vault is for.
+  const media = item("media", "film", "Media, files & links", "Photos, videos, documents");
+  const social = self
+    ? ""
+    : item("contact", "user", "View contact", "Profile, status and shared media");
+  return `${item("search", "search", "Search messages", "Find text, files and links")}`
+    + `${media}`
+    + `${muted ? item("unmute", "volume", "Unmute notifications", esc(muteLabel(id))) : item("mute", "mute", "Mute notifications", "Silence this chat")}`
+    + `${social}`
+    + `<hr class="gsep">`
+    + `${item("clear", "trash", "Clear local history", "Removes messages on this device")}`
+    + `${self ? "" : item("report", "flag", "Report", "Alert moderation")}`
+    + `${self || !isFriendChat ? "" : item("block", "lock", "Block", "Stop all contact")}`;
+}
 function chatMarkup(id) {
-  const target =
-    allGroups().find((g) => g.id === id) ||
-    state.friends.find((f) => f.id === id) ||
-    cloudFriends.find((f) => f.id === id);
+  const info = chatDisplayInfo(id);
+  const target = info.target;
+  const isSelf = isSelfChat(id);
   const msgs = state.messages[id] || [];
   const pinned = pinnedIdsFor(id)
     .map((pid) => msgs.find((m) => m.id === pid))
@@ -4851,13 +4962,19 @@ function chatMarkup(id) {
   const rec = voiceRec
     ? `<div class="rec-bar${voiceRec.paused ? " paused" : ""}" role="status" aria-label="Recording voice note"><button type="button" class="icon-btn rec-btn" data-rec-cancel title="Discard recording" aria-label="Discard recording">${sicon("trash")}</button><span class="rec-dot" aria-hidden="true"></span><button type="button" class="icon-btn rec-pause" data-rec-pause title="Pause recording" aria-label="Pause or resume recording">${sicon("pause")}${sicon("play")}</button><span class="rec-wave" data-rec-wave aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="rec-time" data-rec-time>00:00</span><span class="rec-hint">Recording… tap Send when done</span><button type="button" class="primary rec-send" data-rec-send>${sicon("check")} <span>Send</span></button></div>`
     : "";
-  const isFriendChat = (state.friends || []).some((f) => f.id === id) || cloudFriends.some((f) => f.id === id);
+  const isFriendChat = (state.friends || []).some((f) => f.id === id) || cloudFriends.some((f) => f.id === id) || isSelf;
   const isGroup = allGroups().some((g) => g.id === id);
-  const mutedTag = isGroup && isChatMuted(id) ? ' <span class="tag">muted</span>' : "";
+  const mutedTag = (isGroup || isFriendChat) && isChatMuted(id) ? ' <span class="tag">muted</span>' : "";
   const nav = groupNav && groupNav.id === id && groupNav.matches.length
     ? `<div class="msg-nav"><button type="button" data-gnav="prev" aria-label="Previous match">‹</button><span>${groupNav.pos + 1} / ${groupNav.matches.length}</span><button type="button" data-gnav="next" aria-label="Next match">›</button><button type="button" data-gnav="close" aria-label="Close search navigation">×</button></div>`
     : "";
-  return `<div class="chat-head"><div class="chat-head-who">${isGroup ? groupAvatarMarkup(allGroups().find((g) => g.id === id)) : ""}<div><strong>${esc(target?.name || "@" + (target?.username || target?.handle || "?"))}</strong>${mutedTag}${typing}${presence}</div></div><span class="friend-actions"><button type="button" class="primary" data-start-call="${id}" style="padding:8px 12px;font-size:11px">Video call</button>${isFriendChat ? `<span class="post-menu-wrap"><button type="button" class="icon-btn" data-chat-menu="${id}" title="Conversation options" aria-label="Conversation options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden><button type="button" data-chat-block="${id}">Block user</button></span></span>` : ""}${isGroup && !isFriendChat ? `<span class="post-menu-wrap"><button type="button" class="icon-btn" data-chat-menu="${id}" title="Group options" aria-label="Group options" style="width:34px;height:34px">⋮</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden>${groupMenuMarkup(id)}</span></span>` : ""}</span></div>${pinbar}${nav}<div class="chat-body">${msgs.map((m, i) => `<div class="bubble ${m.me ? "me" : ""}" data-midx="${i}">${messageHtml(m)}</div>`).join("") || '<span class="muted">No messages yet. Start the conversation.</span>'}</div>${reply}${rec}<div class="chat-input"><textarea class="input autogrow chat-textarea" id="chat-text" rows="1" data-grow-max="150" placeholder="type a message" aria-label="Type a message"></textarea><div class="chat-extras-wrap"><button type="button" class="icon-btn chat-extras-toggle" data-chat-extras title="Add to your message" aria-label="Add to your message" aria-haspopup="true" aria-expanded="false"><span class="chat-extras-plus">${sicon("plus")}</span></button><div class="chat-extras-menu" data-chat-extras-pop hidden role="dialog" aria-label="Add to your message"><div class="chat-extras-head"><strong>Add to chat</strong><button type="button" class="icon-btn chat-extras-close" data-chat-extras-close title="Close" aria-label="Close menu">${sicon("x")}</button></div><div class="chat-extras-grid"><label class="chat-extras-item" title="Attach a file up to 3 MB"><input type="file" id="chat-file" hidden><span class="chat-extras-ic file">${sicon("clip")}</span><span>File</span></label><button type="button" class="chat-extras-item" id="poll-button" title="Create a poll"><span class="chat-extras-ic poll">${sicon("chart")}</span><span>Poll</span></button><button type="button" class="chat-extras-item" id="voice-button" title="Record a voice note"><span class="chat-extras-ic voice">${sicon("mic")}</span><span>Voice</span></button></div><div class="chat-extras-foot">Files up to 3 MB. Attach documents, start a poll, or record a voice note.</div></div></div><button type="button" class="primary" id="send-message">Send</button></div>`;
+  const menu = isGroup && !isFriendChat
+    ? `<span class="post-menu-wrap"><button type="button" class="icon-btn wa-menu-btn" data-chat-menu="${id}" title="Group options" aria-label="Group options" aria-haspopup="true">${sicon("gear")}</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden>${groupMenuMarkup(id)}</span></span>`
+    : `<span class="post-menu-wrap"><button type="button" class="icon-btn wa-menu-btn" data-chat-menu="${id}" title="Conversation options" aria-label="Conversation options" aria-haspopup="true">${sicon("gear")}</button><span class="post-menu chat-menu" data-chat-pop="${id}" hidden>${dmMenuMarkup(id)}</span></span>`;
+  const headPhoto = isGroup ? "" : isSelf
+    ? `<span class="chat-avatar">${avatarMarkup(state.profile.photo, (state.profile.name || "Y")[0].toUpperCase())}</span>`
+    : `<span class="chat-avatar">${avatarMarkup(target?.photo || "", (info.name.replace(/^@/, "")[0] || "?").toUpperCase())}</span>`;
+  return `<div class="chat-head wa-head"><button type="button" class="wa-back" data-wa-back title="Back to chats" aria-label="Back to chats">${sicon("reply")}<span>Chats</span></button><button type="button" class="chat-head-who" data-chat-profile="${id}" title="Open profile"><span class="chat-ava">${isGroup ? groupAvatarMarkup(allGroups().find((g) => g.id === id)) : headPhoto}</span><span class="chat-head-txt"><strong>${esc(info.name || "@" + (target?.username || target?.handle || "?"))}</strong>${mutedTag}${typing}${presence}</span></button><span class="friend-actions"><button type="button" class="primary wa-call" data-start-call="${id}">${sicon("phone")} <span>Call</span></button>${menu}</span></div>${pinbar}${nav}<div class="chat-body">${msgs.map((m, i) => `<div class="bubble ${m.me ? "me" : ""}" data-midx="${i}">${messageHtml(m)}</div>`).join("") || '<span class="muted">No messages yet. Start the conversation.</span>'}</div>${reply}${rec}<div class="chat-input"><textarea class="input autogrow chat-textarea" id="chat-text" rows="1" data-grow-max="150" placeholder="type a message" aria-label="Type a message"></textarea><div class="chat-extras-wrap"><button type="button" class="icon-btn chat-extras-toggle" data-chat-extras title="Add to your message" aria-label="Add to your message" aria-haspopup="true" aria-expanded="false"><span class="chat-extras-plus">${sicon("plus")}</span></button><div class="chat-extras-menu" data-chat-extras-pop hidden role="dialog" aria-label="Add to your message"><div class="chat-extras-head"><strong>Add to chat</strong><button type="button" class="icon-btn chat-extras-close" data-chat-extras-close title="Close" aria-label="Close menu">${sicon("x")}</button></div><div class="chat-extras-grid"><label class="chat-extras-item" title="Attach a file up to 3 MB"><input type="file" id="chat-file" hidden><span class="chat-extras-ic file">${sicon("clip")}</span><span>File</span></label><button type="button" class="chat-extras-item" id="poll-button" title="Create a poll"><span class="chat-extras-ic poll">${sicon("chart")}</span><span>Poll</span></button><button type="button" class="chat-extras-item" id="voice-button" title="Record a voice note"><span class="chat-extras-ic voice">${sicon("mic")}</span><span>Voice</span></button></div><div class="chat-extras-foot">Files up to 3 MB. Attach documents, start a poll, or record a voice note.</div></div></div><button type="button" class="primary wa-send" id="send-message" aria-label="Send message">Send</button></div>`;
 }
 
 function closeChatExtras(root) {
@@ -4900,6 +5017,15 @@ function bindChat(root, id) {
       if (first) first.focus();
     }
   });
+  // WhatsApp-style back chip in the chat header → returns to the chat list
+  // (all viewports; the list simply stays visible on wide screens).
+  $("[data-wa-back]", root)?.addEventListener("click", () => {
+    state.activeChat = null;
+    // Immersive mode: returning from a chat must restore the community
+    // heading + subtabs, not just swap the panes.
+    if (state.tab === "community" && state.subtab === "messages") renderCommunity();
+    else renderMessages(root);
+  });
   // Clicking anywhere outside the open chat menu closes it (Escape is
   // already handled globally). Guarded: the chat root outlives re-renders.
   if (!window.__sfChatMenuCloser) {
@@ -4927,6 +5053,14 @@ function bindChat(root, id) {
         });
       }),
   );
+  // Distinguish header-photo click (contact profile) from the back chip.
+  $("[data-chat-profile]", root)?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const info = chatDisplayInfo(id);
+    if (isSelfChat(id)) return notify("This is your own space — notes to yourself live here.");
+    if (!info.target) return;
+    openContactCard(id, info);
+  });
   $("#chat-text", root).oninput = (event) => {
     // Typing pings are broadcast throttled so every keystroke doesn't spam
     // the realtime channel.
@@ -5347,7 +5481,7 @@ function fmtSharedDate(ts) {
   }
 }
 function openGroupMedia(id) {
-  if (!isGroupChat(id)) return;
+  if (!isGroupChat(id) && targetKind(id) === null) return;
   groupMedia = { id, tab: "media", shown: 30 };
   paintGroupMedia();
 }
@@ -5358,7 +5492,8 @@ function groupMediaCounts(id) {
 function paintGroupMedia() {
   if (!groupMedia) return;
   const { id, tab } = groupMedia;
-  const g = groupById(id);
+  // DMs have no group record — a display name stands in for the modal title.
+  const g = groupById(id) || { name: chatDisplayInfo(id).name || "chat" };
   if (!g) {
     groupMedia = null;
     return;
@@ -5455,6 +5590,163 @@ function paintMediaViewer() {
 function closeMediaViewer() {
   mediaViewer = null;
   $("#media-viewer-modal")?.remove();
+}
+// Actions behind the three-dot menu of a DM chat (friends + self-chat).
+function dmAction(act, id, root) {
+  const info = chatDisplayInfo(id);
+  const name = info.name || "this chat";
+  if (act === "search") return openGroupSearch(id);
+  if (act === "media") return openGroupMedia(id);
+  if (act === "mute") return openDmMuteModal(id, name);
+  if (act === "unmute") return clearChatMute(id);
+  if (act === "contact") return isSelfChat(id) ? notify("This is your own space — notes to yourself live here.") : openContactCard(id, info);
+  if (act === "clear") {
+    return confirmBox(`Clear ${isSelfChat(id) ? "your notes" : name} history?`, "Messages on this device will be removed. New messages still arrive.", () => {
+      const msgs = { ...(state.messages || {}) };
+      delete msgs[id];
+      state.messages = msgs;
+      const pins = { ...(state.pins || {}) };
+      delete pins[id];
+      state.pins = pins;
+      if (groupNav?.id === id) groupNav = null;
+      if (groupSearch?.id === id) groupSearch = null;
+      persist();
+      renderMessages($("#tab-messages") || $("#community-body"));
+      notify("Chat history cleared");
+    });
+  }
+  if (act === "report") {
+    if (isSelfChat(id)) return;
+    const target = info.target;
+    if (!target) return notify("Could not identify that user");
+    return openDmReport(id, info.name);
+  }
+  if (act === "block") {
+    if (isSelfChat(id)) return;
+    const target = info.target;
+    if (!target) return notify("Could not identify that user");
+    return askBlockUser({
+      id: target.id,
+      username: target.username || target.handle,
+      name: info.name.startsWith("@") ? info.name : "@" + (target.username || target.handle || info.name),
+      context: "chat",
+    });
+  }
+}
+function openDmMuteModal(id, name) {
+  const cur = muteRecord(id);
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Notifications</div><h2>Mute ${esc(name)}?</h2><p class="muted">You can still open the chat and read everything. Only notifications pause.${isChatMuted(id) ? ` Currently: <strong>${esc(muteLabel(id))}</strong>.` : ""}</p><div class="reason-list">${MUTE_CHOICES.map((c) => `<label><input type="radio" name="mute-choice" value="${c.id}"${cur === "forever" && c.id === "forever" ? " checked" : ""}> ${c.id === "forever" ? "Always (until turned back on)" : c.label}</label>`).join("")}</div><p class="st-confirm-err" data-mute-err hidden></p><div class="modal-actions"><button type="button" class="ghost" data-mute-cancel>Cancel</button>${isChatMuted(id) ? `<button type="button" class="ghost" data-mute-off>Unmute</button>` : ""}<button type="button" class="primary" data-mute-save>Save</button></div></div>`;
+  $("#modal-root").append(modal);
+  const err = modal.querySelector("[data-mute-err]");
+  modal.querySelector("[data-mute-cancel]").onclick = () => modal.remove();
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) modal.remove();
+  });
+  const off = modal.querySelector("[data-mute-off]");
+  if (off) off.onclick = () => {
+    modal.remove();
+    clearChatMute(id);
+  };
+  modal.querySelector("[data-mute-save]").onclick = () => {
+    const choice = modal.querySelector('input[name="mute-choice"]:checked')?.value || "";
+    if (!choice) {
+      err.textContent = "Pick a duration first.";
+      err.hidden = false;
+      return;
+    }
+    if (!setChatMute(id, choice)) {
+      err.textContent = "Couldn't save that setting — try again.";
+      err.hidden = false;
+      return;
+    }
+    modal.remove();
+  };
+}
+function openDmReport(id, name) {
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Report · ${esc(name)}</div><h2>What's wrong with this chat?</h2><p class="muted">Pick the closest reason. Reports go to moderation — never public.</p><div class="reason-list">${BLOCK_REASONS.map((r) => `<label><input type="radio" name="dm-report-reason" value="${esc(r)}"> ${esc(r)}</label>`).join("")}</div><label class="field-label">Details (optional)<textarea class="textarea autogrow" data-dm-report-details rows="2" maxlength="2000" placeholder="What happened in this conversation?"></textarea></label><p class="st-confirm-err" data-dm-report-err hidden></p><div class="modal-actions"><button type="button" class="ghost" data-dm-report-cancel>Cancel</button><button type="button" class="primary" data-dm-report-send>Send report</button></div></div>`;
+  $("#modal-root").append(modal);
+  const err = modal.querySelector("[data-dm-report-err]");
+  modal.querySelector("[data-dm-report-cancel]").onclick = () => modal.remove();
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) modal.remove();
+  });
+  modal.querySelector("[data-dm-report-send]").onclick = async () => {
+    const reason = modal.querySelector('input[name="dm-report-reason"]:checked')?.value || "";
+    if (!reason) {
+      err.textContent = "Choose a reason first.";
+      err.hidden = false;
+      return;
+    }
+    const details = modal.querySelector("[data-dm-report-details]").value.trim().slice(0, 2000);
+    const btn = modal.querySelector("[data-dm-report-send]");
+    btn.disabled = true;
+    btn.textContent = "Sending…";
+    const report = {
+      id: uid(),
+      reporter: state.profile.handle,
+      reportedKey: `user:${id}`,
+      reportedName: name,
+      reasons: [reason],
+      complaint: details,
+      ts: Date.now(),
+      status: "pending",
+      context: "dm-chat",
+    };
+    state.reports = [...(state.reports || []).filter((r) => r.reportedKey !== report.reportedKey), report];
+    persist();
+    let cloudOk = true;
+    try {
+      const { error } = await reportUser({
+        reportedUserId: isUuid(id) ? id : null,
+        reasons: [reason],
+        details: `Chat report: ${name} (${id})\nComplaint: ${details || "—"}`,
+      });
+      if (error) cloudOk = false;
+    } catch {
+      cloudOk = false;
+    }
+    modal.remove();
+    notify(cloudOk ? "Report sent — moderation will review" : "Report saved on this device");
+  };
+}
+// WhatsApp-style contact card: avatar, handle, shared-media counters and
+// per-contact actions (mute / block / report). Groups use their own info view.
+function openContactCard(id, info) {
+  const target = info.target || {};
+  const counts = groupMediaCounts(id);
+  const msgs = state.messages[id] || [];
+  const sharedDays = msgs.length ? Math.max(1, Math.ceil((Date.now() - Math.min(...msgs.map((m) => m.ts || Date.now()))) / 86400000)) : 0;
+  const photo = target.photo || cloudFriendPhoto(id) || "";
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `<div class="modal contact-card"><div class="contact-hero"><span class="contact-avatar">${avatarMarkup(photo, (info.name.replace(/^@/, "")[0] || "?").toUpperCase())}</span><h2>${esc(info.name)}</h2>${target.username && !info.name.startsWith("@") ? `<small class="muted">@${esc(target.username)}</small>` : ""}${msgs.length ? `<p class="muted contact-sub">${msgs.length} message${msgs.length === 1 ? "" : "s"} shared${sharedDays ? ` over ~${sharedDays} day${sharedDays === 1 ? "" : "s"}` : ""}</p>` : "<p class=\"muted contact-sub\">No messages yet</p>"}</div><div class="book-facts"><span class="tag">${counts.media} media</span><span class="tag">${counts.files} files</span><span class="tag">${counts.links} links</span>${isChatMuted(id) ? `<span class="tag">${esc(muteLabel(id))}</span>` : ""}</div><div class="modal-actions contact-actions"><button type="button" class="ghost" data-cc-mute>${isChatMuted(id) ? "Unmute" : "Mute"}</button><button type="button" class="ghost" data-cc-media>View shared</button><button type="button" class="danger-button" data-cc-block>Block</button><button type="button" class="primary" data-cc-close>Close</button></div></div>`;
+  $("#modal-root").append(modal);
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) modal.remove();
+  });
+  modal.querySelector("[data-cc-close]").onclick = () => modal.remove();
+  modal.querySelector("[data-cc-media]").onclick = () => {
+    modal.remove();
+    openGroupMedia(id);
+  };
+  modal.querySelector("[data-cc-mute]").onclick = () => {
+    modal.remove();
+    if (isChatMuted(id)) clearChatMute(id);
+    else openDmMuteModal(id, info.name);
+  };
+  modal.querySelector("[data-cc-block]").onclick = () => {
+    modal.remove();
+    askBlockUser({
+      id: target.id,
+      username: target.username || target.handle,
+      name: info.name.startsWith("@") ? info.name : "@" + (target.username || target.handle || info.name),
+      context: "chat",
+    });
+  };
 }
 function openMuteModal(id) {
   const g = groupById(id);
@@ -5931,7 +6223,9 @@ function bindGroupMenuActions(root) {
   );
 }
 function groupAction(act, id, root) {
-  if (!id || !isGroupChat(id)) return;
+  // DM chats (friends + self) route through the same data-gact buttons.
+  if (id && !isGroupChat(id)) return dmAction(act, id, root);
+  if (!id) return;
   if (act === "search") openGroupSearch(id);
   else if (act === "mute") openMuteModal(id);
   else if (act === "unmute") clearChatMute(id);
@@ -6103,17 +6397,25 @@ function searchGroupMessages(id, q) {
   return out;
 }
 function openGroupSearch(id) {
-  if (!isGroupChat(id)) return;
+  if (!isGroupChat(id) && !isSelfChat(id) && targetKind(id) === null) return;
   groupSearch = { id, q: "" };
   groupNav = null;
   state.activeChat = id;
   rerenderChat();
 }
+// Cheap kind check without building the full target (used by search gates).
+function targetKind(id) {
+  if (isSelfChat(id)) return "self";
+  if (allGroups().some((g) => g.id === id)) return "group";
+  if ((state.friends || []).some((f) => f.id === id)) return "friend";
+  if (cloudFriends.some((f) => f.id === id)) return "connection";
+  return null;
+}
 function groupSearchMarkup(id) {
-  const g = groupById(id);
+  const info = chatDisplayInfo(id);
   const q = groupSearch?.q || "";
   const results = searchGroupMessages(id, q);
-  return `<div class="chat-head"><button type="button" class="icon-btn" data-gs-back aria-label="Back to chat">‹</button><div style="flex:1;min-width:0"><strong>${esc(g?.name || "Group")}</strong><div class="muted" style="font-size:11px">Search this group</div></div><span class="tag">${results.length}</span></div><div class="input-row" style="margin:12px 14px 0"><span class="song-search-ico" style="position:static;transform:none" aria-hidden="true">${sicon("search")}</span><input class="input" id="gs-input" style="flex:1" placeholder="Search messages, files, links…" value="${esc(q)}" aria-label="Search group messages" autocomplete="off"></div>${signedIn() && q.trim().length >= 2 && (groupSearch?.depth || 0) < 4 ? `<div style="margin:8px 14px 0" data-gs-more-wrap><button type="button" class="ghost" data-gs-more ${groupSearch?.deepening ? "disabled" : ""}>${groupSearch?.deepening ? "Searching older messages…" : "Search older messages"}</button></div>` : `<div data-gs-more-wrap></div>`}<div class="chat-body" id="gs-results">${groupSearchResultsHtml(id, results)}</div>`;
+  return `<div class="chat-head wa-head"><button type="button" class="icon-btn" data-gs-back aria-label="Back to chat">‹</button><div style="flex:1;min-width:0"><strong>${esc(info.name || "Chat")}</strong><div class="muted" style="font-size:11px">Search messages</div></div><span class="tag">${results.length}</span></div><div class="input-row" style="margin:12px 14px 0"><span class="song-search-ico" style="position:static;transform:none" aria-hidden="true">${sicon("search")}</span><input class="input" id="gs-input" style="flex:1" placeholder="Search messages, files, links…" value="${esc(q)}" aria-label="Search messages" autocomplete="off"></div>${signedIn() && !isSelfChat(id) && q.trim().length >= 2 && (groupSearch?.depth || 0) < 4 && targetKind(id) !== "friend" ? `<div style="margin:8px 14px 0" data-gs-more-wrap><button type="button" class="ghost" data-gs-more ${groupSearch?.deepening ? "disabled" : ""}>${groupSearch?.deepening ? "Searching older messages…" : "Search older messages"}</button></div>` : `<div data-gs-more-wrap></div>`}<div class="chat-body" id="gs-results">${groupSearchResultsHtml(id, results)}</div>`;
 }
 function groupSearchResultsHtml(id, results) {
   if (!results.length) {
@@ -6406,7 +6708,20 @@ function subscribePresenceFor(id) {
 // Resolve a chat id to its conversation: a group, a local friend, or a
 // cloud connection (uuid). Cloud sends/loads happen only for cloud targets —
 // local-only chats never touch the network.
+const SELF_CHAT_ID = "self-chat";
+function isSelfChat(id) {
+  return id === SELF_CHAT_ID;
+}
 function chatTarget(id) {
+  // "Message yourself" — a private notepad-style chat that always works,
+  // signed in or not. Cloud rows need a *different* recipient than the
+  // sender (023 validates that), so self-chat stays local-first storage:
+  // no network required, no server round-trip, nothing to fail.
+  if (isSelfChat(id))
+    return {
+      kind: "self",
+      friend: { id: SELF_CHAT_ID, username: state.profile.handle || "me", name: "You (Message yourself)" },
+    };
   const group = allGroups().find((g) => g.id === id);
   if (group) return { kind: "group", group };
   const local = (state.friends || []).find((f) => f.id === id);
@@ -6477,7 +6792,18 @@ async function resolveSenderNames(rows, me) {
   return new Map((profiles || []).map((p) => [p.id, "@" + (p.handle || "member")]));
 }
 function mergeCloudRows(id, rows, names, me) {
-  const seen = new Set((state.messages[id] || []).map((m) => m.id || m.cloudId));
+  // Dedupe key: a locally-sent message adopts the server row id as cloudId
+  // (sendChat). Its LOCAL id differs from the server's — and server history
+  // returns the server id — so the seen-set must test BOTH ids for every
+  // cached message. Keying on `m.id || m.cloudId` alone matched a fresh
+  // server row against the local id only, and every own message came back
+  // from history as a second, identical bubble (the "sent twice" flaw).
+  const seen = new Set();
+  for (const m of state.messages[id] || []) {
+    if (m.id) seen.add(m.id);
+    if (m.cloudId) seen.add(m.cloudId);
+  }
+  if (isSelfChat(id)) return 0; // self-chat is local-first, no server rows
   let added = 0;
   const merged = [...(state.messages[id] || [])];
   for (const r of rows) {
@@ -6639,6 +6965,11 @@ function sendChat(id, text) {
   state.messages[id] = [...(state.messages[id] || []), message];
   state.messageStatus[message.id] = "sent";
   persist();
+  // Self-chat persists locally only — by design (see chatTarget).
+  if (target.kind === "self") {
+    renderMessages($("#tab-messages") || $("#community-body"));
+    return;
+  }
   // Cloud fan-out only for cloud-backed conversations. Local-only chats
   // stay local — and a cloud failure never blocks or spams the sender.
   // (Group sends always attempt when signed in: pre-Phase-7 custom groups
@@ -6649,7 +6980,12 @@ function sendChat(id, text) {
   if (cloudOk) {
     const payload = target.kind === "group"
       ? { id: crypto.randomUUID(), sender_id: state.user.id, group_id: id, recipient_id: null, text: message.text, kind: "text", delivery_status: "sent" }
-      : { id: crypto.randomUUID(), sender_id: state.user.id, group_id: null, recipient_id: id, text: message.text, kind: "text", delivery_status: "sent" };
+      // NOTE: no `id` — sf_direct_message generates + returns the canonical
+      // server id. Sending a client uuid here made PostgREST run
+      // INSERT..RETURNING, which RLS-returned zero rows (delete policy) →
+      // result.error → the RPC fallback inserted a SECOND server row, and
+      // the recipient's history then showed every message twice.
+      : { sender_id: state.user.id, group_id: null, recipient_id: id, text: message.text, kind: "text", delivery_status: "sent" };
     sendCloudMessage(payload).then((result) => {
       if (!result.error) {
         // The server assigns the canonical id (the RPC generates its own) —
@@ -6679,6 +7015,7 @@ function subscribeToChat(id) {
   // sit in state.friends.
   const cloudBacked = target.kind === "group" || target.kind === "connection" || (target.kind === "friend" && isUuid(id));
   if (!signedIn() || !cloudBacked) {
+    // Self-chat and other local-only chats: inert subscription, typing stays local.
     conversationSubscription = { unsubscribe: () => {}, sendTyping: async () => {} };
     return;
   }
@@ -6688,7 +7025,32 @@ function subscribeToChat(id) {
     recipientId: group ? undefined : id,
     myUserId: state.user?.id,
     onMessage: (message) => {
-      if (!message || message.sender_id === state.user?.id) return;
+      if (!message || !message.id) return;
+      // Own echo: Postgres realtime delivers MY writes back to my other
+      // devices/tabs. Without this, a message typed here appears twice (once
+      // optimistically, once from the echo) and my own reply never made it
+      // into open chat on the second device. Instead of dropping, we merge:
+      // stamp the canonical server id onto the matching local bubble (it
+      // keyed status/read receipts off the server id) and bail — no second
+      // bubble, no lost message.
+      if (message.sender_id === state.user?.id) {
+        const list = state.messages[id] || [];
+        const match =
+          list.find((m) => m.cloudId === message.id) ||
+          list.find((m) => m.me && !m.cloudId && m.text === message.text && Math.abs((m.ts || 0) - (message.created_at ? new Date(message.created_at).getTime() : 0)) < 30000);
+        if (match) {
+          match.cloudId = message.id;
+          if (match.ts && message.created_at) match.ts = new Date(message.created_at).getTime();
+          state.messageStatus[match.id] = "delivered";
+          persist();
+          paintMessageStatus(match.id);
+        }
+        return;
+      }
+      // Someone else's message: if it's already cached (history raced
+      // realtime), just paint — never append a twin.
+      const dupe = (state.messages[id] || []).some((m) => m.id === message.id || m.cloudId === message.id);
+      if (dupe) return;
       // Structured invite DMs (sprints / sessions) route themselves even when
       // this conversation is closed — the inbox is the destination, not the
       // chat window.
@@ -6707,17 +7069,22 @@ function subscribeToChat(id) {
           const { data } = await getPublicProfiles([row.sender_id]).catch(() => ({ data: [] }));
           row.sysName = data?.[0] ? "@" + (data[0].handle || "member") : undefined;
         }
+        const twin = (state.messages[id] || []).some((m) => m.id === message.id || m.cloudId === message.id);
         if (state.activeChat !== id) {
           // Background chat: cache only, plus the standard notification path.
-          state.messages[id] = [...(state.messages[id] || []), row].slice(-300);
-          persist();
+          if (!twin) {
+            state.messages[id] = [...(state.messages[id] || []), row].slice(-300);
+            persist();
+          }
           // Unread badge lives while the chat is closed; muted chats stay silent.
           if (state.tab === "community" && !isChatMuted(id)) paintMessagesBadge(totalUnreadCount());
         } else {
-          state.messages[id] = [...(state.messages[id] || []), row].slice(-300);
-          persist();
+          if (!twin) {
+            state.messages[id] = [...(state.messages[id] || []), row].slice(-300);
+            persist();
+          }
           markChatRead(id); // chat is open and visible — counts as read
-          appendChatBubble(id, row, chatRoot()) || (state.tab === "community" && renderCommunity());
+          if (!twin && !appendChatBubble(id, row, chatRoot()) && state.tab === "community") renderCommunity();
           if (state.tab === "community") paintMessagesBadge(totalUnreadCount());
         }
         if (state.user) markMessageRead(message.id, state.user.id).catch(() => {});
@@ -6805,7 +7172,6 @@ function askDeleteMessage(id, mid, root) {
     const bubble = document.querySelector(`[data-react-open="${mid}"]`)?.closest(".bubble");
     if (bubble && state.activeChat === id) bubble.remove();
     else paintChatBody(id, root, false);
-    notify("Message deleted");
   });
 }
 // Inline message editing: own text messages only (admins/owners get no edit

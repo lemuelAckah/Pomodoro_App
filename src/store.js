@@ -459,13 +459,13 @@ function equippedBadgeEmoji() {
     .map((item) => item.emoji)
     .join("");
 }
-// Showcased badge ids, newest first, max MAX_SHOWCASE_BADGES. Migrates the
-// legacy single-string shape (`state.equipped.badge = "id"`) on read.
-const MAX_SHOWCASE_BADGES = 3;
+// Showcased badge ids, newest first — UNLIMITED. Any number of owned badges
+// can ride beside your name. Migrates the legacy single-string shape
+// (`state.equipped.badge = "id"`) on read.
 function showcasedBadgeIds() {
   const raw = state.equipped?.badges ?? state.equipped?.badge;
   const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
-  return [...new Set(list.filter((id) => typeof id === "string" && id))].slice(0, MAX_SHOWCASE_BADGES);
+  return [...new Set(list.filter((id) => typeof id === "string" && id))];
 }
 function equippedBadges() {
   // Resolve from the owned inventory first: shopItems() is season-filtered,
@@ -494,7 +494,6 @@ function toggleShowcaseBadge(item) {
   if (ids.includes(item.id)) {
     state.equipped.badges = ids.filter((x) => x !== item.id);
   } else {
-    if (ids.length >= MAX_SHOWCASE_BADGES) return "full";
     state.equipped.badges = [...ids, item.id];
   }
   // Legacy single-badge key is retired on first toggle.
@@ -767,8 +766,7 @@ function collectionRow(i, idx) {
   } else if (i.category === "Badges") {
     const ids = showcasedBadgeIds();
     const on = ids.includes(i.id);
-    const full = !on && ids.length >= MAX_SHOWCASE_BADGES;
-    action = `<button type="button" class="${on ? "ghost" : "primary"} ${btn}" data-equip-badge="${idx}"${full ? ` disabled title="Showcase holds ${MAX_SHOWCASE_BADGES} badges — remove one first"` : ""}>${on ? "Showcased " + sicon("check") : full ? `Showcase (${ids.length}/${MAX_SHOWCASE_BADGES})` : "Showcase"}</button>`;
+    action = `<button type="button" class="${on ? "ghost" : "primary"} ${btn}" data-equip-badge="${idx}">${on ? "Showcased " + sicon("check") : "Showcase"}</button>`;
   } else if (SOUND_EQUIP[i.id]) {
     const playing = state.soundMix[SOUND_EQUIP[i.id]] != null;
     action = `<button type="button" class="${playing ? "ghost" : "primary"} ${btn}" data-equip-sound="${idx}">${playing ? "Playing " + sicon("check") : "Play"}</button>`;
@@ -2470,10 +2468,10 @@ function renderStore() {
         shell();
         notify(
           result === "added"
-            ? `${item.name} showcased (${showcasedBadgeIds().length}/${MAX_SHOWCASE_BADGES})`
+            ? `${item.name} showcased`
             : result === "removed"
               ? "Badge removed from showcase"
-              : `Showcase is full (${MAX_SHOWCASE_BADGES} badges) — remove one first`,
+              : "That isn't a badge",
         );
       }),
   );
@@ -2728,4 +2726,4 @@ async function checkoutCloud(fresh, onConfirmed, onCancelled) {
   if (onConfirmed) onConfirmed();
 }
 
-export { storeItems, equippedAvatarEmoji, equippedBadgeEmoji, equippedBadges, showcasedBadgeIds, toggleShowcaseBadge, ownedBadges, MAX_SHOWCASE_BADGES, checkinReward, earnMarkup, claimCheckin, removeOwnedAt, collectionRow, collectionMarkup, purchaseHistoryMarkup, inSeason, seasonDaysLeft, normItem, findStoreItem, migrateOwned, shopItems, MYSTERY_BOXES, dailyDeals, dealCountdown, boxItemsByRarity, rollBoxReward, grantReward, boxBusy, buyBox, FREE_BOX_ODDS, hash01, rollFreeBox, claimBusy, claimFreeBox, collectFreeReward, freeBoxCountdown, freeBoxMarkup, freeBoxState, isStackable, ownsMine, MAX_QTY, itemQty, setItemQty, clearItemQty, qtyStepperMarkup, qtyLineText, refreshQtyDom, changeQty, bindQtySteppers, cartLines, cartTotal, cartUnits, refreshCartFooter, afterCardQty, afterStoreQty, recordTransaction, dealsMarkup, mysteryMarkup, openBox, openFreeBoxReveal, buyDeal, giftRecipient, giftTarget, giftView, giftSelected, giftQuery, giftResults, giftSearching, giftSearchTimer, giftSearchToken, recipientOptions, matchLocalFriends, giftBtnInner, bindRecipient, openGiftCenter, closeGiftCenter, giftPersonRow, renderGiftCenter, bindGiftPicks, runGiftSearch, deliverGiftCloud, checkoutGiftFlow, renderStore, checkoutBusy, checkout, activeDeals, refreshCloudDeals };
+export { storeItems, equippedAvatarEmoji, equippedBadgeEmoji, equippedBadges, showcasedBadgeIds, toggleShowcaseBadge, ownedBadges, checkinReward, earnMarkup, claimCheckin, removeOwnedAt, collectionRow, collectionMarkup, purchaseHistoryMarkup, inSeason, seasonDaysLeft, normItem, findStoreItem, migrateOwned, shopItems, MYSTERY_BOXES, dailyDeals, dealCountdown, boxItemsByRarity, rollBoxReward, grantReward, boxBusy, buyBox, FREE_BOX_ODDS, hash01, rollFreeBox, claimBusy, claimFreeBox, collectFreeReward, freeBoxCountdown, freeBoxMarkup, freeBoxState, isStackable, ownsMine, MAX_QTY, itemQty, setItemQty, clearItemQty, qtyStepperMarkup, qtyLineText, refreshQtyDom, changeQty, bindQtySteppers, cartLines, cartTotal, cartUnits, refreshCartFooter, afterCardQty, afterStoreQty, recordTransaction, dealsMarkup, mysteryMarkup, openBox, openFreeBoxReveal, buyDeal, giftRecipient, giftTarget, giftView, giftSelected, giftQuery, giftResults, giftSearching, giftSearchTimer, giftSearchToken, recipientOptions, matchLocalFriends, giftBtnInner, bindRecipient, openGiftCenter, closeGiftCenter, giftPersonRow, renderGiftCenter, bindGiftPicks, runGiftSearch, deliverGiftCloud, checkoutGiftFlow, renderStore, checkoutBusy, checkout, activeDeals, refreshCloudDeals };

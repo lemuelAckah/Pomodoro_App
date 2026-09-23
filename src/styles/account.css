@@ -1003,29 +1003,57 @@ html[data-night="1"] .profile-identity {
   accent-color: var(--sage);
 }
 
-/* Standalone privacy consent — sits below the auth box, giving the
-   sign-up form full breathing room above. */
+/* In-form privacy consent — lives ONLY inside the Create-account form,
+   directly above the Create account button. The card visually fuses with
+   the button it gates, and the checkbox state is always obvious. */
 .privacy-consent {
-  margin-top: 16px;
-  padding: 14px 16px;
-  background: #f7faf5;
+  padding: 12px 14px;
+  background: var(--panel-2, #f7faf5);
   border: 1px solid var(--line);
   border-radius: 12px;
 }
+.privacy-consent.in-form {
+  margin-top: 6px;
+  margin-bottom: 14px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+/* Unticked = clearly waiting; the Create button above/below stays dimmed. */
+.privacy-consent.in-form:has(input:not(:checked)) {
+  border-color: var(--gold);
+  background: rgba(233, 174, 63, 0.07);
+}
+.privacy-consent.in-form:has(input:checked) {
+  border-color: var(--sage);
+  background: rgba(71, 118, 90, 0.08);
+}
+html[data-night="1"] .privacy-consent.in-form:has(input:not(:checked)) {
+  background: rgba(233, 174, 63, 0.09);
+}
+html[data-night="1"] .privacy-consent.in-form:has(input:checked) {
+  background: rgba(124, 138, 255, 0.12);
+}
 .privacy-consent .agree-row {
   margin: 0;
+  cursor: pointer;
   font-size: 12.5px;
   line-height: 1.55;
+  color: var(--ink);
 }
 .privacy-consent .agree-row input[type="checkbox"] {
-  width: 17px;
-  height: 17px;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  cursor: pointer;
+}
+/* Gated submit: dim until the consent box is ticked (still clickable so we
+   can explain WHY with a notification when tapped unticked). */
+.auth-submit.gated {
+  opacity: 0.55;
 }
 
 @media (max-width: 560px) {
   .privacy-consent {
-    padding: 12px 14px;
-    margin-top: 14px;
+    padding: 11px 12px;
     border-radius: 10px;
   }
   .privacy-consent .agree-row {

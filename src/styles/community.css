@@ -194,17 +194,470 @@ html[data-night="1"] .group-logo {
   font-size: 11px;
 }
 
-.messages {
+/* =========================================================================
+   WhatsApp-style Messages surface (fullscreen, all viewports)
+   ========================================================================= */
+.wa-root {
   display: grid;
-  grid-template-columns: 210px 1fr;
-  min-height: 450px;
-  padding: 0;
+  grid-template-columns: 340px minmax(0, 1fr);
+  height: calc(100vh - 190px);
+  min-height: 480px;
+  max-height: 780px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 18px;
   overflow: hidden;
+  position: relative;
+}
+
+/* --- Chat list --------------------------------------------------------- */
+.wa-list {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+}
+.wa-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px 10px;
+}
+.wa-list-head h2 {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  margin: 0;
+  color: var(--ink);
+}
+.wa-search {
+  position: relative;
+  margin: 4px 14px 10px;
+}
+.wa-search .input,
+.wa-search input {
+  width: 100%;
+  padding: 10px 14px 10px 40px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-2) 72%, transparent);
+  color: var(--ink);
+  font-size: 13px;
+}
+.wa-search input::placeholder {
+  color: var(--muted);
+}
+.wa-search-ico {
+  position: absolute;
+  left: 13px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+}
+.wa-search-ico .sicon {
+  width: 16px;
+  height: 16px;
+}
+.wa-rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 8px 14px;
+}
+.wa-empty {
+  padding: 26px 16px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.conv-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 11px 12px;
+  border-radius: 14px;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+.conv-row:hover {
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+.conv-row.active {
+  background: color-mix(in srgb, var(--sage) 12%, transparent);
+}
+.conv-row + .conv-row {
+  margin-top: 2px;
+}
+.conv-ava {
+  flex: none;
+  width: 49px;
+  height: 49px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--sage) 16%, var(--panel-2));
+  color: var(--sage);
+  font-weight: 800;
+  font-size: 20px;
+  border: 1px solid color-mix(in srgb, var(--sage) 18%, transparent);
+}
+.conv-ava img,
+.conv-ava .sicon {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+}
+.conv-ava .sicon {
+  width: 55%;
+  height: 55%;
+  object-fit: contain;
+}
+.conv-ava.group-logo {
+  background: color-mix(in srgb, var(--sage) 16%, var(--panel-2));
+  color: var(--sage);
+  border-radius: 50%;
+}
+.conv-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.conv-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.conv-name {
+  font-weight: 700;
+  font-size: 14.5px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.conv-time {
+  flex: none;
+  font-size: 11px;
+  color: var(--muted);
+}
+.conv-time.unread-time {
+  color: var(--sage);
+  font-weight: 700;
+}
+.conv-preview {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.conv-tick {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  color: var(--muted);
+}
+.conv-tick .sicon {
+  width: 15px;
+  height: 15px;
+}
+.conv-tick.read {
+  color: #4fb6e9;
+}
+.conv-unread {
+  flex: none;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--sage);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  display: grid;
+  place-items: center;
+  font-variant-numeric: tabular-nums;
+}
+.mute-ico {
+  color: var(--muted);
+}
+.mute-ico .sicon {
+  width: 13px;
+  height: 13px;
+  vertical-align: -1px;
+}
+
+/* --- Intro / placeholder ---------------------------------------------- */
+.wa-intro {
+  margin: auto;
+  max-width: 460px;
+  text-align: center;
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.wa-intro-art {
+  width: 96px;
+  height: 96px;
+  border-radius: 32px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--sage) 13%, transparent);
+  color: var(--sage);
+  margin-bottom: 6px;
+}
+.wa-intro-art .sicon {
+  width: 46px;
+  height: 46px;
+}
+.wa-intro h2 {
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  margin: 0;
+  color: var(--ink);
+}
+.wa-intro p {
+  font-size: 13.5px;
+  line-height: 1.55;
+  margin: 0;
+}
+.wa-intro-note {
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel-2) 80%, transparent);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.wa-intro-note .sicon {
+  width: 14px;
+  height: 14px;
+  color: var(--sage);
+}
+
+/* --- Open chat --------------------------------------------------------- */
+.wa-chat {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  background:
+    radial-gradient(circle at 20% 12%, color-mix(in srgb, var(--sage) 5%, transparent), transparent 42%),
+    radial-gradient(circle at 84% 78%, color-mix(in srgb, var(--gold) 5%, transparent), transparent 46%),
+    color-mix(in srgb, var(--panel-2) 55%, var(--card));
+}
+.wa-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+  min-height: 62px;
+}
+.wa-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 8px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-2) 70%, transparent);
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  flex: none;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.wa-back .sicon {
+  width: 15px;
+  height: 15px;
+  transform: scaleX(-1);
+}
+.wa-back:hover {
+  color: var(--sage);
+  border-color: color-mix(in srgb, var(--sage) 40%, transparent);
+  background: color-mix(in srgb, var(--sage) 9%, transparent);
+}
+button.chat-head-who {
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  padding: 4px 6px;
+  border-radius: 12px;
+  min-width: 0;
+  flex: 1;
+}
+button.chat-head-who:hover {
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+}
+.chat-head-txt {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.chat-head-txt strong {
+  font-size: 15px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-ava {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--sage) 16%, var(--panel-2));
+  color: var(--sage);
+  font-weight: 800;
+}
+.chat-ava img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+}
+.chat-ava .group-logo {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
+.wa-call {
+  padding: 8px 13px;
+  font-size: 12px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+.wa-call .sicon {
+  width: 14px;
+  height: 14px;
+}
+.wa-menu-btn {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+}
+.wa-menu-btn .sicon {
+  width: 18px;
+  height: 18px;
+}
+
+.messages {
+  display: none; /* superseded by .wa-root */
 }
 
 .conversation {
-  border-right: 1px solid var(--line);
-  padding: 10px;
+  display: none; /* superseded by .wa-list */
+}
+
+/* Fullscreen chat body: fill the wa-root (base.css caps .chat-body at 320px
+   for the old inline card — the overlay needs the real height). */
+.wa-root .chat-body {
+  flex: 1;
+  max-height: none;
+  padding: 16px clamp(12px, 4vw, 44px);
+  gap: 3px;
+  scroll-behavior: smooth;
+}
+.wa-root .chat-body .bubble {
+  margin-top: 6px;
+}
+.wa-root .chat-body .bubble + .bubble {
+  margin-top: 2px;
+}
+
+/* WhatsApp-style composer: rounded pill input + round send button. */
+.wa-root .chat-input {
+  border-top: 1px solid var(--line);
+  background: var(--card);
+  padding: 10px 12px;
+  gap: 8px;
+  align-items: flex-end;
+}
+.wa-root .chat-textarea {
+  flex: 1;
+  min-height: 42px;
+  max-height: 132px;
+  border-radius: 21px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-2) 70%, var(--card));
+  color: var(--ink);
+  padding: 11px 16px;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.wa-root .chat-textarea:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--sage) 45%, transparent);
+}
+.wa-root .chat-textarea::placeholder {
+  color: var(--muted);
+}
+.wa-root .chat-extras-toggle {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--panel-2) 70%, var(--card));
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+.wa-root .chat-extras-toggle:hover {
+  color: var(--sage);
+  border-color: color-mix(in srgb, var(--sage) 40%, transparent);
+}
+.wa-send {
+  width: 42px;
+  height: 42px;
+  min-width: 42px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  font-size: 13px;
+}
+.wa-send .sicon {
+  width: 18px;
+  height: 18px;
+  transform: scaleX(-1);
+}
+.wa-send:hover {
+  transform: scale(1.05);
 }
 
 /* Backend status pill (Discover) — tiny dot + label next to the search box.
@@ -321,87 +774,35 @@ html[data-night="1"] .group-logo {
   }
 }
 
-/* Inbox-style conversation rows: avatar, name + time, snippet, unread pill.
-   Kept on .conversation button so the mobile strip media query still applies. */
-.conversation button {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  text-align: left;
-  padding: 10px 11px;
-  border-radius: 12px;
-  background: none;
-  color: var(--muted);
-  font-size: 12px;
-  border: 1px solid transparent;
-  transition: background 0.15s ease, border-color 0.15s ease;
-}
+/* Inbox-style conversation rows (superseded by .wa-* rules above — kept
+   selectors removed; the .subnav-badge block below still applies). */
 
-.conversation button:hover {
-  background: color-mix(in srgb, var(--sage) 7%, transparent);
-}
-
-.conversation button.active {
-  background: #eaf3e5;
-  border-color: color-mix(in srgb, var(--sage) 25%, transparent);
-  color: var(--sage);
-}
-
-.conv-ava {
-  flex: none;
-  width: 36px;
-  height: 36px;
-  display: grid;
+/* Unread count pill on the Messages subtab itself. */
+.subnav-badge {
+  display: inline-grid;
   place-items: center;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--sage) 12%, transparent);
-  color: var(--sage);
-  font-size: 15px;
-}
-
-.conversation button.active .conv-ava {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 4px;
+  border-radius: 999px;
   background: var(--sage);
   color: #fff;
-}
-
-.conv-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.conv-top {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.conv-name {
-  font-weight: 600;
-  font-size: 12.5px;
-  color: var(--ink);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.conversation button.active .conv-name {
-  color: var(--sage);
-}
-
-.conv-time {
-  flex: none;
-  font-size: 10.5px;
-  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  vertical-align: 1px;
   font-variant-numeric: tabular-nums;
 }
 
+.chat {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
 .conv-preview {
-  font-size: 11.5px;
+  font-size: 12.5px;
   line-height: 1.35;
   color: var(--muted);
   white-space: nowrap;
@@ -415,36 +816,14 @@ html[data-night="1"] .group-logo {
 }
 
 /* Unread rows: bolder snippet, stronger time, sage pill on the right. */
-.conversation button.has-unread .conv-preview {
+.conv-row.has-unread .conv-preview {
   color: var(--ink);
   font-weight: 550;
 }
 
-.conversation button.has-unread .conv-time {
+.conv-row.has-unread .conv-time {
   color: var(--sage);
   font-weight: 650;
-}
-
-.conv-unread {
-  flex: none;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
-  display: grid;
-  place-items: center;
-  border-radius: 999px;
-  background: var(--sage);
-  color: #fff;
-  font-size: 10.5px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  box-shadow: 0 2px 6px color-mix(in srgb, var(--sage) 35%, transparent);
-}
-
-.conversation button.active .conv-unread {
-  background: #fff;
-  color: var(--sage);
-  box-shadow: none;
 }
 
 /* Unread count pill on the Messages subtab itself. */
@@ -517,6 +896,21 @@ html[data-night="1"] .group-logo {
   border-bottom: 1px solid var(--line);
   display: flex;
   justify-content: space-between;
+}
+
+/* WhatsApp header applied on top of .chat-head base rules. */
+.wa-head {
+  padding: 10px 14px;
+  gap: 10px;
+  justify-content: flex-start;
+  align-items: center;
+}
+.wa-head .friend-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
 }
 
 /* Phase 7 completion: group avatars, message edit mode, story thumbs.
@@ -593,17 +987,22 @@ html[data-night="1"] .group-logo {
 }
 
 .bubble {
-  max-width: 75%;
-  padding: 10px 13px;
-  border-radius: 14px;
-  background: #edf3e8;
-  font-size: 13px;
+  position: relative;
+  max-width: min(75%, 520px);
+  padding: 8px 10px 6px 11px;
+  border-radius: 12px;
+  background: var(--card);
+  border: 1px solid color-mix(in srgb, var(--ink) 7%, transparent);
+  box-shadow: 0 1px 1.5px rgba(11, 20, 26, 0.08);
+  font-size: 13.5px;
   line-height: 1.45;
   /* Long pasted links/words must wrap inside the bubble — never push the
      chat sideways on narrow phones. */
   overflow-wrap: anywhere;
   word-break: break-word;
   min-width: 0;
+  align-self: flex-start;
+  border-top-left-radius: 12px;
 }
 /* Same guarantee for feed notes, comments and search snippets. */
 .post-text,
@@ -618,8 +1017,13 @@ html[data-night="1"] .group-logo {
 
 .bubble.me {
   align-self: flex-end;
-  background: var(--sage);
+  background: color-mix(in srgb, var(--sage) 88%, #ffffff);
+  border-color: transparent;
   color: #fff;
+  border-top-right-radius: 12px;
+}
+html[data-night="1"] .bubble.me {
+  background: color-mix(in srgb, var(--sage) 80%, #06231a);
 }
 
 .message-meta {
@@ -2435,6 +2839,117 @@ mark {
   }
   .file-meta strong {
     white-space: normal;
+  }
+}
+
+/* --- WhatsApp surface responsiveness (phones + tablets) ----------------- */
+@media (max-width: 860px) {
+  .wa-root {
+    grid-template-columns: minmax(0, 1fr);
+    height: calc(100vh - 150px);
+    max-height: none;
+    border-radius: 16px;
+  }
+  /* Phone: one pane at a time, WhatsApp-style. */
+  .wa-root.has-chat .wa-list {
+    display: none;
+  }
+  .wa-root:not(.has-chat) .wa-chat {
+    display: none;
+  }
+}
+
+/* Immersive chat: when a conversation is open, the community shell gets out
+   of the way (page heading + subtabs removed in JS) and the chat fills the
+   viewport between the topbar and any bottom player bars. */
+.tab-panel.immersive-chat {
+  padding: 0 !important;
+  margin: 0 !important;
+  max-width: none;
+}
+.tab-panel.immersive-chat #community-body {
+  margin: 0;
+}
+.tab-panel.immersive-chat .wa-root {
+  height: calc(100vh - var(--bar-pad, 0px) - 84px);
+  max-height: none;
+  border-radius: 0;
+  border: none;
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+}
+@media (max-width: 860px) {
+  .tab-panel.immersive-chat .wa-root {
+    height: calc(100vh - var(--bar-pad, 0px) - 64px);
+  }
+}
+@media (max-width: 640px) {
+  .wa-root {
+    height: calc(100vh - 132px);
+    border-radius: 14px;
+    border: none;
+  }
+  .wa-list-head {
+    padding: 14px 16px 8px;
+  }
+  .wa-list-head h2 {
+    font-size: 20px;
+  }
+  .wa-search {
+    margin: 2px 10px 8px;
+  }
+  .conv-row {
+    padding: 10px 9px;
+    gap: 11px;
+  }
+  .conv-ava {
+    width: 46px;
+    height: 46px;
+  }
+  .wa-head {
+    padding: 8px 10px;
+    min-height: 56px;
+    gap: 8px;
+  }
+  .wa-back span {
+    display: none; /* icon-only back chip on phones */
+  }
+  .wa-back {
+    padding: 8px;
+    border: none;
+    background: none;
+  }
+  .wa-call span {
+    display: none;
+  }
+  .wa-call {
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    justify-content: center;
+  }
+  .wa-root .chat-body {
+    padding: 12px 10px;
+  }
+  .bubble {
+    max-width: 84%;
+  }
+  .wa-root .chat-input {
+    padding: 8px;
+  }
+  .wa-root .chat-textarea {
+    min-height: 40px;
+    padding: 10px 14px;
+  }
+  .wa-send,
+  .wa-root .chat-extras-toggle {
+    width: 40px;
+    height: 40px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wa-send:hover {
+    transform: none;
   }
 }
 @media (prefers-reduced-motion: reduce) {
