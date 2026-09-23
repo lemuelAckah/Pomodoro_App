@@ -272,3 +272,149 @@
     transition: none;
   }
 }
+
+/* ---- Dusk backdrop shared with the landing page --------------------------
+   Same first-run family: medium-dark canvas, giant clock dial, dot grid.
+   Darker vignette than the landing so question cards stay the hero. */
+.tc-dusk {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  background:
+    radial-gradient(1000px 640px at 14% -8%, rgba(116, 168, 132, 0.22), transparent 62%),
+    radial-gradient(880px 600px at 90% 10%, rgba(233, 174, 63, 0.13), transparent 58%),
+    radial-gradient(1100px 780px at 50% 118%, rgba(46, 62, 82, 0.42), transparent 65%),
+    linear-gradient(168deg, #333f36 0%, #28322b 52%, #222b25 100%);
+}
+
+.tc-dusk::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(242, 240, 228, 0.12) 1px, transparent 1.4px);
+  background-size: 28px 28px;
+  mask-image: radial-gradient(85% 75% at 50% 25%, #000 20%, transparent 100%);
+  -webkit-mask-image: radial-gradient(85% 75% at 50% 25%, #000 20%, transparent 100%);
+  opacity: 0.45;
+}
+
+.tc-dusk .dusk-dial {
+  position: absolute;
+  left: -16vw;
+  top: -18vh;
+  width: min(64vw, 520px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: 2px solid rgba(242, 240, 228, 0.10);
+  box-shadow: inset 0 0 0 12px rgba(242, 240, 228, 0.03), 0 30px 120px rgba(8, 14, 10, 0.4);
+  opacity: 0.9;
+}
+
+.tc-dusk .dusk-dial::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 4px;
+  height: 32%;
+  border-radius: 4px;
+  background: linear-gradient(180deg, rgba(242, 240, 228, 0.4), rgba(242, 240, 228, 0.06));
+  transform-origin: 50% 100%;
+  transform: translate(-50%, -100%) rotate(200deg);
+}
+
+.tc-dusk .dusk-dial::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 3px;
+  height: 20%;
+  border-radius: 3px;
+  background: linear-gradient(180deg, rgba(233, 174, 63, 0.5), rgba(233, 174, 63, 0.08));
+  transform-origin: 50% 100%;
+  transform: translate(-50%, -100%) rotate(310deg);
+}
+
+.tc-dusk .dusk-echo {
+  position: absolute;
+  right: -12vw;
+  bottom: -16vh;
+  width: min(46vw, 380px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: 1.5px dashed rgba(242, 240, 228, 0.09);
+}
+
+/* Ink flips light on the dusk canvas. */
+body:has(.tc-dusk) {
+  background: #2c3830;
+}
+
+.tc-wrap { position: relative; z-index: 1; }
+
+body:has(.tc-dusk) .tc-card {
+  background: rgba(22, 30, 25, 0.6);
+  border-color: rgba(242, 240, 228, 0.13);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 24px 70px rgba(6, 12, 9, 0.45);
+  color: #eef0e6;
+}
+
+body:has(.tc-dusk) .tc-card h1,
+body:has(.tc-dusk) .tc-card h2 {
+  color: #f7f6ee;
+}
+
+body:has(.tc-dusk) .tc-card .muted,
+body:has(.tc-dusk) .tc-top .muted {
+  color: rgba(238, 240, 230, 0.62);
+}
+
+body:has(.tc-dusk) .tc-brand strong {
+  color: #f4f3ea;
+}
+
+body:has(.tc-dusk) .brand-mark {
+  background: linear-gradient(140deg, rgba(242, 240, 228, 0.14), rgba(242, 240, 228, 0.05));
+  border: 1px solid rgba(242, 240, 228, 0.22);
+  color: #f4f3ea;
+}
+
+body:has(.tc-dusk) .tc-opt {
+  background: rgba(242, 240, 228, 0.04);
+  border-color: rgba(242, 240, 228, 0.14);
+  color: #eef0e6;
+}
+
+body:has(.tc-dusk) .tc-opt:hover {
+  border-color: rgba(233, 174, 63, 0.5);
+}
+
+body:has(.tc-dusk) .tc-opt.selected {
+  border-color: var(--sage);
+  background: rgba(116, 168, 132, 0.14);
+}
+
+body:has(.tc-dusk) .tc-progress {
+  background: rgba(242, 240, 228, 0.1);
+}
+
+body:has(.tc-dusk) .tc-actions .ghost,
+body:has(.tc-dusk) .tc-nav .ghost {
+  border-color: rgba(242, 240, 228, 0.3);
+  color: #eef0e6;
+}
+
+/* The old light backdrop stays defined but is superseded whenever .tc-dusk
+   is present — kept so older cached renders still look reasonable. */
+body:has(.tc-dusk) .tc-bg {
+  display: none;
+}
+
+@media (max-width: 560px) {
+  .tc-dusk .dusk-dial { width: 84vw; left: -22vw; top: -12vh; }
+}

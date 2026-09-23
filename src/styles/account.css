@@ -393,6 +393,140 @@
   max-width: 960px;
   margin: 0 auto;
   padding: 48px 20px 64px;
+  position: relative;
+  min-height: 100vh;
+}
+
+/* First-run backdrop: the StudyFlow clock dial, oversized and quiet, on a
+   medium-dark "dusk" canvas — between the light app paper and full night.
+   Shared with the technique-check page (see .tc-bg in techcheck.css). */
+.landing-dusk {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  overflow: hidden;
+  background:
+    radial-gradient(1100px 700px at 18% -10%, rgba(116, 168, 132, 0.28), transparent 65%),
+    radial-gradient(900px 640px at 88% 12%, rgba(233, 174, 63, 0.17), transparent 60%),
+    radial-gradient(1000px 720px at 50% 115%, rgba(72, 96, 118, 0.30), transparent 62%),
+    linear-gradient(168deg, #37453c 0%, #2c3830 48%, #27312a 100%);
+}
+
+/* Fine dot-grid texture keeps the big surfaces from feeling flat. */
+.landing-dusk::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(242, 240, 228, 0.13) 1px, transparent 1.4px);
+  background-size: 30px 30px;
+  mask-image: radial-gradient(90% 80% at 50% 20%, #000 25%, transparent 100%);
+  -webkit-mask-image: radial-gradient(90% 80% at 50% 20%, #000 25%, transparent 100%);
+  opacity: 0.5;
+}
+
+/* The clock: a giant dial — ring, twelve ticks, and hands — rendered in pure
+   CSS so it stays crisp at any size and costs nothing. */
+.landing-dusk .dusk-dial {
+  position: absolute;
+  right: -14vw;
+  top: 50%;
+  width: min(78vw, 620px);
+  aspect-ratio: 1;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  border: 2px solid rgba(242, 240, 228, 0.14);
+  box-shadow:
+    inset 0 0 0 14px rgba(242, 240, 228, 0.035),
+    inset 0 0 0 15px rgba(242, 240, 228, 0.07),
+    0 30px 120px rgba(10, 16, 12, 0.35);
+  background:
+    radial-gradient(closest-side, rgba(242, 240, 228, 0.05), rgba(242, 240, 228, 0.012) 62%, transparent 70%);
+  opacity: 0.9;
+}
+
+/* Hands */
+.landing-dusk .dusk-dial::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 4px;
+  height: 34%;
+  border-radius: 4px;
+  background: linear-gradient(180deg, rgba(242, 240, 228, 0.55), rgba(242, 240, 228, 0.08));
+  transform-origin: 50% 100%;
+  transform: translate(-50%, -100%) rotate(135deg);
+}
+
+.landing-dusk .dusk-dial::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 3px;
+  height: 22%;
+  border-radius: 3px;
+  background: linear-gradient(180deg, rgba(233, 174, 63, 0.65), rgba(233, 174, 63, 0.1));
+  transform-origin: 50% 100%;
+  transform: translate(-50%, -100%) rotate(45deg);
+}
+
+/* Second ring echoing the dial lower-left, for depth */
+.landing-dusk .dusk-echo {
+  position: absolute;
+  left: -10vw;
+  bottom: -18vh;
+  width: min(50vw, 420px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: 1.5px dashed rgba(242, 240, 228, 0.10);
+}
+
+/* The first-run pages sit on the dusk canvas, so their ink flips light. */
+.landing-on-dusk {
+  color: #eef0e6;
+}
+
+.landing-on-dusk .card {
+  background: rgba(20, 28, 23, 0.55);
+  border-color: rgba(242, 240, 228, 0.12);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 20px 60px rgba(8, 14, 10, 0.35);
+}
+
+.landing-on-dusk .card h3,
+.landing-on-dusk .card h2 {
+  color: #f4f3ea;
+}
+
+.landing-on-dusk .muted {
+  color: rgba(238, 240, 230, 0.66);
+}
+
+.landing-on-dusk .landing-hero h1 {
+  color: #f7f6ee;
+  text-shadow: 0 2px 30px rgba(10, 16, 12, 0.5);
+}
+
+.landing-on-dusk .lede {
+  color: rgba(238, 240, 230, 0.78);
+}
+
+.landing-on-dusk .eyebrow {
+  color: rgba(233, 174, 63, 0.9);
+}
+
+.landing-on-dusk .brand-mark {
+  background: linear-gradient(140deg, rgba(242, 240, 228, 0.14), rgba(242, 240, 228, 0.05));
+  border: 1px solid rgba(242, 240, 228, 0.22);
+  color: #f4f3ea;
+  box-shadow: 0 8px 30px rgba(8, 14, 10, 0.35);
+}
+
+.landing-on-dusk .landing-foot {
+  color: rgba(238, 240, 230, 0.45);
 }
 
 .landing-hero {

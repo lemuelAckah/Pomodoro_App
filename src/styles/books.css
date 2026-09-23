@@ -980,3 +980,74 @@ html[data-night="1"] .book-dz-picked {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ---- Book export sheet (Markdown / Word) -------------------------------- */
+.export-sheet {
+  width: min(480px, calc(100vw - 32px));
+}
+
+.export-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 14px 0 4px;
+}
+
+.export-opt {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  text-align: left;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1.5px solid var(--line);
+  background: var(--paper);
+  cursor: pointer;
+  transition: border-color .15s ease, transform .12s ease, box-shadow .15s ease;
+}
+
+.export-opt:hover {
+  border-color: var(--sage);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 26px rgba(45, 67, 48, .12);
+}
+
+.export-ico {
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(71, 118, 90, .16), rgba(233, 174, 63, .14));
+  color: var(--sage);
+  font-size: 19px;
+}
+
+.export-txt {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.export-txt strong { font-size: 14px; }
+.export-txt small { color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+
+.export-go {
+  color: var(--muted);
+  font-size: 18px;
+  transition: transform .15s ease, color .15s ease;
+}
+
+.export-opt:hover .export-go {
+  transform: translateX(3px);
+  color: var(--sage);
+}
+
+@media (max-width: 480px) {
+  .export-opt { padding: 12px 13px; gap: 10px; }
+  .export-ico { width: 36px; height: 36px; font-size: 16px; }
+}

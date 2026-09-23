@@ -130,10 +130,57 @@ article.card:hover .deck-list-del,
   opacity: 1;
 }
 
+/* Edit joins delete on duck messages (edit offered on your messages only) */
+.duck-msg-tools {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.duck-msg-tools .duck-msg-edit,
+.duck-msg-tools .duck-msg-del {
+  position: static;
+  opacity: 1;
+}
+
+.bubble:hover .duck-msg-tools,
+.duck-msg-tools:focus-within {
+  opacity: 1;
+}
+
 @media (hover: none) {
-  .duck-msg-del {
+  .duck-msg-tools {
     opacity: 0.6;
   }
+}
+
+/* Inline edit box inside a duck bubble */
+.duck-edit-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.duck-edit-box .input {
+  width: 100%;
+  font-size: 13.5px;
+}
+
+.duck-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.duck-edit-actions .ghost,
+.duck-edit-actions .primary {
+  font-size: 12px;
+  padding: 7px 12px;
 }
 
 .tech-back {

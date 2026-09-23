@@ -5,7 +5,7 @@ import {
   setGroupLookup, fitTextarea, requireAuth, fmtClock, paintBackendPill, registerBackendPillResolver,
 } from "./core.js";
 import {
-  sendCloudMessage, markMessageRead, subscribeToConversation, subscribeToPresence,
+  sendCloudMessage, markMessageRead, subscribeToConversation, subscribeToPresence, avatarPublicUrl,
   createWebRtcPeer, recordCall, updateCall, upsertCallParticipant,
   uploadUserFile, getUserFileUrl, backendConfigured, reportUser, listPublicGroups,
   createCloudGroup, joinCloudGroup, leaveCloudGroup, deleteCloudGroup,
@@ -44,7 +44,53 @@ let groupsBackendInflight = false;
 let friendsBackendStatus = null;
 let friendsBackendStatusAt = 0;
 // Cloud identity caches (in-memory only — never persisted; handles refresh).
-let cloudFriends = []; // accepted connections: { id, handle, name, avatar, bio }
+let cloudFriends = []; // accepted connections: { id, handle, name, avatar, photo, bio }
+// Friend profile-photo URLs (bucket is public-read). One cache per session —
+// avatarPublicUrl is a cheap string join, so no network is involved.
+const friendPhotoUrls = new Map(); // userId -> public URL or ""
+function friendPhotoUrl(id) {
+  if (friendPhotoUrls.has(id)) return friendPhotoUrls.get(id);
+  const f = cloudFriends.find((x) => x.id === id)
+    || cloudFriendReqs.filter((r) => r.incoming).find((r) => r.otherId === id)
+    || null;
+  const url = f?.photo ? (avatarPublicUrl(f.photo) || "") : "";
+  friendPhotoUrls.set(id, url);
+  return url;
+}
+function friendAvatarMarkup(id, handle, name, cls) {
+  const url = friendPhotoUrl(id);
+  const initial = esc(((handle || name || "?")[0] || "?").toUpperCase());
+  return url
+    ? `<span class="friend-ava${cls ? " " + cls : ""}"><img src="${esc(url)}" alt="" loading="lazy"></span>`
+    : `<span class="friend-ava${cls ? " " + cls : ""}">${initial}</span>`;
+}
+function friendStatusRing(id, handle, name, stories) {
+  const has = stories.length > 0;
+  const seenAll = stories.every((s) => isSeen("cstory:" + s.id));
+  const ringCls = !has ? "none" : seenAll ? "seen" : "new";
+  return `<button type="button" class="story-ring ${ringCls}" ${has ? `data-friend-stories="${esc(id)}"` : "disabled"} ${has ? `title="@${esc(handle)}'s status"` : `title="@${esc(handle)} has no status yet"`}>`
+    + `<span class="ring-frame">${friendAvatarMarkup(id, handle, name)}</span>`
+    + `<small>@${esc(String(handle || name || "?").slice(0, 9))}</small></button>`;
+}
+// Grouped stories by author: [{ author:{id,handle,name}, items:[...] }]
+// Friends first (most recent), then public authors without a connection.
+function cloudStoryGroups() {
+  const groups = new Map();
+  for (const s of cloudStories) {
+    if (!groups.has(s.userId)) {
+      groups.set(s.userId, {
+        author: { id: s.userId, handle: s.handle || "member", name: s.name || s.handle || "member", photo: friendPhotoUrl(s.userId) },
+        items: [],
+      });
+    }
+    groups.get(s.userId).items.push(s);
+  }
+  return [...groups.values()]
+    .sort((a, b) => new Date(b.items[0].createdAt) - new Date(a.items[0].createdAt));
+}
+function friendsWithStories() {
+  return cloudStoryGroups().filter((g) => cloudFriends.some((f) => f.id === g.author.id));
+}
 let cloudFriendReqs = []; // { id, incoming, handle, name, otherId, ts }
 function cloudFriendReqsById(id) {
   return cloudFriends.find((f) => f.id === id)
@@ -245,7 +291,10 @@ setGroupLookup(() => allGroups());
 // cache — every caller falls back to local-only behavior.
 async function refreshCloudSocial(force) {
   if (!signedIn()) return;
-  if (!force && Date.now() - cloudFriendsAt < 60000 && cloudFriendsAt) return;
+  // Connections feed chats, pickers, the Notifications inbox and every
+  // avatar on the site — a 60s throttle made those feel stale. 10s keeps
+  // requests/acceptances near-instant without hammering the directory.
+  if (!force && Date.now() - cloudFriendsAt < 10000 && cloudFriendsAt) return;
   try {
     // allSettled instead of per-call catch: a transient failure must NOT
     // silently wipe the connections list to empty — keep the stale cache
@@ -275,7 +324,7 @@ async function refreshCloudSocial(force) {
       .map((r) => {
         const oid = r.user_id === me ? r.friend_id : r.user_id;
         const p = byId.get(oid) || {};
-        return { id: oid, handle: p.handle || "member", name: p.name || p.handle || "Member", avatar: p.avatar || "•", bio: p.bio || "" };
+        return { id: oid, handle: p.handle || "member", name: p.name || p.handle || "Member", avatar: p.avatar || "•", photo: p.photo_path || "", bio: p.bio || "" };
       });
     cloudFriendReqs = rows
       .filter((r) => r.status === "pending")
@@ -283,10 +332,11 @@ async function refreshCloudSocial(force) {
         const incoming = r.friend_id === me;
         const oid = incoming ? r.user_id : r.friend_id;
         const p = byId.get(oid) || {};
-        return { id: r.id, incoming, otherId: oid, handle: p.handle || "member", name: p.name || p.handle || "Member", ts: r.created_at };
+        return { id: r.id, incoming, otherId: oid, handle: p.handle || "member", name: p.name || p.handle || "Member", photo: p.photo_path || "", ts: r.created_at };
       });
     cloudBlocked = new Set((Array.isArray(blocks) ? blocks : []).map((b) => b.blocked_id).filter(Boolean));
     cloudFriendsAt = Date.now();
+    friendPhotoUrls.clear(); // profiles may have updated photos
   } catch {
     /* offline — keep stale cache */
     friendsBackendStatus = "offline";
@@ -932,6 +982,26 @@ function paintMessagesBadge(count) {
   if (current) current.remove();
   btn.innerHTML = label + badge;
 }
+// Story strip on the Messages tab: friend rings with live seen-state.
+function messagesStoryStrip() {
+  if (!signedIn()) return "";
+  const groups = cloudStoryGroups();
+  if (!groups.length) return "";
+  return `<div class="msg-story-strip">${groups
+    .map((g) => friendStatusRing(g.author.id, g.author.handle, g.author.name, g.items))
+    .join("")}</div>`;
+}
+// Open one author's grouped stories in the cloud viewer.
+function bindFriendStoryRings(root) {
+  $$('[data-friend-stories]', root).forEach((b) => (b.onclick = () => {
+    const hit = cloudStories.find((s) => s.userId === b.dataset.friendStories);
+    if (!hit) return;
+    const items = cloudStories
+      .filter((s) => s.userId === hit.userId)
+      .sort((a, b2) => new Date(a.createdAt) - new Date(b2.createdAt));
+    openStoryViewer(items, Math.max(0, items.findIndex((s) => !isSeen("cstory:" + s.id))));
+  }));
+}
 
 function renderCommunity() {
   clearSprintTicker();
@@ -1181,7 +1251,7 @@ function sprintBoardMarkup() {
       ? `<span class="tag lock">${sicon("lock")} friends-only${pend ? ` · ${pend} pending` : ""}${acc ? ` · ${acc} in` : ""}${dec ? ` · ${dec} out` : ""}</span>`
       : `<span class="tag">${sicon("globe")} open room${(sp.roster || []).length ? ` · ${(sp.roster || []).length + 1} racing` : ""}</span>`;
     return `<div class="sprint-room pro${live ? " live" : ""}"><div class="sprint-beam"></div><div class="section-row"><strong>${esc(sp.title)}</strong><span style="display:flex;gap:6px;flex-wrap:wrap"><span class="tag ${live ? "live" : ""}" data-sprint-cd="${sp.id}">${live ? "● LIVE" : "scheduled"}</span>${inviteLine}</span></div><p class="muted">${esc(sprintGroupName(sp))} · ${Math.round(sp.durationSec / 60)} min${sp.joined ? " · you're in" : ""}</p>${sp.purpose ? `<p class="purpose">“${esc(sp.purpose)}”</p>` : ""}${sp.joined || sp.visibility === "open" ? crewPaceMarkup(sp) : '<p class="muted">Join to see the crew pace board.</p>'}${(sp.invites || []).length ? `<div class="invite-chips">${sp.invites.map((i) => `<span class="invite-chip ${i.status}">@${esc(i.username)} · ${i.status === "accepted" ? "joined " + sicon("check") : i.status === "declined" ? "passed" : "invited…"}</span>`).join("")}</div>` : ""}<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">${sp.joined ? `${live && !inSession ? `<button type="button" class="primary" data-sprint-late="${sp.id}">Join late</button><button type="button" class="ghost" data-sprint-leave="${sp.id}">Leave</button>` : ""}${live && inSession ? '<span class="tag live">you\'re focusing ' + sicon("fire") + '</span>' : ""}${!live ? `<button type="button" class="primary" data-sprint-now="${sp.id}">Start now</button><button type="button" class="ghost" data-sprint-leave="${sp.id}">Leave</button>` : ""}` : `<button type="button" class="primary" data-sprint-join="${sp.id}">Join sprint</button>`}${owner ? `<button type="button" class="ghost" data-sprint-edit="${sp.id}">Rename / purpose</button><button type="button" class="ghost" data-sprint-nudge="${sp.id}" title="Simulate a friend replying right now">Nudge replies</button><button type="button" class="delete" data-sprint-del="${sp.id}" title="Delete room">Delete</button>` : ""}</div></div>`;
-  }).join("") : '<p class="muted">No live rooms. Start one below — shared suffering bonds people.</p>'}${past.length ? `<div class="section-row" style="margin-top:14px"><h3>Finish board</h3></div>${past.map((sp) => `<div class="board-row"><span>${esc(sp.title)}</span><span class="tag">${sp.result?.status === "done" ? `${sicon("check")} ${sp.result.focusedMin}m focused` : sp.result?.status === "dnf" ? "DNF" : "missed"}</span></div>`).join("")}` : ""}<div class="section-row" style="margin-top:16px"><h3>New sprint</h3><span class="tag">pro</span></div><div class="grid two"><input class="input" id="sprint-title" placeholder="Sprint title, e.g. Morning grind"><select class="select" id="sprint-group"><option value="">No group</option>${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("")}</select><select class="select" id="sprint-dur"><option value="15">15 minutes</option><option value="25" selected>25 minutes</option><option value="30">30 minutes</option><option value="50">50 minutes</option></select><select class="select" id="sprint-in"><option value="2">Starts in 2 min</option><option value="5" selected>Starts in 5 min</option><option value="10">Starts in 10 min</option><option value="15">Starts in 15 min</option><option value="30">Starts in 30 min</option></select></div><textarea class="textarea autogrow" id="sprint-purpose" rows="2" placeholder="Purpose — why does this room exist? (shown to everyone)" style="margin-top:10px"></textarea><div style="margin-top:10px;position:relative"><select class="select" id="sprint-vis" style="width:100%" aria-label="Room visibility"><option value="open">Open — anyone can join</option><option value="friends">Friends — only people I pick</option></select><div class="friend-pick drop" id="sprint-friends" hidden><div class="eyebrow" style="margin-bottom:6px">Pick friends</div>${friends.map((f) => `<label class="pick-row"><input type="checkbox" value="${f.id}"> <span class="crew-avatar sm">${esc((f.username || "?")[0].toUpperCase())}</span> @${esc(f.username)}</label>`).join("") || '<p class="muted">No friends yet — add some in the Friends tab first.</p>'}</div></div><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button type="button" class="primary" id="sprint-create">Create sprint room</button><button class="ghost" id="sprint-friends-go" type="button">To friends → pick crew</button></div></div>`;
+  }).join("") : '<p class="muted">No live rooms. Start one below — shared suffering bonds people.</p>'}${past.length ? `<div class="section-row" style="margin-top:14px"><h3>Finish board</h3></div>${past.map((sp) => `<div class="board-row"><span>${esc(sp.title)}</span><span class="tag">${sp.result?.status === "done" ? `${sicon("check")} ${sp.result.focusedMin}m focused` : sp.result?.status === "dnf" ? "DNF" : "missed"}</span></div>`).join("")}` : ""}<div class="section-row" style="margin-top:16px"><h3>New sprint</h3><span class="tag">pro</span></div><div class="grid two"><input class="input" id="sprint-title" placeholder="Sprint title, e.g. Morning grind"><select class="select" id="sprint-group"><option value="">No group</option>${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("")}</select><select class="select" id="sprint-dur"><option value="15">15 minutes</option><option value="25" selected>25 minutes</option><option value="30">30 minutes</option><option value="50">50 minutes</option></select><select class="select" id="sprint-in"><option value="2">Starts in 2 min</option><option value="5" selected>Starts in 5 min</option><option value="10">Starts in 10 min</option><option value="15">Starts in 15 min</option><option value="30">Starts in 30 min</option></select></div><textarea class="textarea autogrow" id="sprint-purpose" rows="2" placeholder="Purpose — why does this room exist? (shown to everyone)" style="margin-top:10px"></textarea><div style="margin-top:10px;position:relative"><select class="select" id="sprint-vis" style="width:100%" aria-label="Room visibility"><option value="open">Open — anyone can join</option><option value="friends">Friends — only people I pick</option></select><span class="fp-chip" id="sprint-picked" hidden></span><button type="button" class="ghost" id="sprint-friends-go" type="button" style="margin-top:8px;width:100%">👥 Choose friends — pick your crew</button></div><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button type="button" class="primary" id="sprint-create">Create sprint room</button></div></div>`;
 }
 
 function challengeRow(c) {
@@ -1208,7 +1278,7 @@ function challengeMarkup() {
   const groups = allGroups().filter((g) =>
     get("sf-joined", []).includes(g.id),
   );
-  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Group challenges</h2><span class="tag">this week</span></div>${list.map(challengeRow).join("") || '<p class="muted">No active challenges — launch the first one.</p>'}<div class="section-row" style="margin-top:14px"><h3>New challenge</h3><span class="tag">you host</span></div><div class="grid two"><input class="input" id="ch-title" placeholder="e.g. 10 focus sessions"><select class="select" id="ch-group">${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("") || '<option value="">No joined groups yet</option>'}</select><div class="input-row" style="margin:0"><input class="input" id="ch-target" type="number" min="1" max="500" value="10" aria-label="Target"><select class="select" id="ch-unit" aria-label="Unit"><option value="sessions">sessions</option><option value="minutes">minutes</option></select></div><div class="input-row" style="margin:0" title="Every session in this challenge runs this long"><input class="input" id="ch-min" type="number" min="0" max="180" value="25" aria-label="Minutes per session"><span class="muted">min</span><input class="input" id="ch-sec" type="number" min="0" max="59" value="0" aria-label="Seconds per session"><span class="muted">sec</span></div></div><p class="muted" style="margin:8px 0 0">⚡ Pace setter — every session runs this long, and joiners' timers lock to it until they leave.</p><div><button type="button" class="primary" id="ch-create">Launch</button></div></div>`;
+  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Group challenges</h2><span class="tag">this week</span></div>${list.map(challengeRow).join("") || '<p class="muted">No active challenges — launch the first one.</p>'}<div class="section-row" style="margin-top:14px"><h3>New challenge</h3><span class="tag">you host</span></div><div class="grid two"><input class="input" id="ch-title" placeholder="e.g. 10 focus sessions"><select class="select" id="ch-group">${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("") || '<option value="">No joined groups yet</option>'}</select><div class="input-row" style="margin:0"><input class="input" id="ch-target" type="number" min="1" max="500" value="10" aria-label="Target"><select class="select" id="ch-unit" aria-label="Unit"><option value="sessions">sessions</option><option value="minutes">minutes</option></select></div><div class="input-row" style="margin:0" title="Session length for this challenge"><input class="input" id="ch-min" type="number" min="0" max="180" value="25" aria-label="Minutes per session"><span class="muted">min</span><input class="input" id="ch-sec" type="number" min="0" max="59" value="0" aria-label="Seconds per session"><span class="muted">sec</span></div></div><div><button type="button" class="primary" id="ch-create">Launch</button></div></div>`;
 }
 
 function eventWhen(e) {
@@ -1238,7 +1308,7 @@ function eventMarkup() {
     const pend = (e.invites || []).filter((i) => i.status === "pending").length;
     const going = (e.invites || []).filter((i) => i.status === "accepted").length + (e.mine ? 1 : 0);
     return `<div class="event-row pro"><div><strong>${sicon("calendar")} ${esc(e.title)}</strong><br><small class="muted">${eventWhen(e)} · ${e.durationMin} min${g ? ` · ${esc(g.name)}` : ""}${e.visibility === "friends" ? ` · ${sicon("lock")} friends` : ""} · ${going} going</small>${(e.invites || []).length ? `<div class="invite-chips">${e.invites.map((i) => `<span class="invite-chip ${i.status}">@${esc(i.username)} · ${i.status === "accepted" ? "in " + sicon("check") : i.status === "declined" ? "out" : "invited…"}</span>`).join("")}</div>` : ""}</div><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${live ? `<span class="tag">● LIVE</span><button type="button" class="primary" data-event-start="${e.id}" style="padding:8px 12px;font-size:12px">Start</button>` : ""}<button type="button" class="${e.mine ? "ghost" : "primary"}" data-event-rsvp="${e.id}" style="padding:8px 12px;font-size:12px">${e.mine ? "Going " + sicon("check") : "RSVP"}</button>${owner ? `${pend ? `<button type="button" class="ghost" data-event-nudge="${e.id}" style="padding:8px 12px;font-size:12px" title="Simulate a friend replying now">Nudge</button>` : ""}<button type="button" class="delete" data-event-del="${e.id}" title="Remove">×</button>` : ""}</div></div>`;
-  }).join("") : '<p class="muted">Nothing scheduled. Put study on the calendar and show up.</p>'}<div class="section-row" style="margin-top:14px"><h3>New session</h3><span class="tag">you host</span></div><div class="grid two"><input class="input" id="ev-title" placeholder="e.g. Calc sprint"><select class="select" id="ev-aud" aria-label="Who is this for"><option value="self">Just me</option><option value="group">A group</option><option value="friends">Specific friends</option></select><select class="select" id="ev-group" aria-label="Which group"><option value="">No group</option>${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("")}</select><label class="field-label ev-datetime-label">${sicon("calendar")} Date & time<input class="input" id="ev-at" type="datetime-local" aria-label="Date and time"></label><select class="select" id="ev-dur"><option value="15">15 min</option><option value="25" selected>25 min</option><option value="30">30 min</option><option value="50">50 min</option><option value="60">60 min</option><option value="90">90 min</option></select></div><p class="muted" style="margin:8px 0 0">Friends get an invite they can accept or decline — replies land here and on your Focus desk.</p><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center;position:relative"><button type="button" class="primary" id="ev-create">Schedule</button><button class="ghost" id="ev-crew-toggle" type="button" hidden></button><div class="friend-pick drop" id="ev-friends" hidden><div class="eyebrow" style="margin-bottom:6px">Pick friends</div>${(state.friends || []).map((f) => `<label class="pick-row"><input type="checkbox" value="${f.id}"> <span class="crew-avatar sm">${esc((f.username || "?")[0].toUpperCase())}</span> @${esc(f.username)}</label>`).join("") || '<p class="muted">No friends yet — add some in the Friends tab first.</p>'}</div></div></div>`;
+  }).join("") : '<p class="muted">Nothing scheduled. Put study on the calendar and show up.</p>'}<div class="section-row" style="margin-top:14px"><h3>New session</h3><span class="tag">you host</span></div><div class="grid two"><input class="input" id="ev-title" placeholder="e.g. Calc sprint"><select class="select" id="ev-aud" aria-label="Who is this for"><option value="self">Just me</option><option value="group">A group</option><option value="friends">Specific friends</option></select><select class="select" id="ev-group" aria-label="Which group"><option value="">No group</option>${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("")}</select><label class="field-label ev-datetime-label">${sicon("calendar")} Date & time<input class="input" id="ev-at" type="datetime-local" aria-label="Date and time"></label><select class="select" id="ev-dur"><option value="15">15 min</option><option value="25" selected>25 min</option><option value="30">30 min</option><option value="50">50 min</option><option value="60">60 min</option><option value="90">90 min</option></select></div><p class="muted" style="margin:8px 0 0">Friends get an invite they can accept or decline — replies land here and on your Focus desk.</p><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center"><button type="button" class="primary" id="ev-create">Schedule</button><button type="button" class="ghost" id="ev-crew-toggle" type="button">👥 Choose friends — pick your crew</button><span class="fp-chip" id="ev-picked" hidden></span></div></div></div>`;
 }
 
 /* ---------- scheduled sessions pro: friends invites, host controls ---------- */
@@ -1565,37 +1635,21 @@ function bindMissionDesk(root) {
   );
 }
 
-// Friends pickers float above the form so ticking a crew never stretches the
-// box. One shared outside-click closer for every picker on the page.
-if (!window.__sfCrewBound) {
-  window.__sfCrewBound = true;
-  document.addEventListener("click", (e) => {
-    if (e.target?.closest?.(".friend-pick.drop")) return;
-    if (e.target?.closest?.("#sprint-friends-go, #ev-crew-toggle")) return;
-    document.querySelectorAll(".friend-pick.drop").forEach((el) => {
-      el.hidden = true;
-    });
-  });
+// Friend picking runs through the styled friends-picker modal — no inline
+// dropdowns to manage; the chip simply shows how many friends were chosen.
+let sprintPickedIds = [];
+let eventPickedIds = [];
+function paintPickedChip(chipEl, n) {
+  if (!chipEl) return;
+  chipEl.hidden = !n;
+  chipEl.textContent = n ? `${n} friend${n === 1 ? "" : "s"} selected` : "";
 }
-
 function paintCrewBtn(body) {
-  const btn = $("#sprint-friends-go", body);
-  const box = $("#sprint-friends", body);
-  if (!btn) return;
-  const friendsOnly = $("#sprint-vis", body)?.value === "friends";
-  const n = box ? box.querySelectorAll('input[type="checkbox"]:checked').length : 0;
-  btn.textContent = friendsOnly ? `Pick friends (${n}) ▾` : "To friends → pick crew";
+  paintPickedChip($("#sprint-picked", body), sprintPickedIds.length);
 }
 
 function paintEvCrewBtn(body) {
-  const btn = $("#ev-crew-toggle", body);
-  const box = $("#ev-friends", body);
-  if (!btn) return;
-  const friendsOnly = $("#ev-aud", body)?.value === "friends";
-  btn.hidden = !friendsOnly;
-  if (!friendsOnly) return;
-  const n = box ? box.querySelectorAll('input[type="checkbox"]:checked').length : 0;
-  btn.textContent = `Pick friends (${n}) ▾`;
+  paintPickedChip($("#ev-picked", body), eventPickedIds.length);
 }
 
 function bindSprints(body) {
@@ -1620,10 +1674,10 @@ function bindSprints(body) {
     const title = $("#sprint-title", body).value.trim() || `${dur}-min sprint`;
     const purpose = $("#sprint-purpose", body)?.value.trim().slice(0, 280) || "";
     const visibility = $("#sprint-vis", body)?.value === "friends" ? "friends" : "open";
-    const picked = [...body.querySelectorAll('#sprint-friends input[type="checkbox"]:checked')].map((c) => c.value);
+    const picked = [...new Set([...sprintPickedIds, ...cloudFriends.map((f) => f.id)])].filter((id) => sprintPickedIds.includes(id));
     if (visibility === "friends" && !picked.length)
-      return notify("Friends-only? Tick at least one friend below");
-    const byId = new Map((state.friends || []).map((f) => [f.id, f]));
+      return notify("Friends-only? Choose at least one friend first");
+    const byId = new Map(friendsPickerSource().map((f) => [f.id, f]));
     const invites = picked.map((id) => ({
       id: "inv-" + uid(),
       friendId: id,
@@ -1666,40 +1720,24 @@ function bindSprints(body) {
     renderCommunity();
     notify(visibility === "friends" ? `Room created — invites sent to ${invites.length} friend${invites.length === 1 ? "" : "s"}` : "Sprint room created — see you at the start");
   };
-  $("#sprint-vis", body).onchange = (e) => {
-    const crewBox = $("#sprint-friends", body);
-    if (crewBox) crewBox.hidden = true;
-    paintCrewBtn(body);
-    if (e.target.value === "friends" && !(state.friends || []).length) {
-      state.subtab = "friends";
-      renderCommunity();
-      notify("Add friends first — then pick your sprint crew");
-    }
-  };
+  $("#sprint-vis", body).onchange = () => paintCrewBtn(body);
   $("#sprint-friends-go", body).onclick = () => {
-    // Doubles as the dropdown toggle in friends mode — the picker floats, so
-    // the box never grows no matter how many friends you tick.
-    if ($("#sprint-vis", body)?.value === "friends") {
-      const crewBox = $("#sprint-friends", body);
-      if (crewBox) crewBox.hidden = !crewBox.hidden;
-      return;
-    }
-    const vis = $("#sprint-vis", body);
-    if (vis) vis.value = "friends";
-    paintCrewBtn(body);
-    if (!(state.friends || []).length) {
-      state.subtab = "friends";
-      renderCommunity();
-      notify("Add friends first — then pick your sprint crew");
-    } else {
-      const crewBox = $("#sprint-friends", body);
-      if (crewBox) crewBox.hidden = false;
-      notify("Tick your crew, then hit Create");
-    }
+    openFriendsPicker({
+      title: "Pick your sprint crew",
+      eyebrow: "Sprint invites",
+      note: "Only the friends you tick get the invite DM.",
+      cta: "Save crew",
+      selected: sprintPickedIds,
+      onDone: (ids) => {
+        sprintPickedIds = ids;
+        if (ids.length && $("#sprint-vis", body)?.value !== "friends") {
+          const vis = $("#sprint-vis", body);
+          if (vis) vis.value = "friends";
+        }
+        paintCrewBtn(body);
+      },
+    });
   };
-  $$('#sprint-friends input[type="checkbox"]', body).forEach((c) =>
-    c.addEventListener("change", () => paintCrewBtn(body)),
-  );
   paintCrewBtn(body);
   $$("[data-inv-accept]", body).forEach(
     (b) =>
@@ -1917,18 +1955,11 @@ function bindSprints(body) {
         )),
   );
   $("#ev-aud", body).onchange = (e) => {
-    const crewBox = $("#ev-friends", body);
-    if (crewBox) crewBox.hidden = true;
     paintEvCrewBtn(body);
     // The group picker only makes sense when "A group" is the audience —
     // hiding it keeps the new-session form compact instead of a tall empty box.
     const groupSel = $("#ev-group", body);
     if (groupSel) groupSel.hidden = e.target.value !== "group";
-    if (e.target.value === "friends" && !(state.friends || []).length) {
-      state.subtab = "friends";
-      renderCommunity();
-      notify("Add friends first — then pick your session crew");
-    }
   };
   // Initial paint: default audience is "Just me", so start hidden.
   {
@@ -1936,12 +1967,24 @@ function bindSprints(body) {
     if (groupSel) groupSel.hidden = ($("#ev-aud", body)?.value || "self") !== "group";
   }
   $("#ev-crew-toggle", body).onclick = () => {
-    const crewBox = $("#ev-friends", body);
-    if (crewBox) crewBox.hidden = !crewBox.hidden;
+    openFriendsPicker({
+      title: "Invite friends to your session",
+      eyebrow: "Session invites",
+      note: "Every friend you tick gets an invite they can accept or decline.",
+      cta: "Save invite list",
+      selected: eventPickedIds,
+      onDone: (ids) => {
+        eventPickedIds = ids;
+        if (ids.length && $("#ev-aud", body)?.value !== "friends") {
+          const aud = $("#ev-aud", body);
+          if (aud) aud.value = "friends";
+          const groupSel = $("#ev-group", body);
+          if (groupSel) groupSel.hidden = true;
+        }
+        paintEvCrewBtn(body);
+      },
+    });
   };
-  $$('#ev-friends input[type="checkbox"]', body).forEach((c) =>
-    c.addEventListener("change", () => paintEvCrewBtn(body)),
-  );
   paintEvCrewBtn(body);
   $("#ev-create", body).onclick = () => {
     if (!requireAuth("schedule sessions")) return;
@@ -1951,9 +1994,9 @@ function bindSprints(body) {
     const aud = $("#ev-aud", body)?.value || "self";
     const groupId = $("#ev-group", body).value || "";
     if (aud === "group" && !groupId) return notify("Pick a group — or switch to Just me / Friends");
-    const picked = [...body.querySelectorAll('#ev-friends input[type="checkbox"]:checked')].map((c) => c.value);
-    if (aud === "friends" && !picked.length) return notify("Friends session? Tick at least one friend");
-    const byId = new Map((state.friends || []).map((f) => [f.id, f]));
+    const picked = [...eventPickedIds];
+    if (aud === "friends" && !picked.length) return notify("Friends session? Choose at least one friend first");
+    const byId = new Map(friendsPickerSource().map((f) => [f.id, f]));
     const invites = picked.map((id) => ({
       id: "evinv-" + uid(),
       friendId: id,
@@ -2228,7 +2271,7 @@ function storiesMarkup() {
   const live = liveStories();
   const unseen = live.filter((s) => !isSeen("story:" + s.id)).length;
   const unseenCloud = cloudStories.filter((s) => !isSeen("cstory:" + s.id)).length;
-  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Stories</h2><span class="tag">24h${unseen + unseenCloud ? ` · ${unseen + unseenCloud} new` : ""}</span></div><div class="story-strip"><button type="button" class="story-add" data-status-play title="Play the full status loop">${sicon("play")}<small>Status</small></button><button type="button" class="story-add" data-story-photo title="Post a photo or video">${sicon("camera")}<small>Photo</small></button><input type="file" id="story-file" accept="image/*,video/*" hidden>${localStoryRings(live)}${cloudStories.map((s) => `<button type="button" class="story-ring${isSeen("cstory:" + s.id) ? " seen" : ""}" data-cloud-story="${s.id}" title="Shared story by @${esc(s.handle)}"><span>${s.kind === "image" && s.mediaPath ? `<img data-story-thumb="${esc(s.mediaPath)}" alt="Photo story">` : sicon("chat")}</span><small>${esc(s.handle.length > 8 ? s.handle.slice(0, 7) + "…" : s.handle)}</small></button>`).join("")}</div>${signedIn() ? `<div class="input-row" style="margin-top:10px;flex-wrap:wrap"><input class="input" id="cloud-story-text" maxlength="500" placeholder="Share a text story with your circle…" aria-label="Share a text story" value="${esc(state.storyDraft?.text || "")}" style="flex:1 1 160px;min-width:0"><select class="select" id="cloud-story-vis" aria-label="Story visibility" style="max-width:150px"><option value="connections">Connections</option><option value="public">Public</option><option value="private">Only me</option></select><button type="button" class="ghost" id="cloud-story-photo" title="Attach a photo" aria-label="Attach a photo">${sicon("camera")}</button><button type="button" class="primary" id="cloud-story-post">Post</button></div><input type="file" id="cloud-story-file" accept="image/jpeg,image/png,image/webp,image/gif" hidden aria-label="Choose a story photo"><div data-cloud-story-preview style="margin-top:8px">${cloudStoryPhoto?.url ? `<img src="${cloudStoryPhoto.url}" class="story-photo-preview" alt="Story photo preview"><div style="margin-top:6px"><button type="button" class="ghost" id="cloud-story-photo-remove">Remove photo</button></div>` : ""}</div><p class="muted" style="margin:6px 0 0">${state.storyDraft?.text ? "Draft restored — post when you're back online. " : ""}Photo stories upload to your private library and follow the same 24h + visibility rules as text.</p>` : ""}</div>`;
+  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Stories</h2><span class="tag">24h${unseen + unseenCloud ? ` · ${unseen + unseenCloud} new` : ""}</span></div><div class="story-strip"><button type="button" class="story-add" data-status-play title="Play the full status loop">${sicon("play")}<small>Status</small></button><button type="button" class="story-add" data-story-photo title="Post a photo or video">${sicon("camera")}<small>Photo</small></button><input type="file" id="story-file" accept="image/*,video/*" hidden>${localStoryRings(live)}${cloudStoryGroups().filter((g) => cloudFriends.some((f) => f.id === g.author.id)).map((g) => friendStatusRing(g.author.id, g.author.handle, g.author.name, g.items)).join("")}</div>${signedIn() ? `<div class="input-row" style="margin-top:10px;flex-wrap:wrap"><input class="input" id="cloud-story-text" maxlength="500" placeholder="Share a text story with your circle…" aria-label="Share a text story" value="${esc(state.storyDraft?.text || "")}" style="flex:1 1 160px;min-width:0"><select class="select" id="cloud-story-vis" aria-label="Story visibility" style="max-width:150px"><option value="connections">Connections</option><option value="public">Public</option><option value="private">Only me</option></select><button type="button" class="ghost" id="cloud-story-photo" title="Attach a photo" aria-label="Attach a photo">${sicon("camera")}</button><button type="button" class="primary" id="cloud-story-post">Post</button></div><input type="file" id="cloud-story-file" accept="image/jpeg,image/png,image/webp,image/gif" hidden aria-label="Choose a story photo"><div data-cloud-story-preview style="margin-top:8px">${cloudStoryPhoto?.url ? `<img src="${cloudStoryPhoto.url}" class="story-photo-preview" alt="Story photo preview"><div style="margin-top:6px"><button type="button" class="ghost" id="cloud-story-photo-remove">Remove photo</button></div>` : ""}</div><p class="muted" style="margin:6px 0 0">${state.storyDraft?.text ? "Draft restored — post when you're back online. " : ""}Photo stories upload to your private library and follow the same 24h + visibility rules as text.</p>` : ""}</div>`;
 }
 
 // Shared cloud-story post path (Discover composer + Status home composer).
@@ -2377,6 +2420,13 @@ function bindStories(body) {
       openStoryViewer(items, Math.max(0, items.findIndex((s) => s.id === hit.id)));
     }),
   );
+  $$('[data-cloud-story-group]', body).forEach(
+    (b) => (b.onclick = () => {
+      const g = cloudStoryGroups().find((x) => x.author.id === b.dataset.cloudStoryGroup);
+      if (!g || !g.items.length) return;
+      openStoryViewer(g.items, 0);
+    }),
+  );
   $("[data-story-photo]", body).onclick = () =>
     $("#story-file", body)?.click();
   $("#story-file", body).onchange = async (e) => {
@@ -2518,6 +2568,7 @@ function renderStatus(body) {
   bindStatusHome(body);
 }
 function bindStatusHome(body) {
+  bindFriendStoryRings(body);
   $$("[data-status-mine]", body).forEach((b) => {
     b.onclick = () => {
       const items = cloudStories.filter((s) => s.mine)
@@ -3788,8 +3839,10 @@ function renderMyGroups(body) {
 }
 
 function inviteText() {
-  // Plain text only — this fills a readonly input and goes to clipboards.
-  return `Join me on StudyFlow 📚 — add me as a friend with the username @${state.profile.handle}. Let's stay consistent together!`;
+  // A link first: friends open it, land straight on the site, then add the
+  // username. Plain-text-only invites made people guess where to go.
+  const url = `${window.location.origin}${window.location.pathname}`;
+  return `Join me on StudyFlow 📚 — ${url} — add me with the username @${state.profile.handle}!`;
 }
 
 function myReferralCode() {
@@ -3838,14 +3891,14 @@ function cloudFriendsMarkup() {
   const incoming = cloudFriendReqs.filter((r) => r.incoming);
   const outgoing = cloudFriendReqs.filter((r) => !r.incoming);
   return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Connections</h2><span class="tag">${cloudFriends.length} connected${incoming.length ? ` · ${incoming.length} request${incoming.length === 1 ? "" : "s"}` : ""}</span></div>`
-    + (incoming.length ? `<div class="eyebrow" style="margin:8px 0 6px">Requests</div><div class="grid">${incoming.map((r) => `<div class="task"><div class="avatar">${esc((r.handle[0] || "?").toUpperCase())}</div><span class="task-text"><strong>@${esc(r.handle)}</strong><br><small class="muted">${esc(r.name)}</small></span><span class="friend-actions"><button type="button" class="primary" data-fr-accept="${r.id}">Accept</button><button type="button" class="ghost" data-fr-decline="${r.id}">Decline</button></span></div>`).join("")}</div>` : "")
-    + (cloudFriends.length ? `<div class="grid" style="margin-top:10px">${cloudFriends.map((f) => `<div class="task"><div class="avatar">${esc((f.handle[0] || "?").toUpperCase())}</div><span class="task-text"><strong>@${esc(f.handle)}</strong><br><small class="muted">${esc(f.name)}</small></span><span class="friend-actions"><button type="button" class="ghost" data-fr-msg="${f.id}">Message</button><button type="button" class="ghost" data-fr-unfriend="${f.id}">Remove</button></span></div>`).join("")}</div>`
-      : '<p class="muted">No connections yet — search below and send a request. Accepting notifies them automatically.</p>')
-    + (outgoing.length ? `<div class="eyebrow" style="margin:10px 0 6px">Sent (${outgoing.length})</div><div class="grid">${outgoing.map((r) => `<div class="task"><div class="avatar">…</div><span class="task-text"><strong>@${esc(r.handle)}</strong><br><small class="muted">pending</small></span><span class="friend-actions"><button type="button" class="ghost" data-fr-cancel="${r.id}">Cancel</button></span></div>`).join("")}</div>` : "")
-    + `</div><div class="card" style="margin-bottom:18px"><h2>Find people</h2><p class="muted">Search by username or name. Only public identity is ever shown.</p><div class="input-row"><input class="input" id="friend-search" placeholder="Username or name (min 2 letters)" aria-label="Search people" value="${esc(friendSearch.q)}"></div><div class="grid" id="friend-search-results">${friendSearch.searching ? '<p class="muted">Searching…</p>' : friendSearch.results.map((u) => {
-      const known = cloudFriends.some((f) => f.id === u.id) || cloudFriendReqs.some((r) => r.otherId === u.id);
-      return `<div class="task"><div class="avatar">${esc(((u.handle || "?")[0] || "?").toUpperCase())}</div><span class="task-text"><strong>@${esc(u.handle || "?")}</strong><br><small class="muted">${esc(u.name || "")}${u.bio ? ` · ${esc(u.bio.slice(0, 60))}` : ""}</small></span><span class="friend-actions">${known ? '<span class="tag">added</span>' : `<button type="button" class="primary" data-fr-add="${u.id}">Add</button>`}</span></div>`;
-    }).join("") || (friendSearch.q.length >= 2 ? '<p class="muted">No matches. Check the spelling.</p>' : "")}</div></div>`;
+    + (incoming.length ? `<div class="eyebrow" style="margin:8px 0 6px">Requests</div><div class="grid">${incoming.map((r) => `<div class="task conn-row" data-profile-user="${esc(r.otherId)}" data-profile-handle="${esc(r.handle)}" data-profile-name="${esc(r.name)}" data-profile-photo="${esc(r.photo || "")}" data-profile-bio="${esc(r.bio || "")}" data-profile-state="request-in">${friendAvatarMarkup(r.otherId, r.handle, r.name)}<span class="task-text"><strong>@${esc(r.handle)}</strong><br><small class="muted">${esc(r.name)}</small></span><span class="friend-actions"><button type="button" class="primary" data-fr-accept="${r.id}">Accept</button><button type="button" class="ghost" data-fr-decline="${r.id}">Decline</button></span></div>`).join("")}</div>` : "")
+    + (cloudFriends.length ? `<div class="grid" style="margin-top:10px">${cloudFriends.map((f) => {
+      const stories = cloudStories.filter((s) => s.userId === f.id);
+      return `<div class="task conn-row" data-profile-user="${esc(f.id)}" data-profile-handle="${esc(f.handle)}" data-profile-name="${esc(f.name)}" data-profile-photo="${esc(f.photo || "")}" data-profile-bio="${esc(f.bio || "")}" data-profile-state="friends">${friendAvatarMarkup(f.id, f.handle, f.name)}<span class="task-text"><strong>@${esc(f.handle)}</strong><br><small class="muted">${esc(f.name)}</small></span><span class="friend-actions">${stories.length ? `<button type="button" class="story-dot ${stories.every((s) => isSeen("cstory:" + s.id)) ? "seen" : ""}" data-fr-story="${esc(f.id)}" title="View @${esc(f.handle)}'s status">●</button>` : ""}<button type="button" class="ghost" data-fr-msg="${f.id}">Message</button><button type="button" class="ghost" data-fr-unfriend="${f.id}">Remove</button></span></div>`;
+    }).join("")}</div>`
+      : '<p class="muted">No connections yet — add friends with the box above.</p>')
+    + (outgoing.length ? `<div class="eyebrow" style="margin:10px 0 6px">Sent (${outgoing.length})</div><div class="grid">${outgoing.map((r) => `<div class="task conn-row" data-profile-user="${esc(r.otherId)}" data-profile-handle="${esc(r.handle)}" data-profile-name="${esc(r.name)}" data-profile-photo="${esc(r.photo || "")}" data-profile-bio="${esc(r.bio || "")}" data-profile-state="request-out">${friendAvatarMarkup(r.otherId, r.handle, r.name)}<span class="task-text"><strong>@${esc(r.handle)}</strong><br><small class="muted">pending</small></span><span class="friend-actions"><button type="button" class="ghost" data-fr-cancel="${r.id}">Cancel</button></span></div>`).join("")}</div>` : "")
+    + `</div>`;
 }
 function bindCloudFriends(body) {
   if (!signedIn()) return;
@@ -3856,6 +3909,7 @@ function bindCloudFriends(body) {
     paintBackendPill("friends", body);
     if (state.tab === "community" && state.subtab === "friends" && cloudSocialSig() !== before) renderCommunity();
   }).catch(() => {});
+  bindHoverProfiles(body);
   const input = $("#friend-search", body);
   let t = 0;
   input?.addEventListener("input", () => {
@@ -3879,11 +3933,6 @@ function bindCloudFriends(body) {
       }
       friendSearch.searching = false;
       if (state.subtab === "friends") renderFriends(body);
-      const again = $("#friend-search", body);
-      if (again) {
-        again.focus();
-        try { again.setSelectionRange(again.value.length, again.value.length); } catch { /* ignore */ }
-      }
     }, 350);
   });
   $$("[data-fr-add]", body).forEach((b) => (b.onclick = async () => {
@@ -3892,6 +3941,15 @@ function bindCloudFriends(body) {
     notify(error ? "Couldn't send — " + String(error.message).slice(0, 90) : "Request sent");
     await refreshCloudSocial(true).catch(() => {});
     if (state.subtab === "friends") renderFriends(body);
+  }));
+  $$("[data-fr-story]", body).forEach((b) => (b.onclick = (e) => {
+    e.stopPropagation();
+    const hit = cloudStories.find((s) => s.userId === b.dataset.frStory);
+    if (!hit) return;
+    const items = cloudStories
+      .filter((s) => s.userId === hit.userId)
+      .sort((a, b2) => new Date(a.createdAt) - new Date(b2.createdAt));
+    openStoryViewer(items, Math.max(0, items.findIndex((s) => !isSeen("cstory:" + s.id))));
   }));
   $$("[data-fr-accept]", body).forEach((b) => (b.onclick = async () => {
     b.disabled = true;
@@ -4022,8 +4080,9 @@ function bindFriendNameSearch(body) {
 }
 
 function renderFriends(body) {
-  body.innerHTML = `<div class="card" style="margin-bottom:18px"><h2>Invite study buddies</h2><p class="muted">Friends join with your username. Share this invite anywhere — anyone who installs StudyFlow can add you in seconds.</p><div class="input-row"><input class="input" id="invite-link" readonly value="${esc(inviteText())}"><button type="button" class="primary" id="copy-invite">Copy</button><button type="button" class="ghost" id="share-invite">Share</button><button type="button" class="backend-pill probing" data-backend-status="friends" data-backend-retry title="Checking the backend…" aria-label="Backend status — click to retry"><i></i><span>Connecting…</span></button></div></div>${signedIn() ? cloudFriendsMarkup() : ""}${referralMarkup()}<div class="card"><h2>Friends & gifting</h2><p class="muted">Add study partners here. They will also appear as gift recipients in the Rewards store.</p><div class="input-row" style="position:relative" id="friend-add-row"><input class="input" id="friend-name" placeholder="Username" aria-label="Friend username" autocomplete="off" role="combobox" aria-controls="friend-search-pop"><button type="button" class="primary" id="add-friend">Add friend</button><div class="friend-pick drop" id="friend-search-pop" role="listbox" hidden></div></div><div class="grid">${state.friends.map((f) => `<div class="task"><div class="avatar">${f.username[0].toUpperCase()}</div><span class="task-text">@${esc(f.username)}</span><span class="friend-actions"><button type="button" class="ghost" data-chat-friend="${f.id}">Message</button><button type="button" class="ghost" data-block-friend="${f.id}">Block</button><button type="button" class="delete" data-remove-friend="${f.id}" title="Remove friend">×</button></span></div>`).join("") || '<p class="muted">Add a friend to send gifts and messages.</p>'}</div>${blockedSectionMarkup()}</div></div>`;
+  body.innerHTML = `<div class="card" style="margin-bottom:18px"><h2>Invite study buddies</h2><p class="muted">Send this link — friends open it, sign up, and add you in seconds.</p><div class="input-row"><input class="input" id="invite-link" readonly value="${esc(inviteText())}"><button type="button" class="primary" id="copy-invite">Copy link</button><button type="button" class="ghost" id="share-invite">Share</button><button type="button" class="backend-pill probing" data-backend-status="friends" data-backend-retry title="Checking the backend…" aria-label="Backend status — click to retry"><i></i><span>Connecting…</span></button></div></div>${signedIn() ? cloudFriendsMarkup() : ""}${referralMarkup()}<div class="card"><h2>Friends &amp; gifting</h2><p class="muted">Add study partners here. They will also appear as gift recipients in the Rewards store.</p><div class="input-row" style="position:relative" id="friend-add-row"><input class="input" id="friend-name" placeholder="Username" aria-label="Friend username" autocomplete="off" role="combobox" aria-controls="friend-search-pop"><button type="button" class="primary" id="add-friend">Add friend</button><div class="friend-pick drop" id="friend-search-pop" role="listbox" hidden></div></div><div class="grid">${state.friends.map((f) => { const cf = cloudFriendReqsById(f.id); return `<div class="task" data-profile-user="${esc(f.id)}" data-profile-handle="${esc(f.username)}" data-profile-name="${esc(cf?.name || f.username)}" data-profile-photo="${esc(cf?.photo || "")}" data-profile-bio="${esc(cf?.bio || "")}" data-profile-state="friends"><div class="avatar">${friendAvatarMarkup(f.id, f.username, cf?.name)}</div><span class="task-text">@${esc(f.username)}</span><span class="friend-actions"><button type="button" class="ghost" data-chat-friend="${f.id}">Message</button><button type="button" class="ghost" data-block-friend="${f.id}">Block</button><button type="button" class="delete" data-remove-friend="${f.id}" title="Remove friend">×</button></span></div>`; }).join("") || '<p class="muted">Add a friend to send gifts and messages.</p>'}</div>${blockedSectionMarkup()}</div></div>`;
   paintBackendPill("friends", body);
+  bindHoverProfiles(body);
   // Click-to-retry: re-probe friendships, repaint the pill, and refresh the
   // connections list — but never while the user is mid-action (a half-typed
   // invite or open menu outlives the click; the next render picks it up).
@@ -4055,14 +4114,13 @@ function renderFriends(body) {
         if (error) throw error;
         const match = (data || []).find((u) => String(u.handle || "").toLowerCase() === name.toLowerCase()) || (data || []).find((u) => String(u.handle || "").toLowerCase().startsWith(name.toLowerCase()));
         if (match) {
-          const known = cloudFriends.some((f) => f.id === match.id) || cloudFriendReqs.some((r) => r.otherId === match.id);
-          if (known && cloudFriends.some((f) => f.id === match.id)) {
+          if (cloudFriends.some((f) => f.id === match.id)) {
             if (!(state.friends || []).some((f) => f.id === match.id)) {
               state.friends.push({ id: match.id, username: match.handle, name: match.name });
               persist();
             }
             renderFriends(body);
-            return notify(`@${match.handle} is already in your connections`);
+            return alreadyFriendsDialog(match);
           }
           const { error: reqErr } = await sendFriendRequest(match.id);
           if (reqErr) {
@@ -4176,7 +4234,251 @@ function renderFriends(body) {
   );
 }
 
+// ---- Friends picker modal (sprints / sessions / private-group invites) -----
+// One polished surface with a checkbox beside every friend, replacing the
+// cramped inline dropdowns. selectedIds() lets callers pre-tick friends.
+let friendPicker = null; // { title, eyebrow, note, cta, selected:Set, onDone }
+function friendsPickerSource() {
+  const seen = new Set();
+  const out = [];
+  for (const f of cloudFriends) {
+    if (!f || !f.id || seen.has(f.id) || cloudBlocked.has(f.id)) continue;
+    seen.add(f.id);
+    out.push({ id: f.id, handle: f.handle, name: f.name, photo: f.photo || "" });
+  }
+  return out;
+}
+function openFriendsPicker({ title, eyebrow = "Choose friends", note = "", cta = "Send invites", selected = [], onDone }) {
+  const friends = friendsPickerSource();
+  if (!friends.length) {
+    state.subtab = "friends";
+    renderCommunity();
+    notify("Add friends first — then pick them here");
+    return;
+  }
+  friendPicker = { title, eyebrow, note, cta, selected: new Set(selected), onDone };
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.id = "friends-picker-modal";
+  modal.innerHTML = `<div class="modal friends-picker"><div class="fp-head"><div><div class="eyebrow">${esc(eyebrow)}</div><h2>${esc(title)}</h2>${note ? `<p class="muted">${esc(note)}</p>` : ""}</div><span class="fp-count" data-fp-count></span></div><div class="fp-list" data-fp-list>${friends.map(fpRowHtml).join("")}</div><div class="modal-actions fp-actions"><button type="button" class="ghost" data-fp-cancel>Cancel</button><button type="button" class="primary" data-fp-done>${esc(cta)}</button></div></div>`;
+  $("#modal-root").append(modal);
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) closeFriendsPicker();
+  });
+  modal.querySelector("[data-fp-cancel]").onclick = closeFriendsPicker;
+  modal.querySelectorAll("[data-fp-id]").forEach((row) => {
+    row.onclick = (e) => {
+      e.stopPropagation();
+      fpToggle(row.dataset.fpId, row);
+    };
+  });
+  fpPaintCount();
+  modal.querySelector("[data-fp-done]").onclick = () => {
+    const ids = [...(friendPicker?.selected || [])];
+    closeFriendsPicker();
+    onDone?.(ids);
+  };
+}
+function fpRowHtml(f) {
+  const ticked = friendPicker?.selected?.has(f.id) ? " checked" : "";
+  const stories = cloudStories.filter((s) => s.userId === f.id);
+  const dot = stories.length && !stories.every((s) => isSeen("cstory:" + s.id)) ? '<span class="story-dot" title="New status"></span>' : "";
+  return `<button type="button" class="fp-row" data-fp-id="${esc(f.id)}" role="checkbox" aria-checked="${Boolean(ticked)}"><span class="fp-check" aria-hidden="true">${sicon("check")}</span>${friendAvatarMarkup(f.id, f.handle, f.name)}<span class="fp-meta"><strong>@${esc(f.handle)}</strong><small class="muted">${esc(f.name || "")}</small></span>${dot}</button>`;
+}
+function fpToggle(id, row) {
+  if (!friendPicker) return;
+  if (friendPicker.selected.has(id)) friendPicker.selected.delete(id);
+  else friendPicker.selected.add(id);
+  row.classList.toggle("picked", friendPicker.selected.has(id));
+  row.setAttribute("aria-checked", friendPicker.selected.has(id) ? "true" : "false");
+  fpPaintCount();
+}
+function fpPaintCount() {
+  const el = document.querySelector("#friends-picker-modal [data-fp-count]");
+  if (el) el.textContent = `${friendPicker?.selected.size || 0} selected`;
+}
+function closeFriendsPicker() {
+  friendPicker = null;
+  $("#friends-picker-modal")?.remove();
+}
+// ---- Hover profile cards + full read-only profile view ---------------------
+// Hovering any [data-profile-*] row floats a mini profile card; clicking it
+// opens the full profile with an Add friend / Message / Block action bar.
+// Read-only by design: visitors can never edit someone else's profile.
+let profilePop = null;
+function closeProfilePop() {
+  if (profilePop) profilePop.remove();
+  profilePop = null;
+}
+document.addEventListener("pointerdown", (e) => {
+  if (profilePop && !profilePop.contains(e.target)) closeProfilePop();
+}, true);
+document.addEventListener("click", (e) => {
+  if (profilePop && !profilePop.contains(e.target) && !e.target.closest?.("[data-profile-user]")) closeProfilePop();
+});
+function bindHoverProfiles(root) {
+  const scope = root || document;
+  $$('[data-profile-user]', scope).forEach((el) => {
+    if (el.dataset.profileBound) return;
+    el.dataset.profileBound = "1";
+    let hoverT = 0;
+    el.addEventListener("mouseenter", () => {
+      clearTimeout(hoverT);
+      hoverT = setTimeout(() => openProfilePop(el), 350);
+    });
+    el.addEventListener("mouseleave", () => {
+      clearTimeout(hoverT);
+      hoverT = setTimeout(() => closeProfilePop(), 220);
+    });
+    el.addEventListener("click", () => {
+      closeProfilePop();
+      openProfileView(profileDataFrom(el));
+    });
+  });
+}
+function profileDataFrom(el) {
+  return {
+    id: el.dataset.profileUser || "",
+    handle: el.dataset.profileHandle || "member",
+    name: el.dataset.profileName || el.dataset.profileHandle || "Member",
+    photo: el.dataset.profilePhoto || "",
+    bio: el.dataset.profileBio || "",
+    state: el.dataset.profileState || "",
+  };
+}
+function openProfilePop(el) {
+  closeProfilePop();
+  const d = profileDataFrom(el);
+  const r = el.getBoundingClientRect();
+  const pop = document.createElement("div");
+  pop.className = "profile-pop";
+  pop.innerHTML = `${profileCardInner(d)}`;
+  document.body.append(pop);
+  const w = pop.offsetWidth || 260;
+  const h = pop.offsetHeight || 150;
+  let x = Math.min(r.left, window.innerWidth - w - 12);
+  let y = r.bottom + 8;
+  if (y + h > window.innerHeight - 12) y = Math.max(12, r.top - h - 8);
+  pop.style.left = Math.max(12, x) + "px";
+  pop.style.top = y + "px";
+  pop.addEventListener("mouseenter", () => clearTimeout(pop._bye));
+  pop.addEventListener("mouseleave", () => closeProfilePop());
+  pop.querySelector("[data-pp-view]")?.addEventListener("click", () => {
+    closeProfilePop();
+    openProfileView(d);
+  });
+  profilePop = pop;
+}
+function profileCardInner(d) {
+  const photo = d.photo ? avatarPublicUrl(d.photo) : "";
+  const stateLabel = d.state === "friends" ? "Connected"
+    : d.state === "request-in" ? "Wants to connect"
+    : d.state === "request-out" ? "Request sent"
+    : "";
+  return `<div class="pp-head">${photo
+    ? `<span class="pp-ava"><img src="${esc(photo)}" alt=""></span>`
+    : `<span class="pp-ava">${esc(((d.handle || "?")[0] || "?").toUpperCase())}</span>`}<div class="pp-id"><strong>@${esc(d.handle)}</strong><small>${esc(d.name)}</small></div></div>${d.bio ? `<p class="pp-bio">${esc(d.bio)}</p>` : ""}${stateLabel ? `<span class="pp-state">${esc(stateLabel)}</span>` : ""}<button type="button" class="primary pp-view" data-pp-view>View profile</button>`;
+}
+// Full read-only profile modal (open to everyone; only friends' data is rich).
+function openProfileView(d) {
+  const photo = d.photo ? avatarPublicUrl(d.photo) : "";
+  const isFriend = cloudFriends.some((f) => f.id === d.id);
+  const isPending = cloudFriendReqs.some((r) => r.otherId === d.id);
+  const stories = cloudStories.filter((s) => s.userId === d.id);
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.id = "profile-view-modal";
+  modal.innerHTML = `<div class="modal profile-view"><span class="pv-cover"></span><div class="pv-head">${photo
+    ? `<span class="pv-ava"><img src="${esc(photo)}" alt=""></span>`
+    : `<span class="pv-ava">${esc(((d.handle || "?")[0] || "?").toUpperCase())}</span>`}<div class="pv-id"><h2>@${esc(d.handle)}</h2><p class="muted">${esc(d.name)}</p>${d.bio ? `<p class="pv-bio">${esc(d.bio)}</p>` : ""}</div></div><div class="pv-facts"><span class="tag">${isFriend ? sicon("check") + " Connected" : isPending ? "Request pending" : "Not connected"}</span>${stories.length ? `<span class="tag">${stories.length} status update${stories.length === 1 ? "" : "s"}</span>` : ""}</div>${stories.length ? `<div class="pv-stories">${stories.slice(0, 6).map((s) => `<button type="button" class="pv-story${isSeen("cstory:" + s.id) ? " seen" : ""}" data-pv-story="${esc(s.id)}" title="View status">${s.kind === "image" ? `<img data-story-thumb="${esc(s.mediaPath)}" alt="">` : `<span>${escSnippet(s.text || "", 60)}</span>`}<small>${relTime(s.createdAt)}</small></button>`).join("")}</div>` : ""}<div class="modal-actions pv-actions">${!isFriend && !isPending ? `<button type="button" class="primary" data-pv-add>Add friend</button>` : ""}${isFriend ? `<button type="button" class="ghost" data-pv-msg>Message</button><button type="button" class="ghost" data-pv-story-all>View status</button>` : ""}<button type="button" class="ghost" data-pv-close>Close</button>${isFriend ? `<button type="button" class="danger-button" data-pv-block>Block</button>` : ""}</div></div>`;
+  $("#modal-root").append(modal);
+  paintStoryThumbs(modal);
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) modal.remove();
+  });
+  modal.querySelector("[data-pv-close]").onclick = () => modal.remove();
+  modal.querySelector("[data-pv-add]")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    const { error } = await sendFriendRequest(d.id);
+    notify(error ? "Couldn't send request — " + String(error.message).slice(0, 90) : `Request sent to @${d.handle}`);
+    await refreshCloudSocial(true).catch(() => {});
+    modal.remove();
+    if (state.tab === "community") renderCommunity();
+  });
+  modal.querySelector("[data-pv-msg]")?.addEventListener("click", () => {
+    modal.remove();
+    state.subtab = "messages";
+    state.activeChat = d.id;
+    renderCommunity();
+  });
+  modal.querySelector("[data-pv-story-all]")?.addEventListener("click", () => {
+    modal.remove();
+    const items = [...stories].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    openStoryViewer(items, Math.max(0, items.findIndex((s) => !isSeen("cstory:" + s.id))));
+  });
+  modal.querySelector("[data-pv-block]")?.addEventListener("click", () => {
+    modal.remove();
+    askBlockUser({ id: d.id, username: d.handle, name: "@" + d.handle, context: "profile" });
+  });
+  $$('[data-pv-story]', modal).forEach((b) => (b.onclick = () => {
+    const s = stories.find((x) => x.id === b.dataset.pvStory);
+    if (!s) return;
+    modal.remove();
+    openStoryViewer([s], 0);
+  }));
+}
+// Small row binding used by the Connections list (row click opens the view).
+function bindFriendRows(root) {
+  const scope = root || document;
+  $$('[data-profile-user]', scope).forEach((el) => {
+    if (el.dataset.rowBound) return;
+    el.dataset.rowBound = "1";
+    el.addEventListener("click", (e) => {
+      if (e.target.closest("button")) return;
+      openProfileView(profileDataFrom(el));
+    });
+  });
+}
 const BLOCK_REASONS = ["Fraud or scam", "Harassment", "Bullying", "Hate or offensive behavior", "Bad language", "Spam", "Inappropriate content", "Impersonation", "Threatening behavior", "Repeated unwanted contact", "Other"];
+// User searched for someone who is ALREADY a friend — instead of a dead-end
+// toast, offer the safety path: keep the connection, or open the block flow.
+function alreadyFriendsDialog(user) {
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.innerHTML = `<div class="modal already-friend-modal"><div class="already-friend-head">${friendAvatarMarkup(user.id, user.handle, user.name || user.handle)}<div><h2>You're already friends</h2><p class="muted">@${esc(user.handle || user.name || "this user")} is in your connections — you can message them, view their profile, or block them here.</p></div></div><div class="modal-actions already-friend-actions"><button type="button" class="ghost" data-af-close>Close</button><button type="button" class="ghost" data-af-profile>View profile</button><button type="button" class="ghost" data-af-msg>Message</button><button type="button" class="danger-button" data-af-block>Block user</button></div></div>`;
+  $("#modal-root").append(modal);
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) modal.remove();
+  });
+  modal.querySelector("[data-af-close]").onclick = () => modal.remove();
+  modal.querySelector("[data-af-profile]").onclick = () => {
+    modal.remove();
+    openProfileView({
+      id: user.id,
+      handle: user.handle || user.name || "member",
+      name: user.name || user.handle || "Member",
+      photo: user.photo_path || "",
+      bio: user.bio || "",
+      state: "friends",
+    });
+  };
+  modal.querySelector("[data-af-msg]").onclick = () => {
+    modal.remove();
+    state.subtab = "messages";
+    state.activeChat = user.id;
+    renderCommunity();
+  };
+  modal.querySelector("[data-af-block]").onclick = () => {
+    modal.remove();
+    askBlockUser({
+      id: user.id,
+      username: user.handle || user.name,
+      name: "@" + (user.handle || user.name || "user"),
+      context: "friends",
+    });
+  };
+}
 function isUuid(v) {
   return typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
 }
@@ -4535,6 +4837,7 @@ function renderMessages(body) {
   });
   body.innerHTML = `<div class="wa-root${state.activeChat ? " has-chat" : ""}"><div class="wa-list">`
     + `<div class="wa-list-head"><h2>Chats</h2>${signedIn() ? "" : `<span class="tag">local</span>`}</div>`
+    + messagesStoryStrip()
     + `<div class="wa-search"><span class="wa-search-ico">${sicon("search")}</span><input id="wa-chat-filter" type="search" placeholder="Search or start a new chat" aria-label="Search chats" autocomplete="off"></div>`
     + `<div class="wa-rows" id="wa-rows">${conversationRow({ id: SELF_CHAT_ID, name: "You (Message yourself)", emoji: avatarMarkup(state.profile.photo, (state.profile.name || "Y")[0].toUpperCase()) })}${sorted.map(conversationRow).join("") || ""}</div></div>`
     + `<div class="chat wa-chat">${state.activeChat ? (groupSearch && groupSearch.id === state.activeChat ? groupSearchMarkup(state.activeChat) : chatMarkup(state.activeChat)) : waPlaceholderMarkup()}</div></div>`;
@@ -6785,6 +7088,22 @@ let historyToken = 0;
 // Shared cloud-row plumbing: resolve sender handles, merge rows into the
 // local cache (dedupe by cloud id, cap 300), and fold server reactions in.
 // Used by both history load and search deepening so the mapping stays single.
+const senderNameCache = new Map(); // userId -> "@handle" (session cache)
+async function resolveSenderName(userId) {
+  if (!userId || userId === state.user?.id) return undefined;
+  if (senderNameCache.has(userId)) return senderNameCache.get(userId);
+  // Friend connections already carry a handle — no network needed.
+  const known = cloudFriends.find((f) => f.id === userId) || cloudFriendReqs.find((r) => r.otherId === userId);
+  if (known?.handle) {
+    const label = "@" + known.handle;
+    senderNameCache.set(userId, label);
+    return label;
+  }
+  const { data } = await getPublicProfiles([userId]).catch(() => ({ data: [] }));
+  const label = data?.[0] ? "@" + (data[0].handle || "member") : undefined;
+  if (label) senderNameCache.set(userId, label);
+  return label;
+}
 async function resolveSenderNames(rows, me) {
   const unknown = [...new Set(rows.filter((r) => r.sender_id !== me).map((r) => r.sender_id).filter(Boolean))];
   if (!unknown.length) return new Map();
@@ -6884,18 +7203,37 @@ async function loadCloudHistory(id, root) {
     const rows = Array.isArray(data) ? data : [];
     if (!rows.length) return;
     const me = state.user.id;
-    const names = await resolveSenderNames(rows, me).catch(() => new Map());
+    // Paint history immediately; sender names resolve afterwards and patch
+    // in place. Waiting on profile lookups before painting was the visible
+    // "messages arrive late" delay when opening a chat.
+    const added = mergeCloudRows(id, rows, new Map(), me);
     if (token !== historyToken || state.activeChat !== id) return;
-    const added = mergeCloudRows(id, rows, names, me);
+    if (added) {
+      markChatRead(id); // history merged while the chat is open = seen
+      paintChatBody(id, root, false);
+      paintMessagesBadge(totalUnreadCount());
+    }
+    resolveSenderNames(rows, me).then((names) => {
+      if (!names.size || token !== historyToken) return;
+      let patched = false;
+      for (const m of state.messages[id] || []) {
+        if (!m.me && m.sender_id && names.has(m.sender_id) && m.sysName !== names.get(m.sender_id)) {
+          m.sysName = names.get(m.sender_id);
+          patched = true;
+        }
+      }
+      if (patched) {
+        persist();
+        if (state.activeChat === id) paintChatBody(id, root, false);
+      }
+    }).catch(() => {});
     let reactionsChanged = false;
     if (token === historyToken && state.activeChat === id) {
       reactionsChanged = await attachCloudReactions(id, me).catch(() => false);
     }
-    if (!added && !reactionsChanged) return;
-    if (token !== historyToken || state.activeChat !== id) return;
-    markChatRead(id); // history merged while the chat is open = seen
-    paintChatBody(id, root, false);
-    paintMessagesBadge(totalUnreadCount());
+    if (reactionsChanged && token === historyToken && state.activeChat === id) {
+      paintChatBody(id, root, false);
+    }
   } catch {
     /* offline — local cache stands */
   }
@@ -7065,10 +7403,14 @@ function subscribeToChat(id) {
         sender_id: message.sender_id,
       };
       const attach = async () => {
-        if (row.sender_id) {
-          const { data } = await getPublicProfiles([row.sender_id]).catch(() => ({ data: [] }));
-          row.sysName = data?.[0] ? "@" + (data[0].handle || "member") : undefined;
-        }
+        // Sender name resolution happens after the bubble is on screen —
+        // waiting for a profile fetch before painting made messages feel
+        // seconds late. resolveSenderName patches the label in place.
+        if (row.sender_id) resolveSenderName(row.sender_id).then((n) => {
+          if (!n) return;
+          row.sysName = n;
+          if (state.activeChat === id) paintChatBody(id, chatRoot(), false);
+        }).catch(() => {});
         const twin = (state.messages[id] || []).some((m) => m.id === message.id || m.cloudId === message.id);
         if (state.activeChat !== id) {
           // Background chat: cache only, plus the standard notification path.

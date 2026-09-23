@@ -348,7 +348,7 @@ function renderTechCheck() {
   if (!root || !tcSession) return;
   const n = TECH_CHECK_QUESTIONS.length;
   if (tcSession.step < 0) {
-    root.innerHTML = `<div class="tc-bg" aria-hidden="true"></div><div class="tc-wrap"><div class="tc-brand"><div class="brand-mark">◷</div><strong>StudyFlow</strong></div><div class="card tc-card tc-anim"><div class="eyebrow">First-time setup · Study Technique Check</div><h1>Let's discover how you learn best.</h1><p class="lede">There is no right or wrong answer. Your responses will help us find the study techniques that may work best for you.</p><p class="muted">${n} quick questions · about a minute · you can go back anytime</p><div class="tc-actions"><button type="button" class="primary" data-tc-begin>Begin my check</button><button type="button" class="ghost" data-tc-skip>Skip for now</button></div></div></div>`;
+    root.innerHTML = `<div class="tc-dusk" aria-hidden="true"><span class="dusk-dial"></span><span class="dusk-echo"></span></div><div class="tc-wrap"><div class="tc-brand"><div class="brand-mark">◷</div><strong>StudyFlow</strong></div><div class="card tc-card tc-anim"><div class="eyebrow">First-time setup · Study Technique Check</div><h1>Let's discover how you learn best.</h1><p class="lede">There is no right or wrong answer. Your responses will help us find the study techniques that may work best for you.</p><p class="muted">${n} quick questions · about a minute · you can go back anytime</p><div class="tc-actions"><button type="button" class="primary" data-tc-begin>Begin my check</button><button type="button" class="ghost" data-tc-skip>Skip for now</button></div></div></div>`;
     $("[data-tc-begin]", root).onclick = () => {
       tcSession.step = 0;
       renderTechCheck();
@@ -362,7 +362,7 @@ function renderTechCheck() {
     const pct = Math.round((100 * done) / n);
     const picked = tcSession.answers[tcSession.step];
     const last = tcSession.step === n - 1;
-    root.innerHTML = `<div class="tc-bg" aria-hidden="true"></div><div class="tc-wrap"><div class="tc-brand"><div class="brand-mark">◷</div><strong>StudyFlow</strong></div><div class="tc-top"><span class="muted">Question ${tcSession.step + 1} of ${n} · ${done} answered</span></div><div class="tc-progress" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" aria-label="Check progress"><i style="width:${pct}%"></i></div><div class="card tc-card tc-anim" data-tc-step="${tcSession.step}"><h2>${esc(item.q)}</h2><p class="muted">No right or wrong answers — go with your gut.</p><div class="tc-opts">${item.options.map((opt, i) => `<button type="button" class="tc-opt${picked === i ? " selected" : ""}" data-tc-opt="${i}" aria-pressed="${picked === i}"><span class="tc-radio"></span><span>${esc(opt.t)}</span><span class="tc-picked">${sicon("check")}</span></button>`).join("")}</div></div><div class="tc-nav"><button type="button" class="ghost" data-tc-back>← Back</button><button type="button" class="primary" data-tc-next>${last ? "See My Results →" : "Next →"}</button></div></div>`;
+    root.innerHTML = `<div class="tc-dusk" aria-hidden="true"><span class="dusk-dial"></span><span class="dusk-echo"></span></div><div class="tc-wrap"><div class="tc-brand"><div class="brand-mark">◷</div><strong>StudyFlow</strong></div><div class="tc-top"><span class="muted">Question ${tcSession.step + 1} of ${n} · ${done} answered</span></div><div class="tc-progress" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" aria-label="Check progress"><i style="width:${pct}%"></i></div><div class="card tc-card tc-anim" data-tc-step="${tcSession.step}"><h2>${esc(item.q)}</h2><p class="muted">No right or wrong answers — go with your gut.</p><div class="tc-opts">${item.options.map((opt, i) => `<button type="button" class="tc-opt${picked === i ? " selected" : ""}" data-tc-opt="${i}" aria-pressed="${picked === i}"><span class="tc-radio"></span><span>${esc(opt.t)}</span><span class="tc-picked">${sicon("check")}</span></button>`).join("")}</div></div><div class="tc-nav"><button type="button" class="ghost" data-tc-back>← Back</button><button type="button" class="primary" data-tc-next>${last ? "See My Results →" : "Next →"}</button></div></div>`;
     $$("[data-tc-opt]", root).forEach(
       (b) => (b.onclick = () => answerTechCheck(Number(b.dataset.tcOpt))),
     );
@@ -387,7 +387,7 @@ function renderTechCheck() {
     .sort((a, b) => b.pct - a.pct);
   const label = (i) =>
     i === 0 ? "Best match" : i === 1 ? "Strong match" : "Also strong";
-  root.innerHTML = `<div class="tc-bg" aria-hidden="true"></div><div class="tc-wrap"><div class="tc-brand"><div class="brand-mark">◷</div><strong>StudyFlow</strong></div><div class="tc-results-head tc-anim"><div class="eyebrow">Your study profile is ready</div><h1>Your Study Technique Profile</h1><p class="lede">These techniques may work particularly well for you — nothing here is the only way to study.</p></div>${ranked.map((r, i) => {
+  root.innerHTML = `<div class="tc-dusk" aria-hidden="true"><span class="dusk-dial"></span><span class="dusk-echo"></span></div><div class="tc-wrap"><div class="tc-brand"><div class="brand-mark">◷</div><strong>StudyFlow</strong></div><div class="tc-results-head tc-anim"><div class="eyebrow">Your study profile is ready</div><h1>Your Study Technique Profile</h1><p class="lede">These techniques may work particularly well for you — nothing here is the only way to study.</p></div>${ranked.map((r, i) => {
     const sig = (tc.signals || {})[r.id];
     const qshort =
       typeof sig === "number" && TECH_CHECK_QUESTIONS[sig]
@@ -1461,29 +1461,205 @@ const DUCK_LINES = [
   "Say your best theory out loud. Hearing it is the test.",
 ];
 
-function duckReply(text) {
-  const s = String(text || "").toLowerCase();
-  if (/(fixed|solved|works|working|thanks|thank you|got it|found it)/.test(s))
-    return "QUACK! Knew you had it in you. Write the fix down before it flies away — future-you says thanks.";
-  if (/(undefined|null\b|nan)/.test(s))
-    return "Ooh — a nothing where a something should be. Where was that value born? Trace it back to its very first line.";
-  if (/(error|exception|traceback|failed|fails|bug)/.test(s))
-    return "Read the error to me slowly, word by word. The answer is usually hiding in the line you skimmed.";
-  if (/(expect)/.test(s))
-    return "And what happened instead? The gap between those two sentences is where your bug lives.";
-  if (/(tried|attempt|already)/.test(s))
-    return "Good — experimenting counts. What is the ONE thing you have not tried because it seems too simple?";
-  if (s.trim().length < 20)
-    return "Too short, human. Give me the whole story — details, details.";
-  if (s.split(/\s+/).length > 80)
-    return "Whoa, big download. Now compress it: what is the single-sentence version?";
+// --- On-device analysis engine -----------------------------------------------
+// The duck reads the message, pulls real facts from a curated knowledge base,
+// and judges from what it actually observed — code, errors, questions,
+// certainty language, numbers. Deterministic, private, no network, and it
+// never invents a fact it does not have.
+const DUCK_FACTS = [
+  {
+    keys: ["chain rule", "chainrule"],
+    fact: "The chain rule says rates multiply along a composition: the derivative of the outside (with the inside left unchanged) times the derivative of the inside.",
+    probe: "Which function is the 'outside' one in your case?",
+  },
+  {
+    keys: ["derivative", "differentiate", "tangent line"],
+    fact: "A derivative is an instantaneous rate of change — geometrically, the slope of the tangent line at a single point.",
+    probe: "Is your function a product, a quotient, or a composition? Each one has its own rule.",
+  },
+  {
+    keys: ["integral", "antiderivative", "integration"],
+    fact: "A definite integral accumulates a quantity over an interval — geometrically, the signed area between the curve and the axis.",
+    probe: "What are your bounds, and does the curve cross the axis between them?",
+  },
+  {
+    keys: ["photosynthesis"],
+    fact: "Photosynthesis is 6CO₂ + 6H₂O + light → C₆H₁₂O₆ + 6O₂ — the light reactions capture energy, the Calvin cycle fixes that energy into sugar.",
+    probe: "Which stage are you asked about — the light reactions or the Calvin cycle?",
+  },
+  {
+    keys: ["mitosis", "meiosis"],
+    fact: "Mitosis makes two genetically identical diploid cells; meiosis makes four genetically unique haploid gametes.",
+    probe: "Does your question care about identical copies (mitosis) or diversity (meiosis)?",
+  },
+  {
+    keys: ["newton", "action and reaction", "third law", "force pair"],
+    fact: "Newton's third law: action–reaction pairs are equal and opposite but act on DIFFERENT objects — which is exactly why they never cancel out on one object.",
+    probe: "Which two objects is the pair acting on in your problem?",
+  },
+  {
+    keys: ["mole ", "avogadro", "molar mass"],
+    fact: "One mole is 6.022×10²³ particles, and mass ÷ molar mass = moles — that conversion is the backbone of stoichiometry.",
+    probe: "Are you converting grams to moles, or moles to particles?",
+  },
+  {
+    keys: ["recursion", "recursive", "base case"],
+    fact: "Every recursive function needs a base case, and every recursive call must make progress toward it — otherwise the call stack overflows.",
+    probe: "What exactly is your base case, and does every call get closer to it?",
+  },
+  {
+    keys: ["infinite loop", "loops forever", "never terminates"],
+    fact: "A loop that never exits means its controlling variable isn't changing inside the body — or the exit condition can never be true.",
+    probe: "Print the loop variable on each pass — is it moving toward the exit?",
+  },
+  {
+    keys: ["null", "undefined", "cannot read", "nan"],
+    fact: "In JavaScript, null means 'intentionally empty' while undefined means 'never assigned' — and 'Cannot read properties of null' means code read a property off that emptiness.",
+    probe: "Which line was supposed to create the value you're reading — and did it run before that line?",
+  },
+  {
+    keys: ["async", "await", "promise"],
+    fact: "await schedules the rest of the function to run only after the promise settles — and it only works inside an async function.",
+    probe: "Are you awaiting the call, or just calling it and reading the result too early?",
+  },
+  {
+    keys: ["closure"],
+    fact: "A closure is a function bundled with the variables it captured at definition — those variables stay alive between calls.",
+    probe: "Which variables is your inner function capturing, and when do they get their value?",
+  },
+  {
+    keys: ["big-o", "time complexity", "o(n", "o(log"],
+    fact: "Big-O rates how cost GROWS with input size, not raw speed — an O(n²) algorithm can absolutely beat O(n log n) on small inputs.",
+    probe: "How many times does your innermost step run, in terms of n?",
+  },
+  {
+    keys: ["stack trace", "traceback", "error message", "exception"],
+    fact: "A stack trace reads top-down: the top line names where it broke, and the lines beneath it are the path that led there.",
+    probe: "What does the very first line say, word for word?",
+  },
+  {
+    keys: ["git revert", "git reset", "git merge", "git rebase"],
+    fact: "git revert adds a new commit that undoes an old one — safe for shared branches; git reset moves the branch pointer and rewrites history — keep it local.",
+    probe: "Has this branch been pushed and shared, or is it just yours?",
+  },
+  {
+    keys: ["css", "selector", "specificity", "flexbox", "grid"],
+    fact: "In CSS, higher specificity beats later order — only EQUAL specificity falls back to source order.",
+    probe: "Which two rules are fighting, and which one has more classes or IDs?",
+  },
+  {
+    keys: ["rest api", "endpoint", "http request", "fetch("],
+    fact: "REST is stateless: every request must carry everything the server needs — including your authentication — because the server remembers nothing between calls.",
+    probe: "Does your request carry its token and full context every time?",
+  },
+  {
+    keys: ["cors"],
+    fact: "CORS is enforced by the browser, not the server — the server must send Access-Control-Allow-Origin for the browser to hand you the response; curl and Postman never hit it.",
+    probe: "Does it also fail in curl, or only in the browser? That tells you if it's really CORS.",
+  },
+  {
+    keys: ["sql", "join", "query", "database"],
+    fact: "A JOIN duplicates rows when the key repeats on either side — a count that suddenly explodes almost always means a one-to-many fan-out.",
+    probe: "Run the count on each table separately — where does the number first grow?",
+  },
+  {
+    keys: ["thesis", "essay", "introduction paragraph"],
+    fact: "A thesis is a debatable claim — if nobody could reasonably disagree with it, it's a summary, not a thesis.",
+    probe: "Say your thesis, then add 'but…' — can you complete that sentence? If yes, you have an argument.",
+  },
+  {
+    keys: ["active recall", "re-reading", "rereading", "highlighting"],
+    fact: "The testing effect is one of the best-replicated findings in memory research: retrieving from memory beats re-reading for long-term retention.",
+    probe: "Could you close the book right now and state the three main points aloud?",
+  },
+  {
+    keys: ["forgetting curve", "ebbinghaus", "spaced repetition", "spaced"],
+    fact: "Ebbinghaus showed retention falls steeply within the first day; a same-day review flattens the curve, and each spaced review pushes the next forgetting point further out.",
+    probe: "When did you last review this — and did you review it from memory or from the page?",
+  },
+];
+
+function duckMatchFact(s) {
+  for (const entry of DUCK_FACTS) {
+    if (entry.keys.some((k) => s.includes(k))) return entry;
+  }
+  return null;
+}
+
+function duckAnalyze(text, ctx = {}) {
+  const raw = String(text || "").trim();
+  const s = raw.toLowerCase();
+  const wordCount = s.split(/\s+/).filter(Boolean).length;
+  const turn = ctx.turn || 1;
+  // --- signals ---------------------------------------------------------
+  const isQuestion = /\?\s*$/.test(raw) || /^(how|why|what|when|where|which|who|should|can|could|does|do|is|are)\b/.test(s);
+  const asksDefinition = /(what (is|are)|define|definition of|meaning of|explain( to me)?( what| how)?)/.test(s);
+  const compare = /difference between\s+(.+?)\s+(?:and|vs\.?|versus)\s+([a-z0-9\- ]{2,40})/.exec(s);
+  const hasCode = /(function\s+\w+|=>|console\.|def\s+\w+|class\s+\w+|```|[{};]\s*$)/.test(raw)
+    || (/[=(){};]/.test(raw) && /\b(const|let|var|if|for|while|return|import|print)\b/.test(s));
+  const errorSignal = /(typeerror|referenceerror|syntaxerror|rangeerror|cannot read|is not a function|is not defined|unhandled|segmentation|nullpointer|stack overflow|traceback|exception|\b404\b|\b500\b|cors)/.test(s);
+  const fixFound = /\b(fixed|solved|it works|working now|figured (it|out)|got it|found it|thank)/.test(s);
+  const stuckLong = /(hours|days|all day|all night|a week).*(stuck|still|no luck|same error|not working)|(stuck|banging my head)/.test(s);
+  const certainty = /\b(always|never|obviously|definitely|must be|should just work|impossible|100%)\b/.test(s);
+  const numbers = /\b\d+(?:\.\d+)?\s*(min(?:ute)?s?|hours?|days?|pages?|%|percent|marks?|questions?|chapters?|words?)\b/.test(s);
+  const fact = duckMatchFact(s);
+  // --- assembly ---------------------------------------------------------
+  // Each branch returns opening + optional fact + ONE pointed probe.
+  if (fixFound)
+    return "QUACK! Knew you had it in you. "
+      + "Before it flies away: write the fix down in one sentence — what was broken, and what changed? "
+      + "Future-you rereads that note, not this chat.";
+  if (errorSignal)
+    return "You pasted an error — good, errors are confessions. "
+      + "Fact: a stack trace reads top-down — the first line names where it broke, the lines beneath show the path that led there. "
+      + "So: what does the very FIRST line say, word by word?";
+  if (asksDefinition) {
+    if (fact)
+      return `Here's the real answer, not a guess. ${fact.fact} ${fact.probe}`;
+    const topic = (/(?:what (?:is|are)|define|definition of|meaning of)\s+(?:a |an |the )?([a-z0-9\- ]{2,50})/.exec(s)?.[1] || "that").trim();
+    return `You're asking for a definition of “${topic}” — and I keep my facts offline, so I won't invent one and dress it up as knowledge. `
+      + "Instead: give me the definition in your own words, no peeking. I'll pressure-test every part of it.";
+  }
+  if (compare)
+    return `Comparing “${compare[1].trim()}” with “${compare[2].trim()}” — good instinct, differences clarify. `
+      + "Define each side in ONE sentence, then say what only one of them can do. "
+      + "The difference usually falls out on its own before you finish.";
+  if (fact)
+    return `You mentioned ${fact.keys[0].trim()} — here's the fact that matters: ${fact.fact} ${fact.probe}`;
+  if (hasCode)
+    return "I can see code in there. Walk me through it like I'm a very literal bird — line by line, what is each part SUPPOSED to do? "
+      + "The line you explain fastest is usually the one hiding the bug.";
+  if (certainty)
+    return "Careful — you used strong words like 'always' or 'never'. Absolute claims are exactly where bugs and wrong answers hide. "
+      + "Which part are you MOST sure about? Doubt that one out loud for me.";
+  if (stuckLong)
+    return "You've been at this a while — that's almost never ability, it's an unverified assumption wearing a disguise. "
+      + "Name the one thing you've believed since the start but never actually tested. Test THAT next.";
+  if (isQuestion)
+    return "That's a real question, so let's aim it. "
+      + (numbers
+        ? "You mentioned a number in there — is that a requirement or an observation? The answer changes the problem. "
+        : "")
+      + "What would the answer let you DO that you can't do right now?";
+  if (wordCount < 12)
+    return "Too short, human — I'm smart but I'm not psychic. Give me the whole story: what you did, what you expected, what happened instead.";
+  if (wordCount > 120)
+    return "Big download — I caught maybe a third of it. Compress it: what is the ONE-sentence version of the problem? Detail the rest only if I ask.";
+  if (turn >= 4)
+    return "We're several rounds deep now — that's how the good discoveries happen. "
+      + "Summarize where you are in one sentence: what do you know now that you didn't when we started?";
   duckIdx++;
   return DUCK_LINES[duckIdx % DUCK_LINES.length];
 }
 
+// Legacy shim — older callers and tests still import duckReply.
+function duckReply(text) {
+  return duckAnalyze(text);
+}
+
 function renderDuck(t) {
   const thread = state.duckChat || [];
-  t.innerHTML = `<button type="button" class="ghost tech-back" data-duck-back>← Duck guide</button>${viewHead("Rubber Duck", "Explain your problem out loud. The duck asks; you discover you knew it all along.")}<div class="card"><div id="duck-thread" class="duck-thread">${thread.length ? thread.map((m, i) => `<div class="bubble ${m.from === "you" ? "me" : ""}">${m.from === "duck" ? sicon("bird") + " " : ""}${esc(m.text)}<small class="message-meta">${new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small><button type="button" class="duck-msg-del" data-duck-del="${i}" title="Delete message" aria-label="Delete message">×</button></div>`).join("") : '<p class="muted">' + sicon("bird") + ' …listening. Tell me what is stuck.</p>'}</div><div class="input-row" style="margin-top:12px;margin-bottom:0"><textarea class="input autogrow" id="duck-input" rows="1" placeholder="Explain it to the duck… (Shift + Enter for a new line)" aria-label="Explain it to the duck"></textarea><button type="button" class="primary" id="duck-send">Quack</button></div><div style="margin-top:10px"><button type="button" class="ghost" data-duck-clear>Clear chat</button></div></div>`;
+  t.innerHTML = `<button type="button" class="ghost tech-back" data-duck-back>← Duck guide</button>${viewHead("Rubber Duck", "Explain your problem out loud. The duck asks; you discover you knew it all along.")}<div class="card"><div id="duck-thread" class="duck-thread">${thread.length ? thread.map((m, i) => `<div class="bubble ${m.from === "you" ? "me" : ""}">${m.from === "duck" ? sicon("bird") + " " : ""}${esc(m.text)}<small class="message-meta">${new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}${m.edited ? " · edited" : ""}</small><span class="duck-msg-tools"><button type="button" class="duck-msg-edit" data-duck-edit="${i}" title="Edit message" aria-label="Edit message">${sicon("memo")}</button><button type="button" class="duck-msg-del" data-duck-del="${i}" title="Delete message" aria-label="Delete message">×</button></span></div>`).join("") : '<p class="muted">' + sicon("bird") + ' …listening. Tell me what is stuck.</p>'}</div><div class="input-row" style="margin-top:12px;margin-bottom:0"><textarea class="input autogrow" id="duck-input" rows="1" placeholder="Explain it to the duck… (Shift + Enter for a new line)" aria-label="Explain it to the duck"></textarea><button type="button" class="primary" id="duck-send">Quack</button></div><div style="margin-top:10px"><button type="button" class="ghost" data-duck-clear>Clear chat</button></div></div>`;
   const scrollDuck = () => {
     const box = $("#duck-thread", t);
     if (box) box.scrollTop = box.scrollHeight;
@@ -1505,6 +1681,56 @@ function renderDuck(t) {
         state.duckChat = state.duckChat.filter((_, i) => i !== Number(b.dataset.duckDel));
         persist();
         renderDuck(t);
+      }),
+  );
+  // Edit a message you sent: the duck RETRACTS its old reply (the answer was
+  // built for a message that no longer exists) and re-answers the new text.
+  // Duck messages are not editable — the duck never revises its own wisdom.
+  $$("[data-duck-edit]", t).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const idx = Number(b.dataset.duckEdit);
+        const thread = state.duckChat || [];
+        const msg = thread[idx];
+        if (!msg || msg.from !== "you") return;
+        const bubble = b.closest(".bubble");
+        if (!bubble || bubble.querySelector("[data-duck-edit-input]")) return;
+        const original = msg.text;
+        bubble.innerHTML = `<div class="duck-edit-box"><textarea class="input autogrow" data-duck-edit-input rows="2" maxlength="2000" aria-label="Edit your message">${esc(original)}</textarea><div class="duck-edit-actions"><button type="button" class="ghost" data-duck-edit-cancel>Cancel</button><button type="button" class="primary" data-duck-edit-save>Save & re-ask</button></div></div>`;
+        const box = bubble.querySelector("[data-duck-edit-input]");
+        box?.focus();
+        try { box?.setSelectionRange(box.value.length, box.value.length); } catch { /* ignore */ }
+        box?.addEventListener("keydown", (ev) => {
+          if (ev.key === "Escape") { ev.preventDefault(); renderDuck(t); }
+          else if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); bubble.querySelector("[data-duck-edit-save]")?.click(); }
+        });
+        bubble.querySelector("[data-duck-edit-cancel]").onclick = () => renderDuck(t);
+        bubble.querySelector("[data-duck-edit-save]").onclick = () => {
+          const next = String(box?.value || "").trim();
+          if (!next) return notify("Message can't be empty");
+          if (next === original) return renderDuck(t);
+          const chat = [...(state.duckChat || [])];
+          chat[idx] = { ...chat[idx], text: next, ts: Date.now(), edited: true };
+          // Drop the duck's reply to the OLD message (and any stale thinking
+          // placeholder) — the next reply must answer what the message NOW says.
+          chat.splice(idx + 1, 1).filter((m) => m?.from === "duck");
+          state.duckChat = chat.filter((m) => !(m.thinking && m.from === "duck"));
+          persist();
+          renderDuck(t);
+          // Fresh answer for the edited message, with the conversation depth
+          // as context so follow-ups stay coherent.
+          const turn = (state.duckChat || []).filter((m) => m.from === "duck").length + 1;
+          state.duckChat = [...state.duckChat, { from: "duck", text: "…re-thinking…", ts: Date.now(), thinking: true }];
+          persist();
+          renderDuck(t);
+          setTimeout(() => {
+            state.duckChat = (state.duckChat || [])
+              .filter((m) => !m.thinking)
+              .concat([{ from: "duck", text: duckAnalyze(next, { turn }), ts: Date.now() }]);
+            persist();
+            if (duckView && $("#tab-techniques")) renderDuck($("#tab-techniques"));
+          }, 800);
+        };
       }),
   );
   const send = () => {
@@ -1629,7 +1855,13 @@ function mindSvg(map, selectedId) {
       const rx = p.depth === 0 ? 14 : 10;
       const sel = selectedId === n.id;
       const selPad = sel ? 5 : 0;
-      return `<g data-mind-node="${n.id}" style="cursor:pointer">${sel ? `<rect x="${p.x - boxW / 2 - selPad}" y="${p.y - boxH / 2 - selPad}" width="${boxW + selPad * 2}" height="${boxH + selPad * 2}" rx="${rx + 3}" fill="none" stroke="#17221d" stroke-width="2.5" stroke-dasharray="7 4"/>` : ""}<rect x="${p.x - boxW / 2}" y="${p.y - boxH / 2}" width="${boxW}" height="${boxH}" rx="${rx}" fill="${c.fill}" stroke="${c.ring}" stroke-width="2"/><text x="${p.x}" y="${p.y}" text-anchor="middle" dominant-baseline="central" font-size="${fontSize}" font-weight="700" fill="${c.text}" font-family="DM Sans, sans-serif">${esc(label)}</text></g>`;
+      // Selection dashes must survive every theme. The hardcoded dark-green
+      // stroke vanished on the night palette (dark stroke on dark paper), so
+      // the stroke follows the theme: dark ink in light mode, light ink in
+      // night mode / dark custom skins.
+      const darkUi = state.night || (document.documentElement.dataset?.night === "1");
+      const selStroke = darkUi ? "#f2f0e4" : "#17221d";
+      return `<g data-mind-node="${n.id}" style="cursor:pointer">${sel ? `<rect x="${p.x - boxW / 2 - selPad}" y="${p.y - boxH / 2 - selPad}" width="${boxW + selPad * 2}" height="${boxH + selPad * 2}" rx="${rx + 3}" fill="none" stroke="${selStroke}" stroke-width="2.5" stroke-dasharray="7 4" opacity="0.95"/>${sel ? `<rect x="${p.x - boxW / 2 - selPad - 2}" y="${p.y - boxH / 2 - selPad - 2}" width="${boxW + selPad * 2 + 4}" height="${boxH + selPad * 2 + 4}" rx="${rx + 4}" fill="none" stroke="${selStroke}" stroke-width="1" stroke-dasharray="2 5" opacity="0.45"/>` : ""}` : ""}<rect x="${p.x - boxW / 2}" y="${p.y - boxH / 2}" width="${boxW}" height="${boxH}" rx="${rx}" fill="${c.fill}" stroke="${c.ring}" stroke-width="2"/><text x="${p.x}" y="${p.y}" text-anchor="middle" dominant-baseline="central" font-size="${fontSize}" font-weight="700" fill="${c.text}" font-family="DM Sans, sans-serif">${esc(label)}</text></g>`;
     })
     .join("");
   return `<svg viewBox="${vb}" class="mind-svg" role="img" aria-label="Mind map">${edges}${dots}</svg>`;

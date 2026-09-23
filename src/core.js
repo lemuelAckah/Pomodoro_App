@@ -1506,6 +1506,26 @@ function toggleNight() {
   } catch {
     /* ignore */
   }
+  // Inline SVG artwork carries hardcoded theme colors (mind-map selection
+  // dashes, edge strokes). Recolor it in place instead of waiting for the
+  // next render, so a mid-selection theme flip never leaves dark-on-dark.
+  recolorInlineSvgTheme();
+}
+
+// Swap hardcoded light/dark strokes on SVGs that are currently on screen.
+// Keys map the light-mode paint to its night counterpart; anything else is
+// left alone. Cheap, idempotent, and safe to run on every theme toggle.
+const SVG_THEME_STROKES = { "#17221d": "#f2f0e4", "#f2f0e4": "#17221d", "#c3d4c8": "#3f4f46" };
+function recolorInlineSvgTheme() {
+  try {
+    document.querySelectorAll(".mind-svg rect[stroke], .mind-svg line[stroke]").forEach((el) => {
+      const cur = (el.getAttribute("stroke") || "").toLowerCase();
+      const next = SVG_THEME_STROKES[cur];
+      if (next) el.setAttribute("stroke", next);
+    });
+  } catch {
+    /* cosmetic only */
+  }
 }
 
 function syncThemeToggle() {

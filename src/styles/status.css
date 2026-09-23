@@ -590,3 +590,77 @@
     font-size: 19px;
   }
 }
+
+/* ---- 024: friend photo rings (WhatsApp-style seen / unseen gradients) ---- */
+.story-ring .ring-frame {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  padding: 2.5px;
+  display: grid;
+  place-items: center;
+  background:
+    conic-gradient(
+      from 210deg,
+      var(--gold, #d9a441),
+      #e8795b,
+      #c94f7c,
+      #8a5cf5,
+      var(--gold, #d9a441)
+    );
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.story-ring .ring-frame .friend-ava,
+.story-ring .ring-frame img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid var(--card, #fff);
+  background: var(--card, #fff);
+}
+
+.story-ring.new .ring-frame {
+  box-shadow: 0 2px 10px rgba(217, 164, 65, 0.35);
+}
+
+.story-ring.new:hover .ring-frame {
+  transform: scale(1.06);
+}
+
+.story-ring.seen .ring-frame {
+  background: var(--line, #e2e2d9);
+  box-shadow: none;
+}
+
+.story-ring.seen .ring-frame .friend-ava {
+  opacity: 0.72;
+}
+
+.story-ring.none {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* mini photo avatars used across connections, chats and pickers */
+.friend-ava {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  overflow: hidden;
+  background: linear-gradient(135deg, var(--gold, #d9a441), #e8795b);
+  color: #fff;
+  font-weight: 700;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.friend-ava img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}

@@ -12,6 +12,7 @@ import {
 } from "./services/backend.js";
 import { openReader, readerOpenId, repaintReader } from "./books-reader.js";
 import { mirrorBooks, deleteBookEverywhere, pullBooks, BOOK_UUID_RE } from "./services/books-sync.js";
+import { txtToMarkdown, mdToMarkdown, epubSectionsToMarkdown, sectionsToMarkdown, markdownToDocxBlob } from "./books-format.js";
 
 export function newBookId() {
   try {
@@ -847,7 +848,7 @@ function openBookMenu(id, anchor) {
     else if (act === "details") openBookDetails(id);
     else if (act === "fav") toggleBookFavorite(id);
     else if (act === "edit") openEditBook(id);
-    else if (act === "download") downloadBook(id);
+    else if (act === "download") openExportSheet(id, anchor);
     else if (act === "delete") askDeleteBook(id);
   };
   pop.querySelector(".book-menu-item")?.focus();
@@ -962,7 +963,7 @@ async function renderBookDetails(t, id) {
   const favBtn = $("[data-book-fav]", t);
   if (favBtn) favBtn.onclick = () => toggleBookFavorite(book.id);
   const dlBtn = $("[data-book-dl]", t);
-  if (dlBtn) dlBtn.onclick = () => downloadBook(book);
+  if (dlBtn) dlBtn.onclick = () => openExportSheet(book, dlBtn);
   const editBtn = $("[data-book-edit]", t);
   if (editBtn) editBtn.onclick = () => openEditBook(book.id);
   const delBtn = $("[data-book-delete]", t);
@@ -1173,13 +1174,20 @@ function openUploadBook() {
       const visibility = modal.querySelector("[data-up-vis]").value === "public" ? "public" : "private";
       const allowDownload = false;
       let textContent = "";
+      let canonicalMd = "";
       let wordCount = null;
       let pageCount = null;
       if (kind === "txt" || kind === "md") {
         try {
           textContent = await file.text();
           if (textContent.length > 5000000) return fail("That text file is too large to read in the browser (over ~5 MB of text).");
-          const words = textContent.split(/\s+/).filter(Boolean).length;
+          // Canonical document: every upload is normalized into clean,
+          // chapter-structured Markdown. The reader renders it beautifully,
+          // highlights anchor to stable section/paragraph indices, and the
+          // same document powers the .md / Word exports.
+          const meta = { title, author: author || "Unknown author" };
+          canonicalMd = kind === "md" ? mdToMarkdown(textContent, meta) : txtToMarkdown(textContent, meta);
+          const words = canonicalMd.split(/\s+/).filter(Boolean).length;
           wordCount = words;
           pageCount = Math.max(1, Math.ceil(words / 250));
         } catch {
@@ -1205,12 +1213,14 @@ function openUploadBook() {
         publisher: "", year: null, pageCount, wordCount,
         coverPath: "", coverData, filePath: "", fileName: file.name,
         fileType: file.type || "", fileSize: file.size, textContent: "",
+        formatted: Boolean(canonicalMd),
         fingerprint, visibility, allowDownload, source: "upload",
         createdAt: Date.now(), updatedAt: Date.now(),
       };
-      saveBtn.textContent = "Saving…";
+      saveBtn.textContent = "Formatting…";
       await bookBlobPut("file:" + fileKey, file);
-      if (textContent) await bookBlobPut("text:" + fileKey, new Blob([textContent], { type: "text/plain" }));
+      if (canonicalMd) await bookBlobPut("text:" + fileKey, new Blob([canonicalMd], { type: "text/markdown" }));
+      else if (textContent) await bookBlobPut("text:" + fileKey, new Blob([textContent], { type: "text/plain" }));
       if (backendConfigured && state.user) {
         saveBtn.textContent = "Uploading…";
         try {
@@ -1443,11 +1453,24 @@ function askDeleteBook(id) {
     }
   };
 }
-export async function downloadBook(book) {
+export async function downloadBook(book, format = "original") {
   const b = typeof book === "string" ? findBook(book) : book;
   if (!b || !canDownloadBook(b)) return notify("Download is not available for this book");
   toast("Preparing download…");
   try {
+    if (format === "md") {
+      const md = (await getBookText(b)) || "";
+      if (!md) return toast("No readable text to export for this book");
+      triggerBlobDownload(new Blob([md], { type: "text/markdown;charset=utf-8" }), safeBookFilename(b, "md"));
+      return;
+    }
+    if (format === "docx") {
+      const md = (await getBookText(b)) || "";
+      if (!md) return toast("No readable text to export for this book");
+      const blob = markdownToDocxBlob(md, { title: b.title, author: b.author });
+      triggerBlobDownload(blob, safeBookFilename(b, "docx"));
+      return;
+    }
     if (b.textContent) {
       const blob = new Blob([b.textContent], { type: "text/markdown" });
       triggerBlobDownload(blob, safeBookFilename(b, "md"));
@@ -1460,6 +1483,20 @@ export async function downloadBook(book) {
   } catch {
     toast("Download failed — try again later");
   }
+}
+
+// Export sheet: pick Markdown or Word. Anchored above the triggering button.
+export function openExportSheet(book, anchor) {
+  const b = typeof book === "string" ? findBook(book) : book;
+  if (!b) return;
+  const sheet = document.createElement("div");
+  sheet.className = "modal-backdrop export-sheet-backdrop";
+  sheet.innerHTML = `<div class="modal export-sheet"><div class="eyebrow">Export “${esc(b.title || "book")}”</div><h2>Choose a format</h2><p class="muted">Your highlights and notes stay in StudyFlow — the document exports clean and beautifully formatted.</p><div class="export-opts"><button type="button" class="export-opt" data-export-md><span class="export-ico">${sicon("doc")}</span><span class="export-txt"><strong>Markdown (.md)</strong><small>Clean chapters · opens in any editor, Notion, Obsidian</small></span><span class="export-go">→</span></button><button type="button" class="export-opt" data-export-docx><span class="export-ico">${sicon("memo")}</span><span class="export-txt"><strong>Word document (.docx)</strong><small>Styled title page · Georgia serif · ready to share</small></span><span class="export-go">→</span></button></div><div class="modal-actions"><button type="button" class="ghost" data-export-cancel>Cancel</button></div></div>`;
+  document.body.append(sheet);
+  sheet.addEventListener("click", (e) => { if (e.target === sheet) sheet.remove(); });
+  sheet.querySelector("[data-export-cancel]").onclick = () => sheet.remove();
+  sheet.querySelector("[data-export-md]").onclick = () => { sheet.remove(); downloadBook(b, "md"); };
+  sheet.querySelector("[data-export-docx]").onclick = () => { sheet.remove(); downloadBook(b, "docx"); };
 }
 function safeBookFilename(b, ext) {
   const base = String(b.title || "book").replace(/[^\w\s-]+/g, "").trim().replace(/\s+/g, "-").slice(0, 80) || "book";

@@ -1,6 +1,6 @@
 /* timer.js — focus timer, tasks, streaks, stats, achievements */
 import {
-  state, $, $$, uid, get, save, esc, sicon, persist, notify, confirmBox, viewHead,
+  state, $, $$, uid, get, save, esc, sicon, persist, notify, confirmBox, toast, viewHead,
   addCoins, fmt, fmtDur, dayKey, celebrate, addNotification, browserNotify,
   ensureNotifyPermission, notifOn, updateBarPadding, makeDraggable,
 } from "./core.js";
@@ -67,6 +67,12 @@ function recordFocusDay(sessionRef) {
       state.streak.days.push(today);
       state.streak.days = state.streak.days.slice(-30);
     }
+    // Mark TODAY locally right away. The database is still authoritative for
+    // the count, but lastDate anchors same-day repeat detection — leaving it
+    // empty until the RPC answered meant the server streak existed while the
+    // UI kept reading a zeroed local mirror (the "stuck at 0" bug).
+    state.streak.lastDate = today;
+    if (state.streak.count < 1) state.streak.count = 1;
     persist();
     try {
       secureStreak(`day:${today}:${sessionRef || "na"}`).then((r) => {
@@ -74,7 +80,7 @@ function recordFocusDay(sessionRef) {
         state.streak.lastDate = today;
         // The server owns the count for cloud members — mirror it locally,
         // otherwise the UI keeps showing a stale/zero streak.
-        if (Number.isFinite(+r.current)) state.streak.count = +r.current;
+        if (Number.isFinite(+r.current)) state.streak.count = Math.max(1, +r.current);
         if (r.longest > (state.bestStreak || 0)) state.bestStreak = r.longest;
         persist();
         if (r.bonus > 0) {
@@ -103,6 +109,10 @@ function recordFocusDay(sessionRef) {
     state.streak.lastDate = today;
     checkStreakMilestone();
   }
+  // A completed session ALWAYS counts as today's activity — belt and braces
+  // for the fresh-install case where a cloud mirror or a restored archive
+  // produced a structurally valid but zeroed streak.
+  if (state.streak.count < 1) state.streak.count = 1;
   if (!state.streak.days.includes(today)) {
     state.streak.days.push(today);
     state.streak.days = state.streak.days.slice(-30);
@@ -671,7 +681,9 @@ function applyCustomDuration(root) {
   persist();
   renderTimer();
   renderMiniTimer();
-  notify(`${modeLabels[mode]} set to ${fmt(durations[mode])} — press Start when ready`);
+  // Quiet confirmation: a non-blocking toast. A blocking "OK" dialog for a
+  // routine save made the user dismiss a popup every single time.
+  toast(`${modeLabels[mode]} set to ${fmt(durations[mode])} — press Start when ready`);
 }
 
 function restoreSession() {
@@ -977,6 +989,10 @@ function completeSession() {
     persist();
     updateTimerDom();
     renderMiniTimer();
+    // Repaint the desk so the streak/stat cards reflect the session that
+    // just completed — the completion card floats above stale numbers
+    // otherwise ("1-day streak" on the card, 0 on the wall behind it).
+    if (state.tab === "timer") renderTimer();
     showCompletionCard("focus");
     celebrate(true);
     return;
