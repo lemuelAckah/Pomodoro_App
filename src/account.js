@@ -445,7 +445,28 @@ function dataMarkup() {
     : "this browser only";
   return `<div class="card" style="margin-top:18px"><div class="section-row"><h2>Your data</h2><span class="tag">${cloudTag}</span></div><p class="muted">${state.user
     ? "Stored in this browser and mirrored to your cloud account. Export takes a full local snapshot; wipe clears this browser (server rows are removed too when the backend is available)."
-    : "Everything lives in this browser. Take a copy with you, or erase it all — your call."}</p><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button type="button" class="ghost" data-export>Export my data</button><label class="ghost" style="cursor:pointer">Import backup<input type="file" id="import-file" accept="application/json,.json" hidden></label><button type="button" class="ghost" data-wipe style="color:#c0392b">Delete my data…</button></div></div>`;
+    : "Everything lives in this browser. Take a copy with you, or erase it all — your call."}</p><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button type="button" class="ghost" data-export>Export my data</button><label class="ghost" style="cursor:pointer">Import backup<input type="file" id="import-file" accept="application/json,.json" hidden></label><button type="button" class="ghost" data-clear-history>Clear local history…</button><button type="button" class="ghost" data-wipe style="color:#c0392b">Delete my data…</button></div><p class="muted" style="font-size:11px;margin-top:10px">Clear local history removes chat messages and pins from this device only — your profile, settings, account, coins and server data stay put.</p></div>`;
+}
+
+// Local-only history wipe: messages + pins (+ per-message tombstones) leave
+// the browser; nothing on the server is touched and no account/settings keys
+// are cleared. Safe to run while signed in.
+function clearLocalHistory() {
+  confirmBox(
+    "Clear local history?",
+    "Chat messages and pins are removed from this device only. Your profile, settings, account, coins, tasks and server data are not affected.",
+    () => {
+      state.messages = {};
+      state.pins = {};
+      state.deletedChats = {};
+      state.deletedMsgs = {};
+      state.messageStatus = {};
+      persist();
+      notify("Local history cleared — profile and settings kept");
+      shell();
+    },
+    { eyebrow: "Your data", yesLabel: "Clear history", noLabel: "Cancel" },
+  );
 }
 
 function exportData() {
@@ -796,6 +817,7 @@ function bindAccount(root) {
     (b) => (b.onclick = openProfile),
   );
   $("[data-export]", root)?.addEventListener("click", exportData);
+  $("[data-clear-history]", root)?.addEventListener("click", clearLocalHistory);
   bindDataZone(root);
   $("[data-global-signout]", root)?.addEventListener("click", async () => {
     await signOut();
@@ -1563,5 +1585,5 @@ function finishTour() {
 
 
 
-export { openProfile, authenticate, openNotifications, notifIcon, profileCompleteness, completenessMarkup, dataMarkup, exportData, wipeData, renderLanding, renderAccount, accountAuthMarkup, accountSignedInMarkup, bindAccount, savePrivacy, flowCard, themeCard, displayCard, notifCard, comfortCard, shortcutsCard, techCheckCard, renderSettings, bindSettings, TOUR_STEPS, tourStep, startTour, showTourStep, closeTour, finishTour };
+export { openProfile, authenticate, openNotifications, notifIcon, profileCompleteness, completenessMarkup, dataMarkup, clearLocalHistory, exportData, wipeData, renderLanding, renderAccount, accountAuthMarkup, accountSignedInMarkup, bindAccount, savePrivacy, flowCard, themeCard, displayCard, notifCard, comfortCard, shortcutsCard, techCheckCard, renderSettings, bindSettings, TOUR_STEPS, tourStep, startTour, showTourStep, closeTour, finishTour };
 export { PRIVACY_VERSION, PRIVACY_UPDATED, PRIVACY_DOC, markPrivacyAccepted, privacyAccepted, privacyAgreementMarkup, privacyDocSections, openPrivacy, privacyCrestSvg, downloadPrivacyPDF, privacyCard };

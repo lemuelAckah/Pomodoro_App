@@ -1246,8 +1246,8 @@ export function subscribeToIncomingCalls(myUserId, { onRinging, onAccepted, onCa
       (payload) => {
         const row = payload.new;
         if (!row) return;
-        if (row.status === "connecting" || row.status === "connected") onAccepted?.(row);
-        else if (row.status === "ended" || row.status === "missed" || row.status === "failed") onCancelled?.(row);
+        if (row.status === "connecting" || row.status === "connected" || row.status === "accepted") onAccepted?.(row);
+        else if (row.status === "ended" || row.status === "missed" || row.status === "failed" || row.status === "declined" || row.status === "cancelled") onCancelled?.(row);
       },
     )
     .on(
@@ -1257,8 +1257,8 @@ export function subscribeToIncomingCalls(myUserId, { onRinging, onAccepted, onCa
         // Initiator side: callee accepted/declined.
         const row = payload.new;
         if (!row || row.initiator_id !== myUserId) return;
-        if (row.status === "connecting" || row.status === "connected") onAccepted?.(row);
-        else if (row.status === "ended" || row.status === "missed" || row.status === "failed") onCancelled?.(row);
+        if (row.status === "connecting" || row.status === "connected" || row.status === "accepted") onAccepted?.(row);
+        else if (row.status === "ended" || row.status === "missed" || row.status === "failed" || row.status === "declined" || row.status === "cancelled") onCancelled?.(row);
       },
     )
     .on(

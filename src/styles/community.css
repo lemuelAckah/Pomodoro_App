@@ -4103,3 +4103,334 @@ mark {
   padding: 6px 10px;
   font-size: 12px;
 }
+
+/* ---- WhatsApp overhaul: bubble rows + avatars, select mode, voice call ---- */
+.wa-root .chat-body .bubble-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: 100%;
+  min-width: 0;
+}
+.wa-root .chat-body .bubble-row.me {
+  justify-content: flex-end;
+}
+.wa-root .chat-body .bubble-row .bubble {
+  margin-top: 0;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.bubble-ava {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--sage) 18%, var(--card));
+  color: var(--sage);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  align-self: flex-end;
+  margin-bottom: 2px;
+}
+.bubble-ava img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.bubble-ava.me-ava {
+  background: color-mix(in srgb, var(--sage) 88%, #ffffff);
+  color: #fff;
+}
+html[data-night="1"] .bubble-ava.me-ava {
+  background: color-mix(in srgb, var(--sage) 80%, #06231a);
+}
+
+/* Message select mode: toolbar + per-bubble checkboxes */
+.msg-select-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--sage) 10%, var(--panel));
+  position: sticky;
+  top: 0;
+  z-index: 4;
+}
+.msg-select-head strong {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.msg-select-head .ghost {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.msg-select-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.msg-select-head .delete,
+.msg-select-actions .delete {
+  background: none;
+  border: 1px solid color-mix(in srgb, #c08478 55%, transparent);
+  color: #c08478;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 10px;
+  border-radius: 999px;
+}
+.msg-select-head .delete:hover:not(:disabled) {
+  background: color-mix(in srgb, #c08478 14%, transparent);
+}
+.msg-select-head .delete:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.wa-root .chat-body .bubble-row.select {
+  cursor: pointer;
+  border-radius: 12px;
+}
+.wa-root .chat-body .bubble-row.select:hover {
+  background: color-mix(in srgb, var(--sage) 7%, transparent);
+}
+.wa-root .chat-body .bubble-row.selected {
+  background: color-mix(in srgb, var(--sage) 14%, transparent);
+}
+.msg-check {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--sage) 70%, var(--line));
+  display: grid;
+  place-items: center;
+  margin: 0 6px 4px 0;
+  background: var(--card);
+  align-self: flex-end;
+}
+.msg-check .sicon {
+  width: 12px;
+  height: 12px;
+  color: #fff;
+}
+.msg-check.on {
+  background: var(--sage);
+  border-color: var(--sage);
+}
+.wa-root .chat-body .bubble-row.select .bubble {
+  max-width: calc(100% - 36px);
+}
+
+/* Voice call header button (next to video Call) */
+.wa-call-voice {
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.wa-call-voice .sicon {
+  width: 16px;
+  height: 16px;
+}
+.wa-head .friend-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Voice-only call window: no video stage chrome, centered avatar stage */
+.call-window.voice {
+  background:
+    radial-gradient(900px 420px at 50% -10%, #1a3d2e 0%, transparent 60%),
+    #0c1310;
+}
+.call-stage.voice {
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.call-stage.voice .call-tile.main {
+  width: min(280px, 70vw);
+  height: min(280px, 70vw);
+  border-radius: 50%;
+  border: 3px solid #5ecf9a55;
+  box-shadow: 0 0 0 10px #5ecf9a14, 0 0 60px #5ecf9a22;
+  max-width: none;
+  max-height: none;
+}
+.call-stage.voice .call-tile.self {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  border: 2px solid #ffffff33;
+}
+.call-stage.voice .tile-avatar {
+  width: 100%;
+  height: 100%;
+  font-size: 64px;
+  border-radius: 50%;
+}
+.call-stage.voice .call-tile.self .tile-avatar.small,
+.call-tile.self .tile-avatar.small {
+  width: 100%;
+  height: 100%;
+  font-size: 36px;
+}
+.call-stage.voice .tile-tag {
+  position: absolute;
+  bottom: -34px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+.call-stage.voice .call-tile.self .tile-tag {
+  bottom: -28px;
+}
+
+/* Group call roster chips + per-tile participant status */
+.call-roster {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 14px;
+  background: #ffffff06;
+  border-bottom: 1px solid #ffffff10;
+  max-height: 72px;
+  overflow-y: auto;
+}
+.roster-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #ffffff12;
+  border: 1px solid #ffffff1c;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #e8f5ee;
+  max-width: 160px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.roster-chip em {
+  font-style: normal;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.8;
+}
+.roster-chip.st-connected {
+  border-color: #5ecf9a66;
+  background: #5ecf9a22;
+  color: #b8f0d4;
+}
+.roster-chip.st-connecting,
+.roster-chip.st-ringing,
+.roster-chip.st-calling,
+.roster-chip.st-accepted {
+  border-color: #e9ae3f66;
+  background: #e9ae3f1f;
+  color: #ffe2a0;
+}
+.roster-chip.st-declined,
+.roster-chip.st-cancelled,
+.roster-chip.st-missed {
+  border-color: #ff6b5b55;
+  background: #ff6b5b1a;
+  color: #ffb4a8;
+}
+.part-st {
+  font-style: normal;
+  font-size: 9.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-left: 4px;
+  opacity: 0.9;
+}
+.part-st.st-connected { color: #7dEab4; }
+.part-st.st-connecting,
+.part-st.st-ringing,
+.part-st.st-calling { color: #ffd27a; }
+.part-st.st-declined,
+.part-st.st-cancelled,
+.part-st.st-missed { color: #ff9a8c; }
+
+/* Minimized voice call: compact pill-sized tile, safe-area aware on phones */
+.call-window.voice.minimized {
+  width: 300px;
+  height: 170px;
+}
+.call-window.voice.minimized .call-stage.voice {
+  padding: 12px;
+}
+.call-window.voice.minimized .call-stage.voice .call-tile.main {
+  width: 96px;
+  height: 96px;
+}
+.call-window.voice.minimized .call-stage.voice .tile-avatar {
+  font-size: 40px;
+}
+.call-window.voice.minimized .call-stage.voice .tile-tag {
+  bottom: -4px;
+  font-size: 10px;
+}
+.call-window.voice.minimized .call-tile.self {
+  width: 64px;
+  height: 64px;
+  right: 12px;
+  bottom: 12px;
+}
+
+@media (max-width: 600px) {
+  .call-window.minimized {
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    right: 12px;
+  }
+  #ongoing-call-pill {
+    bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+    right: 12px;
+  }
+  .call-roster {
+    max-height: 56px;
+    padding: 6px 10px;
+  }
+  .msg-select-head {
+    padding: 8px 10px;
+    gap: 6px;
+  }
+  .msg-select-head .ghost,
+  .msg-select-actions .delete {
+    padding: 5px 8px;
+    font-size: 11.5px;
+  }
+  .bubble-ava {
+    width: 24px;
+    height: 24px;
+    font-size: 11px;
+  }
+  .wa-call-voice {
+    width: 34px;
+    height: 34px;
+  }
+  .call-stage.voice .call-tile.main {
+    width: min(220px, 64vw);
+    height: min(220px, 64vw);
+  }
+}

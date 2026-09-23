@@ -385,6 +385,50 @@ let forceConnectPending = false; // Accept raced a live connect — re-offer aft
 let ringChimeT = 0; // repeating ring tone while the global ring is up
 let ringTimeoutT = 0; // auto-miss if nobody answers
 let ringPollT = 0; // realtime-failure backup poll for ringing rows
+// Terminal + transition keys already notified for a call id — stop the bell
+// from ringing twice for the same miss/decline/end on one device.
+const callNotifKeys = new Set();
+// Per-call chat-log keys so realtime + poll + timeout never double-bubble.
+const callLogKeys = new Set();
+// Group/1:1 participant snapshot for the call UI (userId → status).
+let callParticipantStates = new Map();
+let callParticipantPollT = 0;
+// Section snapshot taken when a call opens full-screen — restored on hang-up
+// so each side lands back where they were before the room covered the app.
+let callReturnTo = null;
+
+const CALL_STATE_FLOW = Object.freeze({
+  idle: ["ringing", "calling", "ended", "missed", "declined", "cancelled", "failed"],
+  ringing: ["calling", "accepted", "connecting", "connected", "ended", "missed", "declined", "cancelled", "failed"],
+  calling: ["ringing", "accepted", "connecting", "connected", "ended", "missed", "declined", "cancelled", "failed"],
+  accepted: ["connecting", "connected", "ended", "failed"],
+  connecting: ["connected", "ended", "failed", "missed"],
+  connected: ["connecting", "ended", "failed"],
+  declined: ["ended"],
+  missed: ["ended"],
+  cancelled: ["ended"],
+  failed: ["ended", "ringing"],
+  ended: ["idle", "ringing"],
+});
+
+function setCallStatus(next, { force = false } = {}) {
+  const prev = state.callStatus || "idle";
+  if (prev === next) return prev;
+  const allowed = CALL_STATE_FLOW[prev] || [];
+  if (!force && next !== "idle" && !allowed.includes(next)) return prev;
+  state.callStatus = next;
+  updateOngoingCallPill();
+  return prev;
+}
+
+function callModeLabel(call = state.call) {
+  if (call?.voice || call?.callType === "voice") return "voice call";
+  return "video call";
+}
+
+function callModeTitle(call = state.call) {
+  return call?.voice || call?.callType === "voice" ? "Voice call" : "Video call";
+}
 
 // Shell badge only rebuilds on shell() — refresh the unread count in place so
 // a ring / missed / ended call lights the bell without wiping open overlays.
@@ -395,7 +439,16 @@ function refreshNotifBadge() {
   });
 }
 
-function notifyCall(title, text, icon = "phone") {
+function notifyCall(title, text, icon = "phone", eventKey) {
+  if (eventKey) {
+    const key = String(eventKey);
+    if (callNotifKeys.has(key)) return;
+    callNotifKeys.add(key);
+    if (callNotifKeys.size > 120) {
+      const oldest = callNotifKeys.values().next().value;
+      callNotifKeys.delete(oldest);
+    }
+  }
   addNotification(title, text, icon);
   refreshNotifBadge();
   try {
@@ -407,8 +460,19 @@ function notifyCall(title, text, icon = "phone") {
 
 // Local call-log bubble: rings, answers, misses and ends land in the chat so
 // neither side needs a second realtime channel to see what happened.
-function logCallEvent(chatId, text, icon = "phone", me = false) {
+// eventKey (e.g. `${callId}:missed`) makes the bubble idempotent across
+// realtime, poll and timeout paths.
+function logCallEvent(chatId, text, icon = "phone", me = false, eventKey) {
   if (!chatId) return;
+  if (eventKey) {
+    const key = String(eventKey);
+    if (callLogKeys.has(key)) return;
+    callLogKeys.add(key);
+    if (callLogKeys.size > 160) {
+      const oldest = callLogKeys.values().next().value;
+      callLogKeys.delete(oldest);
+    }
+  }
   const msg = {
     id: uid(),
     me,
@@ -416,10 +480,72 @@ function logCallEvent(chatId, text, icon = "phone", me = false) {
     icon,
     text,
     kind: "call",
+    callKey: eventKey || undefined,
     ts: Date.now(),
   };
   state.messages[chatId] = [...(state.messages[chatId] || []), msg].slice(-300);
   if (state.activeChat === chatId) appendChatBubble(chatId, msg, chatRoot());
+}
+
+function rememberSectionBeforeCall() {
+  if (callReturnTo) return;
+  callReturnTo = {
+    tab: state.tab,
+    subtab: state.subtab,
+    activeChat: state.activeChat,
+  };
+}
+
+function restoreSectionAfterCall() {
+  const snap = callReturnTo;
+  callReturnTo = null;
+  if (!snap) return;
+  // Minimized + user navigated: leave them where they are. Full-screen end
+  // (or far-side hang-up while the room was open) returns to the snapshot.
+  if (state.callMinimized && snap.tab === state.tab && snap.subtab === state.subtab) return;
+  const wasFullRoom = !state.callMinimized;
+  if (!wasFullRoom && state.callMinimized) return;
+  if (state.tab === snap.tab && state.subtab === snap.subtab && state.activeChat === snap.activeChat) return;
+  if (!wasFullRoom) return;
+  state.tab = snap.tab || state.tab;
+  state.subtab = snap.subtab || state.subtab;
+  state.activeChat = snap.activeChat ?? null;
+  persist();
+  shell();
+}
+
+async function refreshCallParticipantsUi() {
+  if (!activeCallHistoryId || !state.call) return;
+  try {
+    const { data } = await listCallParticipants(activeCallHistoryId);
+    if (!Array.isArray(data)) return;
+    const map = new Map();
+    for (const p of data) {
+      if (p?.user_id) map.set(p.user_id, p.status || "invited");
+    }
+    callParticipantStates = map;
+    if (state.call && !state.callMinimized) renderCall();
+  } catch {
+    /* offline — last snapshot stands */
+  }
+}
+
+function startCallParticipantPoll() {
+  if (callParticipantPollT) return;
+  callParticipantPollT = setInterval(() => {
+    if (!state.call || !activeCallHistoryId) {
+      stopCallParticipantPoll();
+      return;
+    }
+    refreshCallParticipantsUi().catch(() => {});
+  }, 5000);
+}
+
+function stopCallParticipantPoll() {
+  if (callParticipantPollT) {
+    clearInterval(callParticipantPollT);
+    callParticipantPollT = 0;
+  }
 }
 
 function callChatIdFor(call, fallback) {
@@ -488,10 +614,13 @@ function updateOngoingCallPill() {
   const live = state.callStatus === "connected";
   const label = live
     ? "On a call"
-    : state.callStatus === "connecting"
+    : state.callStatus === "connecting" || state.callStatus === "accepted"
       ? "Connecting…"
-      : "Ringing…";
-  el.innerHTML = `<i class="pill-dot"></i><span>${esc(state.call.name || "Call")}</span><small>${label}</small>${sicon("phone")}`;
+      : state.callStatus === "ringing" || state.callStatus === "calling"
+        ? "Ringing…"
+        : "Call";
+  const modeBit = state.call?.voice ? sicon("mic") : sicon("phone");
+  el.innerHTML = `<i class="pill-dot"></i><span>${esc(state.call.name || "Call")}</span><small>${label}</small>${modeBit}`;
   el.setAttribute("aria-label", `Return to call with ${state.call.name || "study partner"}`);
   el.onclick = () => {
     state.callMinimized = false;
@@ -578,11 +707,11 @@ async function ensureCallPeer(peerId, stream) {
         if (incoming) callRemotes.set(peerId, incoming);
         remoteStream = callRemotes.values().next().value || remoteStream;
         if (state.callStatus !== "connected") {
-          state.callStatus = "connected";
+          setCallStatus("connected", { force: true });
           if (!state.callStartedAt) state.callStartedAt = Date.now();
           startCallClock();
           toast("A study partner joined the call");
-          logCallEvent(callChatIdFor(state.call), "Video call connected", "phone", true);
+          logCallEvent(callChatIdFor(state.call), `${callModeTitle()} connected`, "phone", true, `${activeCallHistoryId || state.call?.id}:connected`);
         }
         renderCall();
         updateOngoingCallPill();
@@ -590,16 +719,16 @@ async function ensureCallPeer(peerId, stream) {
       onStateChange: (status) => {
         if (status === "connected") {
           if (state.callStatus !== "connected") {
-            state.callStatus = "connected";
+            setCallStatus("connected", { force: true });
             if (!state.callStartedAt) state.callStartedAt = Date.now();
             startCallClock();
-            logCallEvent(callChatIdFor(state.call), "Video call connected", "phone", true);
+            logCallEvent(callChatIdFor(state.call), `${callModeTitle()} connected`, "phone", true, `${activeCallHistoryId || state.call?.id}:connected`);
           }
           startMeshWatch();
         } else if (status === "failed" || status === "disconnected") {
           callRemotes.delete(peerId);
           if (!callRemotes.size && state.callStatus === "connected") {
-            state.callStatus = "connecting";
+            setCallStatus("connecting", { force: true });
             toast("Call connection lost. Press Connect to retry.");
           }
         }
@@ -647,6 +776,12 @@ function ensureIncomingCallSubscription() {
     if (backendConfigured && state.user) startRingPoll();
     return;
   }
+  // Idempotent: tear any prior channel before reopening so a double boot
+  // never leaves two rings racing for the same call row.
+  if (incomingCallSub) {
+    try { incomingCallSub.unsubscribe(); } catch { /* ignore */ }
+    incomingCallSub = null;
+  }
   incomingCallSub = subscribeToIncomingCalls(state.user.id, {
     onRinging: async (row) => {
       if (!row?.id || pendingIncomingCall?.id === row.id) return;
@@ -674,7 +809,8 @@ function ensureIncomingCallSubscription() {
       // went out before their signaling channel was up).
       callIsInitiator = true;
       const peerName = state.call.name || "Your partner";
-      logCallEvent(callChatIdFor(state.call), `${peerName} answered`, "phone", false);
+      logCallEvent(callChatIdFor(state.call), `${peerName} answered`, "phone", false, `${row.id}:accepted`);
+      setCallStatus("accepted", { force: true });
       if (state.callStatus === "connected" && activeCallStream) {
         meshMissingPeers().catch(() => {});
       } else {
@@ -687,23 +823,32 @@ function ensureIncomingCallSubscription() {
         || cloudFriends.find((f) => f.id === row.recipient_id)
         || null;
       const who = friend?.name || friend?.handle || "Study partner";
+      const chatId = row.group_id || row.initiator_id || row.recipient_id;
+      const callId = row.id;
+      const declined = row.status === "declined" || row.status === "cancelled";
       if (pendingIncomingCall?.id === row.id) {
-        const chatId = row.group_id || row.initiator_id;
         pendingIncomingCall = null;
         dismissIncomingRing();
-        notifyCall("Missed video call", `${who} ended the ring before you answered`, "phone");
-        logCallEvent(chatId, "Missed video call", "phone", false);
-        toast("Missed call");
+        if (declined) {
+          notifyCall("Call cancelled", `${who} ended the ring before you answered`, "phone", `${callId}:cancelled`);
+          logCallEvent(chatId, "Call cancelled", "phone", false, `${callId}:cancelled`);
+        } else {
+          notifyCall("Missed call", `${who} ended the ring before you answered`, "phone", `${callId}:missed`);
+          logCallEvent(chatId, "Missed call", "phone", false, `${callId}:missed`);
+        }
+        toast(declined ? "Call cancelled" : "Missed call");
       } else if (row.initiator_id === state.user?.id) {
         // Callee declined / timed out — we are the initiator still waiting.
-        notifyCall("Call declined", `${who} did not answer`, "phone");
+        const verb = row.status === "missed" ? "Missed call" : "Call declined";
+        notifyCall(verb, `${who} did not answer`, "phone", `${callId}:${row.status || "declined"}`);
         if (state.call && activeCallHistoryId === row.id) teardownCall(false);
         else {
-          logCallEvent(row.group_id || row.recipient_id, "Call declined — no answer", "phone", true);
-          toast("Call declined");
+          logCallEvent(chatId, row.status === "missed" ? "Missed call — no answer" : "Call declined — no answer", "phone", true, `${callId}:${row.status || "declined"}`);
+          toast(row.status === "missed" ? "Missed call" : "Call declined");
         }
       } else if (activeCallHistoryId && row.id === activeCallHistoryId && state.call) {
-        // Far side hung up mid-call — still log the end on this side.
+        // Far side hung up mid-call — still log the end on this side and
+        // return each user to their pre-call section.
         teardownCall(false);
       }
     },
@@ -714,6 +859,7 @@ function ensureIncomingCallSubscription() {
 function teardownCall(notifyEnd = true) {
   clearTimeout(outgoingRingT);
   stopMeshWatch();
+  stopCallParticipantPoll();
   dismissIncomingRing();
   const callMeta = state.call
     ? {
@@ -721,6 +867,8 @@ function teardownCall(notifyEnd = true) {
         chatId: callChatIdFor(state.call),
         status: state.callStatus,
         startedAt: state.callStartedAt || 0,
+        voice: Boolean(state.call.voice),
+        callId: activeCallHistoryId,
       }
     : null;
   callPeers.forEach((p) => {
@@ -728,6 +876,7 @@ function teardownCall(notifyEnd = true) {
   });
   callPeers.clear();
   callRemotes.clear();
+  callParticipantStates = new Map();
   activePeer = null;
   try {
     activeCallStream?.getTracks().forEach((t) => t.stop());
@@ -735,6 +884,7 @@ function teardownCall(notifyEnd = true) {
   activeCallStream = null;
   remoteStream = null;
   state.call = null;
+  setCallStatus("idle", { force: true });
   state.callStatus = "idle";
   state.callStartedAt = 0;
   state.callMinimized = false;
@@ -742,7 +892,13 @@ function teardownCall(notifyEnd = true) {
   $("#call-window")?.remove();
   updateOngoingCallPill();
   if (activeCallHistoryId) {
-    updateCall(activeCallHistoryId, { status: "ended", ended_at: new Date().toISOString() }).catch(() => {});
+    const endedStatus = callMeta?.status === "ringing" || callMeta?.status === "calling"
+      ? (notifyEnd ? "cancelled" : "missed")
+      : "ended";
+    updateCall(activeCallHistoryId, {
+      status: endedStatus,
+      ended_at: new Date().toISOString(),
+    }).catch(() => {});
     if (state.user)
       upsertCallParticipant({
         call_id: activeCallHistoryId,
@@ -756,27 +912,31 @@ function teardownCall(notifyEnd = true) {
     const wasLive = callMeta.status === "connected";
     const dur = callMeta.startedAt ? callDurationLabel(Date.now() - callMeta.startedAt) : "";
     const mine = Boolean(notifyEnd);
+    const mode = callMeta.voice ? "Voice call" : "Video call";
+    const ek = (suffix) => (callMeta.callId ? `${callMeta.callId}:${suffix}` : undefined);
     if (wasLive && dur) {
-      logCallEvent(callMeta.chatId, `Video call ended · ${dur}`, "phone", mine);
+      logCallEvent(callMeta.chatId, `${mode} ended · ${dur}`, "phone", mine, ek("ended"));
       if (notifyEnd) {
-        notifyCall("Video call ended", `with ${callMeta.name} · ${dur}`, "phone");
+        notifyCall(`${mode} ended`, `with ${callMeta.name} · ${dur}`, "phone", ek("ended-note"));
         toast("Call ended — great studying together");
       }
-    } else if (callMeta.status === "connecting" || callMeta.status === "ringing") {
-      logCallEvent(callMeta.chatId, "Call ended before connecting", "phone", mine);
+    } else if (callMeta.status === "connecting" || callMeta.status === "accepted" || callMeta.status === "ringing" || callMeta.status === "calling") {
+      logCallEvent(callMeta.chatId, "Call ended before connecting", "phone", mine, ek("pre-end"));
       if (notifyEnd) {
-        notifyCall("Call ended", `with ${callMeta.name} — no connection`, "phone");
+        notifyCall("Call ended", `with ${callMeta.name} — no connection`, "phone", ek("pre-end-note"));
         toast("Call ended");
       } else {
         toast("The other side ended the call");
       }
     } else {
-      logCallEvent(callMeta.chatId, "Video call ended", "phone", mine);
+      logCallEvent(callMeta.chatId, `${mode} ended`, "phone", mine, ek("ended"));
       if (notifyEnd) {
-        notifyCall("Video call ended", `with ${callMeta.name}`, "phone");
+        notifyCall(`${mode} ended`, `with ${callMeta.name}`, "phone", ek("ended-note"));
         toast("Call ended — great studying together");
       }
     }
+    // Each side returns to the section they were in before the room opened.
+    restoreSectionAfterCall();
   }
 }
 
@@ -790,15 +950,17 @@ function showIncomingCall(row) {
   const name = friend?.name || friend?.handle || "Someone";
   const handle = friend?.handle || "";
   const chatId = row.group_id || row.initiator_id;
+  const isVoice = row.call_type === "voice" || row.metadata?.callType === "voice";
+  const modeTitle = isVoice ? "Incoming voice call" : "Incoming video call";
   const ring = document.createElement("div");
   ring.id = "incoming-call-ring";
   ring.className = "call-ring-overlay";
   ring.setAttribute("role", "alertdialog");
   ring.setAttribute("aria-modal", "true");
-  ring.setAttribute("aria-label", `Incoming video call from ${name}`);
+  ring.setAttribute("aria-label", `${modeTitle} from ${name}`);
   ring.innerHTML = `
     <div class="call-ring-card" role="document">
-      <div class="call-ring-eyebrow">${sicon("phone")} Incoming video call</div>
+      <div class="call-ring-eyebrow">${sicon(isVoice ? "mic" : "phone")} ${modeTitle}</div>
       <div class="call-ring-avatar">
         <span class="wave w1"></span><span class="wave w2"></span>
         ${friendAvatarMarkup(row.initiator_id, handle || "?", name)}
@@ -807,13 +969,13 @@ function showIncomingCall(row) {
       <p>${handle ? "@" + esc(handle) + " · " : ""}is calling you</p>
       <div class="call-ring-actions">
         <button type="button" class="call-ring-btn decline" data-ic-decline>${sicon("x")} Decline</button>
-        <button type="button" class="call-ring-btn accept" data-ic-accept>${sicon("phone")} Accept</button>
+        <button type="button" class="call-ring-btn accept" data-ic-accept>${sicon(isVoice ? "mic" : "phone")} Accept</button>
       </div>
     </div>`;
   document.body.append(ring);
   startRingChime();
-  notifyCall("Incoming video call", `${name} is calling you now`, "phone");
-  logCallEvent(chatId, `Incoming video call from ${name}`, "phone", false);
+  notifyCall(modeTitle, `${name} is calling you now`, "phone", `${row.id}:ring`);
+  logCallEvent(chatId, `${modeTitle} from ${name}`, "phone", false, `${row.id}:ring`);
   toast(`${name} is calling`);
   if (ringTimeoutT) clearTimeout(ringTimeoutT);
   ringTimeoutT = setTimeout(async () => {
@@ -827,26 +989,26 @@ function showIncomingCall(row) {
       status: "declined",
       left_at: new Date().toISOString(),
     }).catch(() => {});
-    notifyCall("Missed video call", `${name} rang but nobody answered`, "phone");
-    logCallEvent(chatId, "Missed video call (timed out)", "phone", false);
+    notifyCall("Missed call", `${name} rang but nobody answered`, "phone", `${row.id}:missed`);
+    logCallEvent(chatId, "Missed call (timed out)", "phone", false, `${row.id}:missed`);
   }, 45000);
   ring.querySelector("[data-ic-decline]").onclick = async () => {
     pendingIncomingCall = null;
     dismissIncomingRing();
-    await updateCall(row.id, { status: "missed", ended_at: new Date().toISOString() }).catch(() => {});
+    await updateCall(row.id, { status: "declined", ended_at: new Date().toISOString() }).catch(() => {});
     await upsertCallParticipant({
       call_id: row.id,
       user_id: state.user.id,
       status: "declined",
       left_at: new Date().toISOString(),
     }).catch(() => {});
-    notifyCall("Call declined", `You declined ${name}`, "phone");
-    logCallEvent(chatId, "Video call declined", "phone", true);
+    notifyCall("Call declined", `You declined ${name}`, "phone", `${row.id}:declined`);
+    logCallEvent(chatId, `${isVoice ? "Voice" : "Video"} call declined`, "phone", true, `${row.id}:declined`);
   };
   ring.querySelector("[data-ic-accept]").onclick = async () => {
     pendingIncomingCall = null;
     dismissIncomingRing();
-    logCallEvent(chatId, "Video call accepted", "phone", true);
+    logCallEvent(chatId, `${isVoice ? "Voice" : "Video"} call accepted`, "phone", true, `${row.id}:accepted`);
     await acceptIncomingCall(row);
   };
 }
@@ -855,6 +1017,8 @@ async function acceptIncomingCall(row) {
   if (!state.user) return;
   const friend = cloudFriends.find((f) => f.id === row.initiator_id) || null;
   const room = row.room_id || dmCallRoomId(row.initiator_id, state.user.id);
+  const isVoice = row.call_type === "voice" || row.metadata?.callType === "voice";
+  rememberSectionBeforeCall();
   state.call = {
     id: room,
     peerId: row.initiator_id,
@@ -863,13 +1027,17 @@ async function acceptIncomingCall(row) {
     emoji: "◉",
     color: "#47765a",
     extras: [],
+    voice: isVoice,
+    callType: isVoice ? "voice" : "video",
   };
   state.callMinimized = false;
-  state.callStatus = "connecting";
+  setCallStatus("accepted", { force: true });
   activeCallHistoryId = row.id;
   callIsInitiator = false; // callee waits for the offer
   renderCall();
   updateOngoingCallPill();
+  startCallParticipantPoll();
+  refreshCallParticipantsUi().catch(() => {});
   // Join signaling BEFORE flipping history: the initiator's onAccepted
   // offer must not race an empty channel.
   try {
@@ -884,32 +1052,41 @@ async function acceptIncomingCall(row) {
     status: "connected",
     joined_at: new Date().toISOString(),
   }).catch(() => {});
+  setCallStatus("connecting", { force: true });
   startMeshWatch();
 }
-async function startOutgoingCall(chatId) {
+async function startOutgoingCall(chatId, opts = {}) {
   if (!requireAuth("start a call")) return;
+  const voice = Boolean(opts.voice);
   const group = allGroups().find((g) => g.id === chatId);
   const isGroup = Boolean(group);
   const peerId = isGroup ? null : chatId;
   const roomId = isGroup ? chatId : dmCallRoomId(state.user.id, chatId);
   const peer = peerId ? (cloudFriends.find((f) => f.id === peerId) || null) : null;
+  rememberSectionBeforeCall();
   state.call = isGroup
-    ? { id: roomId, kind: "group", name: group?.name || "Group call", emoji: group?.emoji || "◉", color: group?.color || "#47765a", extras: [] }
-    : { id: roomId, peerId, kind: "dm", name: peer?.name || peer?.handle || "Study partner", emoji: "◉", color: "#47765a", extras: [] };
+    ? { id: roomId, kind: "group", name: group?.name || "Group call", emoji: group?.emoji || "◉", color: group?.color || "#47765a", extras: [], voice, callType: voice ? "voice" : "video" }
+    : { id: roomId, peerId, kind: "dm", name: peer?.name || peer?.handle || "Study partner", emoji: "◉", color: "#47765a", extras: [], voice, callType: voice ? "voice" : "video" };
   state.callMinimized = false;
-  state.callStatus = "connecting";
+  setCallStatus("ringing", { force: true });
   callIsInitiator = true;
   activeCallHistoryId = null;
+  callParticipantStates = new Map();
   renderCall();
   updateOngoingCallPill();
+  startCallParticipantPoll();
   const partnerLabel = isGroup
     ? group?.name || "your group"
     : peer?.name || peer?.handle || "your partner";
+  const mode = voice ? "Voice" : "Video";
   logCallEvent(
     chatId,
-    isGroup ? `Calling the group “${partnerLabel}”…` : `Calling ${partnerLabel}…`,
+    isGroup
+      ? `Calling the group “${partnerLabel}” (${mode.toLowerCase()})…`
+      : `Calling ${partnerLabel} (${mode.toLowerCase()})…`,
     "phone",
     true,
+    `out:${roomId}:${Date.now()}`,
   );
   if (backendConfigured && state.user && navigator.onLine !== false) {
     try {
@@ -919,7 +1096,9 @@ async function startOutgoingCall(chatId) {
         recipient_id: isGroup ? null : peerId,
         group_id: isGroup ? chatId : null,
         status: "ringing",
+        call_type: voice ? "voice" : "video",
         started_at: new Date().toISOString(),
+        metadata: { callType: voice ? "voice" : "video" },
       });
       activeCallHistoryId = result.data?.id || null;
       if (activeCallHistoryId) {
@@ -951,13 +1130,14 @@ async function startOutgoingCall(chatId) {
             /* members list unavailable — mesh still dials known peers */
           }
         }
+        refreshCallParticipantsUi().catch(() => {});
       }
       // 1:1: wait for Accept before offering (grace retry covers a lost
       // early offer if their channel wasn't up yet).
       if (!isGroup) {
         clearTimeout(outgoingRingT);
         outgoingRingT = setTimeout(() => {
-          if (state.call && state.callStatus === "connecting" && !callPeers.size) {
+          if (state.call && (state.callStatus === "ringing" || state.callStatus === "calling" || state.callStatus === "connecting") && !callPeers.size) {
             connectCall({ force: true }).catch(() => {});
           }
         }, 2500);
@@ -968,6 +1148,7 @@ async function startOutgoingCall(chatId) {
     }
   }
   // Group or no backend: join immediately as mesh initiator for known peers.
+  setCallStatus("calling", { force: true });
   connectCall().catch(() => {});
   if (isGroup) startMeshWatch();
 }
@@ -5682,6 +5863,104 @@ function cloudFriendPhoto(id) {
 // to paint checkboxes.
 let chatSelectMode = false;
 let selectedChats = new Set();
+// Per-message checkbox selection inside ONE open conversation. Enter from
+// the chat menu ("Select messages") or after choosing Delete on a chat row.
+// Only the checked ids are removed — untouched bubbles stay put.
+let msgSelectMode = null; // { chatId, ids: Set<string> }
+
+function enterMsgSelectMode(chatId, preselectIds) {
+  if (!chatId) return;
+  state.activeChat = chatId;
+  groupNav = null;
+  groupSearch = null;
+  msgSelectMode = {
+    chatId,
+    ids: new Set(preselectIds && preselectIds.length ? preselectIds : []),
+  };
+  chatSelectMode = false;
+  selectedChats.clear();
+  const body = $("#tab-messages") || $("#community-body");
+  if (state.tab === "community" && state.subtab === "messages") renderCommunity();
+  else if (body) renderMessages(body);
+  else shell();
+}
+
+function exitMsgSelectMode() {
+  if (!msgSelectMode) return;
+  msgSelectMode = null;
+  const body = $("#tab-messages") || $("#community-body");
+  if (state.tab === "community" && state.subtab === "messages") renderCommunity();
+  else if (body) renderMessages(body);
+}
+
+function toggleMsgSelect(mid) {
+  if (!msgSelectMode || !mid) return;
+  if (msgSelectMode.ids.has(mid)) msgSelectMode.ids.delete(mid);
+  else msgSelectMode.ids.add(mid);
+  const body = $("#tab-messages") || $("#community-body");
+  if (body) {
+    // Cheap in-place repaint of the open thread keeps scroll position.
+    if (state.tab === "community" && state.subtab === "messages") renderCommunity();
+    else renderMessages(body);
+  }
+}
+
+function selectAllMsgs(chatId) {
+  if (!msgSelectMode) return;
+  const all = (state.messages[chatId] || []).map((m) => m.id);
+  const every = all.length && all.every((id) => msgSelectMode.ids.has(id));
+  msgSelectMode.ids = every ? new Set() : new Set(all);
+  const body = $("#tab-messages") || $("#community-body");
+  if (body) {
+    if (state.tab === "community" && state.subtab === "messages") renderCommunity();
+    else renderMessages(body);
+  }
+}
+
+// Remove ONLY the checked messages from this conversation. Local first (so
+// the UI never waits on the network), cloud delete best-effort, and a
+// per-chat tombstone list stops history/realtime from resurrecting them
+// after a refresh ("ghost" bubbles).
+function deleteSelectedMessages(chatId) {
+  if (!msgSelectMode || !msgSelectMode.ids.size) return;
+  const ids = [...msgSelectMode.ids];
+  confirmBox(
+    `Delete ${ids.length} message${ids.length === 1 ? "" : "s"}?`,
+    "Only the selected messages are removed from this device. Others in the chat keep their copy unless you own them.",
+    async () => {
+      const list = (state.messages[chatId] || []).filter((m) => !msgSelectMode.ids.has(m.id));
+      const cloudIds = (state.messages[chatId] || [])
+        .filter((m) => msgSelectMode.ids.has(m.id) && m.cloudId)
+        .map((m) => m.cloudId);
+      state.messages[chatId] = list;
+      const pins = { ...(state.pins || {}) };
+      const keptPins = (pins[chatId] || []).filter((pid) => !msgSelectMode.ids.has(pid));
+      if (keptPins.length) pins[chatId] = keptPins;
+      else delete pins[chatId];
+      state.pins = pins;
+      // Tombstones: local ids + cloud ids so mergeCloudRows and realtime
+      // inserts skip them on every later load.
+      const tombs = { ...(state.deletedMsgs || {}) };
+      const bag = { ...(tombs[chatId] || {}) };
+      for (const mid of msgSelectMode.ids) bag[mid] = Date.now();
+      for (const cid of cloudIds) bag[cid] = Date.now();
+      tombs[chatId] = bag;
+      state.deletedMsgs = tombs;
+      msgSelectMode = null;
+      persist();
+      if (signedIn()) {
+        for (const cid of cloudIds) {
+          deleteCloudMessage(cid).catch(() => {});
+        }
+      }
+      const body = $("#tab-messages") || $("#community-body");
+      if (state.tab === "community" && state.subtab === "messages") renderCommunity();
+      else if (body) renderMessages(body);
+      notify(`${ids.length} message${ids.length === 1 ? "" : "s"} deleted`);
+    },
+    { eyebrow: "Delete messages", yesLabel: "Delete", noLabel: "Keep" },
+  );
+}
 
 function startChatSelectMode(preselectId) {
   chatSelectMode = true;
@@ -5726,6 +6005,13 @@ function deleteSelectedChats() {
       chatSelectMode = false;
       selectedChats.clear();
       persist();
+      // Single chat chosen from an open thread: land inside THAT
+      // conversation with per-message checkboxes ready.
+      if (ids.length === 1 && state.activeChat === ids[0]) {
+        enterMsgSelectMode(ids[0]);
+        notify("Select messages to delete");
+        return;
+      }
       const body = $("#tab-messages") || $("#community-body");
       if (state.tab === "community" && state.subtab === "messages") renderCommunity();
       else if (body) renderMessages(body);
@@ -5962,7 +6248,46 @@ function messageText(m) {
     return m.mime && m.mime.startsWith("image/")
       ? `Photo${m.file ? ": " + m.file : ""}`
       : `File${m.file ? ": " + m.file : ""}`;
+  if (m.kind === "call") return m.text || "Call";
   return cleanText(m.text || "");
+}
+
+// Centralised bubble avatar: own messages always use the signed-in profile
+// photo (same source as Settings → profile), peers use their photo when we
+// have one. Falls back to a tinted initial — never a broken image.
+function messageAvatarHtml(id, m, isGroup) {
+  if (m.kind === "call") return "";
+  if (m.me) {
+    const src = resolvePhoto(state.profile.photo);
+    const letter = esc(((state.profile.name || state.profile.handle || "Y")[0] || "Y").toUpperCase());
+    return `<span class="bubble-ava me-ava">${avatarMarkup(src, letter)}</span>`;
+  }
+  if (!isGroup) return "";
+  const f = cloudFriends.find((x) => x.id === m.sender_id)
+    || state.friends.find((x) => x.id === m.sender_id)
+    || null;
+  const src = resolvePhoto(f?.photo) || friendPhotoUrl(m.sender_id);
+  const name = f?.name || f?.handle || m.sysName || "·";
+  const letter = esc((String(name).replace(/^@/, "")[0] || "?").toUpperCase());
+  return `<span class="bubble-ava">${src ? `<img src="${esc(src)}" alt="" loading="lazy">` : letter}</span>`;
+}
+
+function bubbleRowHtml(chatId, m, i) {
+  const isGroup = allGroups().some((g) => g.id === chatId);
+  const isSelf = isSelfChat(chatId);
+  const selectOn = msgSelectMode && msgSelectMode.chatId === chatId;
+  const selected = selectOn && msgSelectMode.ids.has(m.id);
+  const ava = selectOn ? "" : messageAvatarHtml(chatId, m, isGroup && !isSelf);
+  const check = selectOn
+    ? `<span class="msg-check${selected ? " on" : ""}" aria-hidden="true">${selected ? sicon("check") : ""}</span>`
+    : "";
+  const rowCls = `bubble-row${m.me ? " me" : ""}${selectOn ? " select" : ""}${selected ? " selected" : ""}`;
+  const attrs = selectOn
+    ? `data-toggle-msg="${esc(m.id)}" role="checkbox" aria-checked="${selected ? "true" : "false"}" tabindex="0"`
+    : `data-midx="${i}"`;
+  const inner = `<div class="bubble ${m.me ? "me" : ""}" ${attrs}>${check}${messageHtml(m)}</div>`;
+  if (m.me) return `<div class="${rowCls}">${inner}${ava}</div>`;
+  return `<div class="${rowCls}">${ava}${inner}</div>`;
 }
 
 function pollVotes(m) {
@@ -6162,6 +6487,7 @@ function groupMenuMarkup(id) {
     + `${item("info", "book", "Group info", "About this group")}`
     + `<hr class="gsep">`
     + `${canManage ? item("settings", "gear", "Group settings", "Name, description, topics") : ""}`
+    + `${item("selectmsgs", "check", "Select messages", "Pick messages to delete")}`
     + `${item("selectchats", "trash", "Delete chats", "Multi-select chats to remove")}`
     + `${item("clear", "trash", "Clear local history", "Removes messages on this device")}`
     + `${owner ? "" : item("report", "flag", "Report group", "Alert moderation")}`
@@ -6209,6 +6535,7 @@ function dmMenuMarkup(id) {
     + `${media}`
     + `${muted ? item("unmute", "volume", "Unmute notifications", esc(muteLabel(id))) : item("mute", "mute", "Mute notifications", "Silence this chat")}`
     + `${social}`
+    + `${self ? "" : item("selectmsgs", "check", "Select messages", "Pick messages to delete")}`
     + `<hr class="gsep">`
     + `${item("selectchats", "trash", "Delete chats", "Multi-select chats to remove")}`
     + `${item("clear", "trash", "Clear local history", "Removes messages on this device")}`
@@ -6245,7 +6572,17 @@ function chatMarkup(id) {
       ? `<div class="reply-strip"><div><strong>Replying to ${esc(chatReply.author)}</strong><span>${escSnippet(chatReply.text, 80)}</span></div><button type="button" data-reply-cancel title="Cancel reply">×</button></div>`
       : "";
   const rec = voiceRec
-    ? `<div class="rec-bar${voiceRec.paused ? " paused" : ""}" role="status" aria-label="Recording voice note"><button type="button" class="icon-btn rec-btn" data-rec-cancel title="Discard recording" aria-label="Discard recording">${sicon("trash")}</button><span class="rec-dot" aria-hidden="true"></span><button type="button" class="icon-btn rec-pause" data-rec-pause title="Pause recording" aria-label="Pause or resume recording">${sicon("pause")}${sicon("play")}</button><span class="rec-wave" data-rec-wave aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="rec-time" data-rec-time>00:00</span><span class="rec-hint">Recording… tap Send when done</span><button type="button" class="primary rec-send" data-rec-send>${sicon("check")} <span>Send</span></button></div>`
+    ? `<div class="rec-bar${voiceRec.paused ? " paused" : ""}" role="status" aria-label="Recording voice note"><button type="button" class="icon-btn rec-btn" data-rec-cancel title="Discard recording" aria-label="Discard recording">${sicon("trash")}</button><span class="rec-dot" aria-hidden="true"></span><button type="button" class="icon-btn rec-pause" data-rec-pause title="Pause or resume recording" aria-label="Pause or resume recording">${sicon("pause")}${sicon("play")}</button><span class="rec-wave" data-rec-wave aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="rec-time" data-rec-time>00:00</span><span class="rec-hint">Recording… tap Send when done</span><button type="button" class="primary rec-send" data-rec-send>${sicon("check")} <span>Send</span></button></div>`
+    : "";
+  const msgSelectBar = msgSelectMode && msgSelectMode.chatId === id
+    ? `<div class="msg-select-head" role="toolbar" aria-label="Select messages">
+        <button type="button" class="ghost" data-msg-select-cancel>Cancel</button>
+        <strong>${msgSelectMode.ids.size ? `${msgSelectMode.ids.size} selected` : "Select messages"}</strong>
+        <span class="msg-select-actions">
+          <button type="button" class="ghost" data-msg-select-all>Select all</button>
+          <button type="button" class="delete" data-msg-select-delete${msgSelectMode.ids.size ? "" : " disabled"}>Delete${msgSelectMode.ids.size ? ` (${msgSelectMode.ids.size})` : ""}</button>
+        </span>
+      </div>`
     : "";
   const isFriendChat = (state.friends || []).some((f) => f.id === id) || cloudFriends.some((f) => f.id === id) || isSelf;
   const isGroup = allGroups().some((g) => g.id === id);
@@ -6259,7 +6596,7 @@ function chatMarkup(id) {
   const headPhoto = isGroup ? "" : isSelf
     ? `<span class="chat-avatar">${avatarMarkup(resolvePhoto(state.profile.photo), (state.profile.name || "Y")[0].toUpperCase())}</span>`
     : `<span class="chat-avatar">${avatarMarkup(info.photo || "", (info.name.replace(/^@/, "")[0] || "?").toUpperCase())}</span>`;
-  return `<div class="chat-head wa-head"><button type="button" class="wa-back" data-wa-back title="Back to chats" aria-label="Back to chats">${sicon("reply")}<span>Chats</span></button><button type="button" class="chat-head-who" data-chat-profile="${id}" title="Open profile"><span class="chat-ava">${isGroup ? groupAvatarMarkup(allGroups().find((g) => g.id === id)) : headPhoto}</span><span class="chat-head-txt"><strong>${esc(info.name || "@" + (target?.username || target?.handle || "?"))}</strong>${mutedTag}${typing}${presence}</span></button><span class="friend-actions"><button type="button" class="primary wa-call" data-start-call="${id}">${sicon("phone")} <span>Call</span></button>${menu}</span></div>${pinbar}${nav}<div class="chat-body">${msgs.map((m, i) => `<div class="bubble ${m.me ? "me" : ""}" data-midx="${i}">${messageHtml(m)}</div>`).join("") || '<span class="muted">No messages yet. Start the conversation.</span>'}</div>${reply}${rec}<div class="chat-input"><textarea class="input autogrow chat-textarea" id="chat-text" rows="1" data-grow-max="150" placeholder="type a message" aria-label="Type a message"></textarea><div class="chat-extras-wrap"><button type="button" class="icon-btn chat-extras-toggle" data-chat-extras title="Add to your message" aria-label="Add to your message" aria-haspopup="true" aria-expanded="false"><span class="chat-extras-plus">${sicon("plus")}</span></button><div class="chat-extras-menu" data-chat-extras-pop hidden role="dialog" aria-label="Add to your message"><div class="chat-extras-head"><strong>Add to chat</strong><button type="button" class="icon-btn chat-extras-close" data-chat-extras-close title="Close" aria-label="Close menu">${sicon("x")}</button></div><div class="chat-extras-grid"><label class="chat-extras-item" title="Attach a file up to 3 MB"><input type="file" id="chat-file" hidden><span class="chat-extras-ic file">${sicon("clip")}</span><span>File</span></label><button type="button" class="chat-extras-item" id="poll-button" title="Create a poll"><span class="chat-extras-ic poll">${sicon("chart")}</span><span>Poll</span></button><button type="button" class="chat-extras-item" id="voice-button" title="Record a voice note"><span class="chat-extras-ic voice">${sicon("mic")}</span><span>Voice</span></button></div><div class="chat-extras-foot">Files up to 3 MB. Attach documents, start a poll, or record a voice note.</div></div></div><button type="button" class="primary wa-send" id="send-message" aria-label="Send message">Send</button></div>`;
+  return `${msgSelectBar}<div class="chat-head wa-head"><button type="button" class="wa-back" data-wa-back title="Back to chats" aria-label="Back to chats">${sicon("reply")}<span>Chats</span></button><button type="button" class="chat-head-who" data-chat-profile="${id}" title="Open profile"><span class="chat-ava">${isGroup ? groupAvatarMarkup(allGroups().find((g) => g.id === id)) : headPhoto}</span><span class="chat-head-txt"><strong>${esc(info.name || "@" + (target?.username || target?.handle || "?"))}</strong>${mutedTag}${typing}${presence}</span></button><span class="friend-actions wa-call-actions"><button type="button" class="icon-btn wa-call-voice" data-start-call="${id}" data-call-voice="1" title="Voice call" aria-label="Voice call">${sicon("mic")}</button><button type="button" class="primary wa-call" data-start-call="${id}" title="Video call" aria-label="Video call">${sicon("phone")} <span>Call</span></button>${menu}</span></div>${pinbar}${nav}<div class="chat-body">${msgs.map((m, i) => bubbleRowHtml(id, m, i)).join("") || '<span class="muted">No messages yet. Start the conversation.</span>'}</div>${reply}${rec}<div class="chat-input"><textarea class="input autogrow chat-textarea" id="chat-text" rows="1" data-grow-max="150" placeholder="type a message" aria-label="Type a message"></textarea><div class="chat-extras-wrap"><button type="button" class="icon-btn chat-extras-toggle" data-chat-extras title="Add to your message" aria-label="Add to your message" aria-haspopup="true" aria-expanded="false"><span class="chat-extras-plus">${sicon("plus")}</span></button><div class="chat-extras-menu" data-chat-extras-pop hidden role="dialog" aria-label="Add to your message"><div class="chat-extras-head"><strong>Add to chat</strong><button type="button" class="icon-btn chat-extras-close" data-chat-extras-close title="Close" aria-label="Close menu">${sicon("x")}</button></div><div class="chat-extras-grid"><label class="chat-extras-item" title="Attach a file up to 3 MB"><input type="file" id="chat-file" hidden><span class="chat-extras-ic file">${sicon("clip")}</span><span>File</span></label><button type="button" class="chat-extras-item" id="poll-button" title="Create a poll"><span class="chat-extras-ic poll">${sicon("chart")}</span><span>Poll</span></button><button type="button" class="chat-extras-item" id="voice-button" title="Record a voice note"><span class="chat-extras-ic voice">${sicon("mic")}</span><span>Voice</span></button></div><div class="chat-extras-foot">Files up to 3 MB. Attach documents, start a poll, or record a voice note.</div></div></div><button type="button" class="primary wa-send" id="send-message" aria-label="Send message">Send</button></div>`;
 }
 
 function closeChatExtras(root) {
@@ -6589,6 +6926,13 @@ function bindChat(root, id) {
     root.dataset.bubbleDelegated = "1";
     root.addEventListener("click", (e) => {
       const cid = root.dataset.chatDelegatedId;
+      // Message multi-select: checkbox rows take priority over bubble tools.
+      const msgToggle = e.target.closest("[data-toggle-msg]");
+      if (msgToggle && root.contains(msgToggle)) {
+        e.stopPropagation();
+        toggleMsgSelect(msgToggle.dataset.toggleMsg);
+        return;
+      }
       const pin = e.target.closest("[data-pin]");
       if (pin && root.contains(pin)) {
         const wasPinned = pinnedIdsFor(cid).includes(pin.dataset.pin);
@@ -6704,6 +7048,9 @@ function bindChat(root, id) {
     renderMessages(root);
     notify("Latest pin removed");
   });
+  $("[data-msg-select-cancel]", root)?.addEventListener("click", exitMsgSelectMode);
+  $("[data-msg-select-all]", root)?.addEventListener("click", () => selectAllMsgs(id));
+  $("[data-msg-select-delete]", root)?.addEventListener("click", () => deleteSelectedMessages(id));
   $$("[data-pin-jump]", root).forEach(
     (b) =>
       (b.onclick = () => jumpToPinnedMessage(id, b.dataset.pinJump)),
@@ -6714,13 +7061,14 @@ function bindChat(root, id) {
   $("[data-pins-all]", root)?.addEventListener("click", () => {
     openPinnedList(id);
   });
-  const call = $("[data-start-call]", root);
-  if (call)
-    call.onclick = () => {
+  const callBtns = $$("[data-start-call]", root);
+  callBtns.forEach((btn) => {
+    btn.onclick = () => {
       // Real ring path: history + participants + Accept/Decline — never a
       // bare local state.call flip that never leaves this device.
-      startOutgoingCall(id);
+      startOutgoingCall(id, { voice: btn.dataset.callVoice === "1" });
     };
+  });
 }
 
 function extractLinks(text) {
@@ -6911,6 +7259,7 @@ function dmAction(act, id, root) {
   if (act === "mute") return openDmMuteModal(id, name);
   if (act === "unmute") return clearChatMute(id);
   if (act === "selectchats") return startChatSelectMode(id);
+  if (act === "selectmsgs") return enterMsgSelectMode(id);
   if (act === "contact") return isSelfChat(id) ? notify("This is your own space — notes to yourself live here.") : openContactCard(id, info);
   if (act === "clear") {
     return confirmBox(`Clear ${isSelfChat(id) ? "your notes" : name} history?`, "Messages on this device will be removed. New messages still arrive.", () => {
@@ -7542,6 +7891,7 @@ function groupAction(act, id, root) {
   else if (act === "mute") openMuteModal(id);
   else if (act === "unmute") clearChatMute(id);
   else if (act === "selectchats") startChatSelectMode(id);
+  else if (act === "selectmsgs") enterMsgSelectMode(id);
   else if (act === "media") openGroupMedia(id);
   else if (act === "members") openGroupMembers(id);
   else if (act === "info") openGroupInfo(id);
@@ -8057,7 +8407,7 @@ function paintChatBody(id, root, scrollBottom) {
   if (!body) return;
   const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 120;
   const msgs = state.messages[id] || [];
-  body.innerHTML = msgs.map((m, i) => `<div class="bubble ${m.me ? "me" : ""}" data-midx="${i}">${messageHtml(m)}</div>`).join("")
+  body.innerHTML = msgs.map((m, i) => bubbleRowHtml(id, m, i)).join("")
     || '<span class="muted">No messages yet. Start the conversation.</span>';
   if (scrollBottom || nearBottom) body.scrollTop = body.scrollHeight;
 }
@@ -8068,7 +8418,7 @@ function appendChatBubble(id, m, root) {
   if (empty) empty.remove();
   const idx = (state.messages[id] || []).length - 1;
   const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 160;
-  body.insertAdjacentHTML("beforeend", `<div class="bubble ${m.me ? "me" : ""}" data-midx="${idx}">${messageHtml(m)}</div>`);
+  body.insertAdjacentHTML("beforeend", bubbleRowHtml(id, m, idx));
   if (nearBottom || m.me) body.scrollTop = body.scrollHeight;
   return true;
 }
@@ -8132,11 +8482,14 @@ function mergeCloudRows(id, rows, names, me) {
     if (m.id) seen.add(m.id);
     if (m.cloudId) seen.add(m.cloudId);
   }
+  // Tombstones from per-message delete — never resurrect a deleted bubble.
+  const tombs = state.deletedMsgs?.[id] || null;
   if (isSelfChat(id)) return 0; // self-chat is local-first, no server rows
   let added = 0;
   const merged = [...(state.messages[id] || [])];
   for (const r of rows) {
     if (!r || !r.id || seen.has(r.id)) continue;
+    if (tombs && (tombs[r.id] || tombs[r.cloudId])) continue;
     seen.add(r.id);
     merged.push({
       id: r.id,
@@ -8397,9 +8750,11 @@ function subscribeToChat(id) {
         return;
       }
       // Someone else's message: if it's already cached (history raced
-      // realtime), just paint — never append a twin.
+      // realtime), just paint — never append a twin. Tombstoned ids from a
+      // local multi-delete stay gone after refresh too.
       const dupe = (state.messages[id] || []).some((m) => m.id === message.id || m.cloudId === message.id);
       if (dupe) return;
+      if (state.deletedMsgs?.[id]?.[message.id]) return;
       // A previously bulk-deleted chat reopens itself when a new message lands.
       if (state.deletedChats?.[id]) {
         const d = { ...state.deletedChats };
@@ -8521,6 +8876,13 @@ function askDeleteMessage(id, mid, root) {
     state.messages[id] = (state.messages[id] || []).filter((m) => m.id !== mid);
     const pins = pinnedIdsFor(id);
     if (pins.includes(mid)) togglePinMessage(id, mid);
+    // Tombstone stops history/realtime from resurrecting this id later.
+    const tombs = { ...(state.deletedMsgs || {}) };
+    const bag = { ...(tombs[id] || {}) };
+    bag[mid] = Date.now();
+    if (msg.cloudId) bag[msg.cloudId] = Date.now();
+    tombs[id] = bag;
+    state.deletedMsgs = tombs;
     persist();
     if (msg.cloudId && signedIn()) {
       try {
@@ -8700,44 +9062,63 @@ function renderCall() {
   }
   const q = callQualityMeta();
   const minimized = Boolean(state.callMinimized);
+  const isVoice = Boolean(state.call.voice || state.call.callType === "voice");
   const call = document.createElement("div");
   call.id = "call-window";
-  call.className = `call-window ${minimized ? "minimized" : ""} q-${q.cls}`;
+  call.className = `call-window ${minimized ? "minimized" : ""} q-${q.cls}${isVoice ? " voice" : ""}`;
   call.setAttribute("role", "dialog");
-  call.setAttribute("aria-label", `Call with ${state.call.name}`);
+  call.setAttribute("aria-label", `${callModeTitle()} with ${state.call.name}`);
   // Keep 1:1 remoteStream mirror in sync with the mesh map.
   if (callRemotes.size === 1) remoteStream = callRemotes.values().next().value;
   else if (callRemotes.size === 0) remoteStream = null;
   const isGroup = state.call.kind === "group" || callRemotes.size > 1;
   const remoteTiles = [...callRemotes.entries()].map(([pid, stream], i) => {
     const label = state.call.kind === "group" ? `Guest ${i + 1}` : "Partner";
+    const pStatus = callParticipantStates.get(pid);
+    const statusBit = pStatus && pStatus !== "connected" ? ` <em class="part-st st-${esc(pStatus)}">${esc(pStatus)}</em>` : "";
     return `<div class="call-tile remote" data-remote-tile="${esc(pid)}">${
-      stream
+      stream && !isVoice
         ? `<video class="call-video" data-call-remote="${esc(pid)}" autoplay playsinline></video>`
-        : `<div class="tile-avatar">${state.call.emoji || "◉"}</div><div class="tile-hint"><span class="call-dots"><i></i><i></i><i></i></span> Connecting…</div>`
-    }<span class="tile-tag">${sicon("user")} ${label}</span></div>`;
+        : `<div class="tile-avatar">${state.call.emoji || "◉"}</div>${stream ? "" : `<div class="tile-hint"><span class="call-dots"><i></i><i></i><i></i></span> Connecting…</div>`}`
+    }<span class="tile-tag">${sicon(isVoice ? "mic" : "user")} ${label}${statusBit}</span></div>`;
   }).join("");
   const partnerTile = callRemotes.size
     ? (isGroup ? remoteTiles : `<div class="call-tile main">${
-        remoteStream
+        remoteStream && !isVoice
           ? `<video class="call-video" data-call-remote autoplay playsinline></video><span class="tile-tag">${sicon("user")} Partner</span>`
-          : `<div class="tile-avatar">${state.call.emoji || "◉"}</div><span class="tile-tag">${sicon("user")} Partner</span>`
+          : `<div class="tile-avatar">${state.call.emoji || "◉"}</div><span class="tile-tag">${sicon(isVoice ? "mic" : "user")} Partner</span>`
       }</div>`)
-    : `<div class="call-tile main"><div class="tile-avatar">${state.call.emoji || "◉"}</div><span class="tile-tag">${sicon("user")} ${isGroup ? "Room" : "Partner"}</span><div class="tile-hint">${
-        state.callStatus === "connecting"
-          ? `<span class="call-dots"><i></i><i></i><i></i></span> ${state.call.kind === "dm" && callIsInitiator ? "Ringing your partner…" : "Waiting for others to join…"}`
-          : "Press Connect to start the call"
+    : `<div class="call-tile main"><div class="tile-avatar">${state.call.emoji || "◉"}</div><span class="tile-tag">${sicon(isVoice ? "mic" : "user")} ${isGroup ? "Room" : "Partner"}</span><div class="tile-hint">${
+        state.callStatus === "ringing" || state.callStatus === "calling"
+          ? `<span class="call-dots"><i></i><i></i><i></i></span> ${state.call.kind === "dm" && callIsInitiator ? (isVoice ? "Ringing your partner…" : "Ringing your partner…") : "Waiting for others to join…"}`
+          : state.callStatus === "connecting" || state.callStatus === "accepted"
+            ? `<span class="call-dots"><i></i><i></i><i></i></span> Connecting…`
+            : "Press Connect to start the call"
       }</div></div>`;
-  const selfTile = activeCallStream
+  const selfTile = activeCallStream && !isVoice
     ? `<video class="call-video mirrored" data-call-self autoplay playsinline muted></video>`
-    : `<div class="tile-avatar small">${state.profile.photo ? `<img src="${esc(state.profile.photo)}" alt="">` : esc(state.profile.avatar || "SL")}</div>`;
+    : isVoice
+      ? `<div class="tile-avatar small">${resolvePhoto(state.profile.photo) ? `<img src="${esc(resolvePhoto(state.profile.photo))}" alt="">` : esc(state.profile.avatar || state.profile.name?.[0] || "SL")}</div>`
+      : `<div class="tile-avatar small">${state.profile.photo ? `<img src="${esc(state.profile.photo)}" alt="">` : esc(state.profile.avatar || "SL")}</div>`;
   const stageInner = isGroup && callRemotes.size
     ? `${selfTile ? `<div class="call-tile self-inline">${selfTile}<span class="tile-tag">${state.callMuted ? sicon("mute") + " Muted" : "You"}</span></div>` : ""}${remoteTiles}`
     : `<div class="call-tile main">${partnerTile.replace(/^<div class="call-tile main">|<\/div>$/g, "")}</div>
        <div class="call-tile self">${selfTile}<span class="tile-tag">${state.callMuted ? sicon("mute") + " Muted" : "You"}</span></div>`;
+  // Group roster chips: who is ringing / connected / declined / no-answer.
+  let rosterStrip = "";
+  if (isGroup || callParticipantStates.size > 2) {
+    const chips = [...callParticipantStates.entries()]
+      .filter(([uid2]) => uid2 !== (state.user?.id || ""))
+      .map(([uid2, st]) => {
+        const f = cloudFriends.find((x) => x.id === uid2);
+        const who = f?.name || f?.handle || "Guest";
+        return `<span class="roster-chip st-${esc(st)}">${esc(who)}<em>${esc(st)}</em></span>`;
+      }).join("");
+    if (chips) rosterStrip = `<div class="call-roster" aria-label="Participants">${chips}</div>`;
+  }
   call.innerHTML = `
     <div class="call-head">
-      <span class="call-live"><i class="call-dot"></i> ${esc(state.call.name)}${isGroup ? ` · ${callRemotes.size + 1}` : ""}</span>
+      <span class="call-live"><i class="call-dot"></i> ${esc(state.call.name)}${isVoice ? " · voice" : ""}${isGroup ? ` · ${callRemotes.size + 1}` : ""}</span>
       <span class="call-meta">
         <span class="call-timer" data-call-timer>${callDurationText()}</span>
         <span class="call-quality q-${q.cls}"><i></i>${q.label}</span>
@@ -8748,20 +9129,22 @@ function renderCall() {
         <button type="button" class="call-icon danger" data-end title="End call" aria-label="End call">${sicon("x")}</button>
       </span>
     </div>
-    <div class="call-stage ${isGroup ? "group" : ""}" data-call-stage>
+    ${rosterStrip}
+    <div class="call-stage ${isGroup ? "group" : ""}${isVoice ? " voice" : ""}" data-call-stage>
       ${stageInner}
-      ${state.callCameraOff && activeCallStream ? '<div class="cam-off-note">Camera is off</div>' : ""}
-      ${state.callStatus === "connecting" ? '<div class="call-connecting"><span class="call-dots"><i></i><i></i><i></i></span><p>Connecting to your study partner…</p><p class="sub">End-to-end peer connection · audio + video</p></div>' : ""}
+      ${state.callCameraOff && activeCallStream && !isVoice ? '<div class="cam-off-note">Camera is off</div>' : ""}
+      ${state.callStatus === "connecting" || state.callStatus === "accepted" ? `<div class="call-connecting"><span class="call-dots"><i></i><i></i><i></i></span><p>${isVoice ? "Connecting audio…" : "Connecting to your study partner…"}</p><p class="sub">End-to-end peer connection · ${isVoice ? "audio only" : "audio + video"}</p></div>` : ""}
+      ${state.callStatus === "ringing" || state.callStatus === "calling" ? `<div class="call-connecting"><span class="call-dots"><i></i><i></i><i></i></span><p>Ringing…</p><p class="sub">Waiting for an answer</p></div>` : ""}
     </div>
     <div class="call-controls">
       <div class="call-ctrl-group">
-        ${state.callStatus === "connected" ? `<button type="button" class="call-btn" data-call-reaction="fire" title="Send a fire reaction" aria-label="Fire reaction">🔥</button><button type="button" class="call-btn" data-call-reaction="party" title="Send a celebration reaction" aria-label="Celebration reaction">🎉</button><button type="button" class="call-btn" data-call-reaction="strong" title="Send a encouragement reaction" aria-label="Encouragement reaction">💪</button>` : `<button type="button" class="call-btn primary tall" data-connect>${state.callStatus === "connecting" ? '<span class="call-dots light"><i></i><i></i><i></i></span> Connecting…' : sicon("phone") + " Start call"}</button>`}
+        ${state.callStatus === "connected" ? `<button type="button" class="call-btn" data-call-reaction="fire" title="Send a fire reaction" aria-label="Fire reaction">🔥</button><button type="button" class="call-btn" data-call-reaction="party" title="Send a celebration reaction" aria-label="Celebration reaction">🎉</button><button type="button" class="call-btn" data-call-reaction="strong" title="Send a encouragement reaction" aria-label="Encouragement reaction">💪</button>` : `<button type="button" class="call-btn primary tall" data-connect>${state.callStatus === "connecting" || state.callStatus === "calling" || state.callStatus === "ringing" || state.callStatus === "accepted" ? '<span class="call-dots light"><i></i><i></i><i></i></span> Connecting…' : sicon(isVoice ? "mic" : "phone") + (isVoice ? " Start voice call" : " Start call")}</button>`}
       </div>
       <div class="call-ctrl-group">
         <button type="button" class="call-btn round ${state.callMuted ? "off" : ""}" data-mute title="${state.callMuted ? "Unmute microphone" : "Mute microphone"}" aria-pressed="${Boolean(state.callMuted)}" aria-label="Microphone">${state.callMuted ? sicon("mute") : sicon("mic")}</button>
-        <button type="button" class="call-btn round ${state.callCameraOff ? "off" : ""}" data-camera title="${state.callCameraOff ? "Turn camera on" : "Turn camera off"}" aria-pressed="${Boolean(state.callCameraOff)}" aria-label="Camera">${sicon("camera")}</button>
+        ${isVoice ? "" : `<button type="button" class="call-btn round ${state.callCameraOff ? "off" : ""}" data-camera title="${state.callCameraOff ? "Turn camera on" : "Turn camera off"}" aria-pressed="${Boolean(state.callCameraOff)}" aria-label="Camera">${state.callCameraOff ? sicon("mute") : sicon("camera")}</button>
         <button type="button" class="call-btn round" data-flip-camera title="Flip camera" aria-label="Flip camera">${sicon("refresh")}</button>
-        <button type="button" class="call-btn round" data-share title="Share your screen" aria-label="Share screen">${sicon("upload")}</button>
+        <button type="button" class="call-btn round" data-share title="Share your screen" aria-label="Share screen">${sicon("upload")}</button>`}
         <button type="button" class="call-btn round" data-call-chat title="Open chat" aria-label="Open chat">${sicon("chat")}</button>
         <button type="button" class="call-btn round hang" data-end title="Leave call" aria-label="Leave call">${sicon("phone")}</button>
       </div>
@@ -8806,14 +9189,14 @@ function renderCall() {
     activeCallStream?.getAudioTracks().forEach((t) => (t.enabled = !state.callMuted));
     renderCall();
   };
-  $(`[data-camera]`, call).onclick = () => {
+  $(`[data-camera]`, call)?.addEventListener("click", () => {
     state.callCameraOff = !state.callCameraOff;
     eachPeer((peer) => peer.getSenders().forEach((s) => {
       if (s.track?.kind === "video") s.track.enabled = !state.callCameraOff;
     }));
     activeCallStream?.getVideoTracks().forEach((t) => (t.enabled = !state.callCameraOff));
     renderCall();
-  };
+  });
   $(`[data-flip-camera]`, call)?.addEventListener("click", async () => {
     try {
       const videoTrack = activeCallStream?.getVideoTracks()[0];
@@ -8836,7 +9219,7 @@ function renderCall() {
       notify("Could not flip camera: " + (err.message || "unknown error"));
     }
   });
-  $(`[data-share]`, call).onclick = async () => {
+  $(`[data-share]`, call)?.addEventListener("click", async () => {
     try {
       const display = await navigator.mediaDevices?.getDisplayMedia({ video: true });
       if (!display) return;
@@ -8863,7 +9246,7 @@ function renderCall() {
     } catch {
       notify("Screen sharing was cancelled");
     }
-  };
+  });
 
   $("[data-call-pips]", call).onclick = () => {
     state.callMinimized = !state.callMinimized;
@@ -8966,8 +9349,9 @@ async function connectCall({ force = false } = {}) {
       callRemotes.clear();
       activePeer = null;
     }
+    const isVoice = Boolean(state.call?.voice || state.call?.callType === "voice");
     const permission = await navigator.permissions?.query?.({ name: "camera" });
-    if (permission?.state === "denied")
+    if (!isVoice && permission?.state === "denied")
       return notify(
         "Camera permission is blocked. Allow it in browser settings and try again.",
       );
@@ -8978,27 +9362,28 @@ async function connectCall({ force = false } = {}) {
       return notify(
         "Microphone permission is blocked. Allow it in browser settings and try again.",
       );
-    if (state.callStatus !== "connected") state.callStatus = "connecting";
+    if (state.callStatus !== "connected") setCallStatus("connecting", { force: true });
     renderCall();
-    const stream = activeCallStream || await navigator.mediaDevices.getUserMedia({
-      audio: true,
-      video: true,
-    });
+    const stream = activeCallStream || await navigator.mediaDevices.getUserMedia(
+      isVoice ? { audio: true } : { audio: true, video: true },
+    );
     activeCallStream = stream;
     if (!state.callStartedAt) state.callStartedAt = Date.now();
     const targets = await resolveCallTargets();
     await Promise.all(targets.map((id) => ensureCallPeer(id, stream)));
     // Stay in "connecting" until onTrack reports real ICE — never claim
     // "connected" before a peer is up.
-    if (!callPeers.size) state.callStatus = "idle";
+    if (!callPeers.size) setCallStatus(isVoice ? "calling" : "ringing", { force: true });
     renderCall();
     notify(callPeers.size
       ? (callIsInitiator || state.call.kind === "group"
           ? "Outgoing call live — waiting for peers"
           : "Joined — waiting for the offer")
-      : "Camera and microphone connected");
+      : isVoice ? "Microphone connected" : "Camera and microphone connected");
     ensureIncomingCallSubscription();
     startMeshWatch();
+    startCallParticipantPoll();
+    refreshCallParticipantsUi().catch(() => {});
   } catch (error) {
     // A failed start must not leave a half-open camera or a stuck
     // "connecting" state behind.
@@ -9014,10 +9399,17 @@ async function connectCall({ force = false } = {}) {
     callPeers.clear();
     activePeer = null;
     if (state.call) {
-      state.callStatus = "idle";
+      setCallStatus("failed", { force: true });
       renderCall();
     }
-    notify(error?.message || "Could not start camera and microphone");
+    // Permission denials and NotAllowedError are the common cases — keep
+    // the guidance short so the dialog stays readable on phones.
+    const msg = String(error?.name || "") === "NotAllowedError"
+      ? (isVoice
+        ? "Microphone access was blocked — allow the mic and press Connect again."
+        : "Camera/microphone access was blocked — allow them and press Connect again.")
+      : error?.message || "Could not start camera and microphone";
+    notify(msg);
   } finally {
     connectInFlight = false;
     if (forceConnectPending && state.call) {

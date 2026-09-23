@@ -185,6 +185,7 @@ const state = {
   reports: get("sf-reports", []),
   customGroups: get("sf-groups", []),
   messages: get("sf-messages", {}),
+  deletedMsgs: get("sf-deleted-msgs", {}),
   profile: get("sf-profile", {
     name: "Study Learner",
     handle: "study_learner",
@@ -351,6 +352,7 @@ function persistNow() {
   save("sf-groups", state.customGroups);
   save("sf-songs", state.songs);
   save("sf-messages", state.messages);
+  save("sf-deleted-msgs", state.deletedMsgs || {});
   save("sf-profile", state.profile);
   save("sf-notifications", state.notifications);
   save("sf-posts", state.posts);
@@ -894,6 +896,7 @@ async function hydrateCloudState(user) {
     save("sf-reports", state.reports || []);
     save("sf-groups", state.customGroups);
     save("sf-messages", state.messages);
+    save("sf-deleted-msgs", state.deletedMsgs || {});
     save("sf-notifications", state.notifications);
     save("sf-posts", state.posts);
     save("sf-books", state.books || []);
@@ -970,6 +973,7 @@ async function hydrateCloudState(user) {
     save("sf-reports", state.reports || []);
     save("sf-groups", state.customGroups);
     save("sf-messages", state.messages);
+    save("sf-deleted-msgs", state.deletedMsgs || {});
     save("sf-notifications", state.notifications);
     save("sf-posts", state.posts);
     save("sf-books", state.books || []);
@@ -994,6 +998,7 @@ export function setCloudSubscription(sub) {
 const STATE_ARRAYS = ["tasks", "favorites", "owned", "friends", "customGroups", "songs", "posts", "books", "bookFavorites", "bookRecent", "stories", "challenges", "events", "sprints", "sprintInvites", "eventInvites", "challengeInvites", "garden", "focusLog", "notifications", "purchases", "boxes", "achievements", "decks", "mindmaps", "feynmanNotes", "duckChat", "cornellNotes", "reports"];
 const STATE_OBJECT_DEFAULTS = {
   messages: {}, pins: {}, statusSeen: {}, focusDays: {}, techUses: {}, deletedChats: {},
+  deletedMsgs: {},
   techStats: {}, techTime: {}, storeQty: {}, soundMix: {}, blocks: {}, mutedChats: {},
   bookProgress: {}, bookLocal: {},
   bookStats: { opened: {}, completed: [], seconds: 0, pages: 0 },
