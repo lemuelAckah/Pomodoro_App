@@ -98,28 +98,71 @@ function scheduleFlush() {
 
 window.addEventListener("online", () => {
   scheduleFlush();
+  // Offline edits set dirty flags in schedule(); re-push them now that we
+  // can reach the server (pullProductivity merges the rest).
+  schedule("tasks", async () => {
+    const res = await cloudUpsertTasks(
+      (state.tasks || []).map((t) => ({
+        ...t,
+        updated: t.updated || Date.now(),
+        created: t.created || t.updated || Date.now(),
+      })),
+    );
+    if (res.error) throw res.error;
+  }, 0);
+  schedule("notes", async () => {
+    await cloudUpsertNotes("cornell", state.cornellNotes || []);
+    await cloudUpsertNotes("feynman", state.feynmanNotes || []);
+    await cloudUpsertNotes("mindmap", state.mindmaps || []);
+  }, 0);
   syncAll().catch(() => {});
 });
 
 // --- debounced mirror per dataset ---------------------------------------------
 
+// Dirty flags stay set when offline so schedule() can queue the work and the
+// reconnect listener can push it — a bare `return` used to drop every edit
+// made without a connection.
+const dirty = new Set();
+
 function schedule(dataset, fn, delay = 1500) {
-  if (!canSync()) return; // offline: local persistence already happened
+  dirty.add(dataset);
+  if (!canSync()) {
+    // Local persistence already happened; push on reconnect.
+    setSyncStatus(dataset, "offline");
+    return;
+  }
   clearTimeout(timers[dataset]);
   timers[dataset] = setTimeout(async () => {
+    if (!canSync()) {
+      setSyncStatus(dataset, "offline");
+      return;
+    }
     if (inflight[dataset]) return schedule(dataset, fn, 800); // queue behind
     timers[dataset] = null;
+    if (!dirty.has(dataset)) return;
+    dirty.delete(dataset);
     inflight[dataset] = true;
     setSyncStatus(dataset, "saving");
     try {
       await fn();
       setSyncStatus(dataset, "saved");
     } catch {
+      dirty.add(dataset); // retry on next flush/tick
       setSyncStatus(dataset, "error");
     } finally {
       inflight[dataset] = false;
     }
   }, delay);
+}
+
+// Re-run the mirror for every dataset edited while offline. Callers pass the
+// same factory they used for schedule() so the offline work finally lands.
+export function flushDirtyMirrors(mirrors) {
+  if (!canSync()) return;
+  for (const [dataset, run] of Object.entries(mirrors || {})) {
+    if (dirty.has(dataset)) schedule(dataset, run, 0);
+  }
 }
 
 // --- public mirror API (called from UI mutation sites) -------------------------

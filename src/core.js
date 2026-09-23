@@ -416,7 +416,11 @@ function persistNow() {
     endsAt: state.endsAt || null,
     duration: state.sessionDuration || null,
   });
-  save("sf-player", { vol: state.playerVol ?? 0.8, track: state.playerTrack || null, ...(state.player || {}) });
+  save("sf-player", {
+    ...(state.player || {}),
+    vol: state.playerVol ?? state.player?.vol ?? 0.8,
+    track: state.playerTrack || state.player?.track || null,
+  });
   localStorage.setItem("sf-tab", state.tab);
   scheduleCloudSync();
 }
@@ -847,6 +851,24 @@ async function pullCloudProfile() {
   return true;
 }
 
+// Per-key cloud→local merge. Cloud still wins whenever it has a real value,
+// but an empty/zero remote field never wipes a non-empty local one — a guest
+// with tasks/coins who signs into a fresh cloud row keeps their work, then
+// scheduleCloudSync pushes it up.
+function applyRemoteState(remote) {
+  if (!remote || typeof remote !== "object") return;
+  const isEmptyish = (v) =>
+    v == null ||
+    (Array.isArray(v) && v.length === 0) ||
+    (typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 0) ||
+    v === "";
+  for (const [k, v] of Object.entries(remote)) {
+    if (k === "streak") continue; // applyRemoteStreak owns it
+    if (isEmptyish(v) && !isEmptyish(state[k])) continue;
+    state[k] = v;
+  }
+}
+
 async function hydrateCloudState(user) {
   if (!backendConfigured || !user) return;
   const result = await loadUserState(user.id);
@@ -854,7 +876,7 @@ async function hydrateCloudState(user) {
   if (result.data?.state) {
     if (Number.isFinite(+result.data.version)) lastCloudVersion = +result.data.version;
     const remoteStreak = result.data.state.streak;
-    Object.assign(state, result.data.state);
+    applyRemoteState(result.data.state);
     applyRemoteStreak(remoteStreak);
     save("sf-streak", state.streak);
     save("sf-tasks", state.tasks);
@@ -930,7 +952,7 @@ async function hydrateCloudState(user) {
     lastAppliedCloudSig = incomingSig;
     lastCloudVersion = remoteVersion;
     const remoteStreak = remoteState.streak;
-    Object.assign(state, remoteState);
+    applyRemoteState(remoteState);
     applyRemoteStreak(remoteStreak);
     save("sf-streak", state.streak);
     save("sf-tasks", state.tasks);
@@ -1806,13 +1828,16 @@ function restoreArchivedState(userId) {
   try {
     const raw = localStorage.getItem(SIGNOUT_ARCHIVE_KEY);
     if (!raw) return false;
-    localStorage.removeItem(SIGNOUT_ARCHIVE_KEY);
     let payload = null;
     try {
       payload = JSON.parse(raw);
     } catch {
+      // Corrupt archive: drop it only AFTER the parse failed — never
+      // delete-then-parse, which would throw the only copy away.
+      localStorage.removeItem(SIGNOUT_ARCHIVE_KEY);
       return false;
     }
+    localStorage.removeItem(SIGNOUT_ARCHIVE_KEY);
     if (!payload || typeof payload !== "object" || !payload.keys) return false;
     // A different account's archive never comes back on this sign-in —
     // that account's data lives in its own cloud workspace.

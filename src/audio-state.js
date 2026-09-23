@@ -1,4 +1,4 @@
-import { state, save, persist, uid, get } from "./core.js";
+import { state, save, persist, uid, get, isPersistHalted } from "./core.js";
 import { mirrorSongFavorites } from "./services/music-sync.js";
 
 export const PLAYER_DEFAULTS = {
@@ -97,6 +97,9 @@ export function savePlayerState(patch = {}) {
 }
 
 export function savePlayerStorage() {
+  // Wipe/sign-out/import freeze writers before their reload — a beforeunload
+  // resume save must not resurrect the player state being deleted.
+  if (isPersistHalted()) return;
   const p = ensurePlayerState();
   save("sf-player", {
     vol: p.volume,

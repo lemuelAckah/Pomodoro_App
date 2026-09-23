@@ -333,6 +333,19 @@
   background: var(--sage);
   flex-shrink: 0;
 }
+.sv-list-thumb {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: var(--panel);
+}
+.sv-list-thumb-text {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
 .st-composer-meta {
   display: flex;
   justify-content: space-between;
@@ -414,16 +427,6 @@
 .sv-who small {
   font-size: 12px;
   opacity: 0.7;
-}
-.sv-count {
-  font-size: 12px;
-  font-weight: 700;
-  color: rgba(255, 255, 255, 0.75);
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 99px;
-  padding: 4px 10px;
-  flex-shrink: 0;
-  font-variant-numeric: tabular-nums;
 }
 .sv-close {
   background: rgba(255, 255, 255, 0.12);

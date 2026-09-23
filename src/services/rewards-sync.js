@@ -393,8 +393,25 @@ export async function pullRewards() {
     loadBoxOpenings(),
   ]);
   if (!bal.error && Number.isFinite(+bal.data)) {
-    serverCoins = Number(bal.data);
-    save("sf-balance", serverCoins);
+    const remote = Number(bal.data);
+    // One-time guest→account migration: the first pull after sign-in with a
+    // zero server balance and a positive local balance adopts the local
+    // coins instead of zeroing them. Flagged so later legitimate 0s stay 0.
+    if (remote === 0 && state.coins > 0 && !get("sf-coins-migrated", false)) {
+      serverCoins = Math.max(0, Math.round(state.coins));
+      save("sf-coins-migrated", "1");
+      save("sf-balance", serverCoins);
+      import("./backend.js")
+        .then(({ syncProgress }) => syncProgress(state.user.id, {
+          coins: serverCoins,
+          sessions: state.sessions,
+        }))
+        .catch(() => {});
+    } else {
+      serverCoins = remote;
+      save("sf-balance", serverCoins);
+      if (!get("sf-coins-migrated", false) && remote > 0) save("sf-coins-migrated", "1");
+    }
     // Server wins; optimistic offline earns stay visible on top until the
     // outbox flush below reconciles them.
     displayBalance(serverCoins);

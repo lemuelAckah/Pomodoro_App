@@ -16,6 +16,7 @@ import { renderTechniques, renderFavorites, openTechniqueGuide, techniques, TECH
 import { renderSounds } from "./audio.js";
 import {
   renderCommunity, renderCall, pruneExpiredStories, openStatus, allGroups, askDeleteStatus,
+  ensureIncomingCallSubscription,
 } from "./community.js";
 import { renderStore, migrateOwned, shopItems, normItem, storeItems, closeGiftCenter, equippedAvatarEmoji } from "./store.js";
 import { renderLibrary, searchBooks, syncBooksLibrary } from "./books.js";
@@ -596,11 +597,16 @@ onAuthStateChange((user) => {
       .catch(() => {})
       .finally(() => {
         hydrationInFlight = false;
+        // Pulls wait for hydrate: racing them let an empty cloud snapshot
+        // overwrite the just-hydrated (or guest) state mid-load.
+        pullProductivity();
+        pullRewards().catch(() => {});
+        pullMusic().catch(() => {});
+        syncBooksLibrary().catch(() => {});
+        // Ring/accept inbox: subscribe once the session (and thus
+        // state.user) is live so incoming 1:1 calls actually ring.
+        ensureIncomingCallSubscription();
       });
-    pullProductivity();
-    pullRewards().catch(() => {});
-    pullMusic().catch(() => {});
-    syncBooksLibrary().catch(() => {});
   }
   if (state.tab === "account" || state.tab === "settings") render();
 });

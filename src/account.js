@@ -417,7 +417,12 @@ function completenessMarkup() {
 }
 
 function dataMarkup() {
-  return `<div class="card" style="margin-top:18px"><div class="section-row"><h2>Your data</h2><span class="tag">${backendConfigured ? (state.user ? "cloud sync on" : "cloud ready") : "this browser only"}</span></div><p class="muted">Everything lives in this browser${backendConfigured ? " and syncs to your cloud account" : ""}. Take a copy with you, or erase it all — your call.</p><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button type="button" class="ghost" data-export>Export my data</button><label class="ghost" style="cursor:pointer">Import backup<input type="file" id="import-file" accept="application/json,.json" hidden></label><button type="button" class="ghost" data-wipe style="color:#c0392b">Delete my data…</button></div></div>`;
+  const cloudTag = backendConfigured
+    ? (state.user ? "cloud sync on" : "cloud ready")
+    : "this browser only";
+  return `<div class="card" style="margin-top:18px"><div class="section-row"><h2>Your data</h2><span class="tag">${cloudTag}</span></div><p class="muted">${state.user
+    ? "Stored in this browser and mirrored to your cloud account. Export takes a full local snapshot; wipe clears this browser (server rows are removed too when the backend is available)."
+    : "Everything lives in this browser. Take a copy with you, or erase it all — your call."}</p><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button type="button" class="ghost" data-export>Export my data</button><label class="ghost" style="cursor:pointer">Import backup<input type="file" id="import-file" accept="application/json,.json" hidden></label><button type="button" class="ghost" data-wipe style="color:#c0392b">Delete my data…</button></div></div>`;
 }
 
 function exportData() {
@@ -580,7 +585,7 @@ function renderAccount() {
   const target = $("#tab-account");
   const user = state.user;
   const sidePanel = !user
-    ? `<aside class="auth-side" aria-label="Why join StudyFlow"><div class="auth-side-glow" aria-hidden="true"></div><div class="eyebrow">Why join</div><h3>Everything you do here, kept.</h3><p class="muted">A free account follows you across devices and keeps every streak, coin and highlight safe.</p><div class="auth-side-stats"><div class="auth-side-stat"><b>${(state.sessions || []).length}</b><small>session${(state.sessions || []).length === 1 ? "" : "s"} focused so far</small></div><div class="auth-side-stat"><b>${state.coins || 0}</b><small>coins ready to sync</small></div><div class="auth-side-stat"><b>${(state.books || []).length}</b><small>book${(state.books || []).length === 1 ? "" : "s"} on your shelf</small></div></div><ul class="auth-side-perks"><li><span>${sicon("fire")}</span><div><strong>Streaks that travel</strong><small>Your garden and streak survive a lost laptop.</small></div></li><li><span>${sicon("users")}</span><div><strong>Study together</strong><small>Sprint rooms, gifts and group challenges.</small></div></li><li><span>${sicon("refresh")}</span><div><strong>Cloud save</strong><small>Pick up on your phone mid-revision.</small></div></li><li><span>${sicon("shield")}</span><div><strong>Private by default</strong><small>You choose who sees your activity.</small></div></li></ul></aside>`
+    ? `<aside class="auth-side" aria-label="Why join StudyFlow"><div class="auth-side-glow" aria-hidden="true"></div><div class="eyebrow">Why join</div><h3>Everything you do here, kept.</h3><p class="muted">A free account follows you across devices and keeps every streak, coin and highlight safe.</p><div class="auth-side-stats"><div class="auth-side-stat"><b>${Math.max(0, Number(state.sessions) || 0)}</b><small>session${(Number(state.sessions) || 0) === 1 ? "" : "s"} focused so far</small></div><div class="auth-side-stat"><b>${state.coins || 0}</b><small>coins ready to sync</small></div><div class="auth-side-stat"><b>${(state.books || []).length}</b><small>book${(state.books || []).length === 1 ? "" : "s"} on your shelf</small></div></div><ul class="auth-side-perks"><li><span>${sicon("fire")}</span><div><strong>Streaks that travel</strong><small>Your garden and streak survive a lost laptop.</small></div></li><li><span>${sicon("users")}</span><div><strong>Study together</strong><small>Sprint rooms, gifts and group challenges.</small></div></li><li><span>${sicon("refresh")}</span><div><strong>Cloud save</strong><small>Pick up on your phone mid-revision.</small></div></li><li><span>${sicon("shield")}</span><div><strong>Private by default</strong><small>You choose who sees your activity.</small></div></li></ul></aside>`
     : "";
   target.innerHTML = `<div class="account-page"><div class="account-hero"><div><div class="eyebrow">StudyFlow identity</div><h1>${user ? "Your account, your space." : "A calmer way to sign in."}</h1><p class="lede">${user ? "Manage your profile, privacy, and connected sessions from one secure place." : "Join your focused workspace and keep your progress with you across devices."}</p></div><div class="account-orbit"><span>◷</span><i></i><b></b></div></div>${completenessMarkup()}<div class="auth-split"><div class="card auth-card">${user ? accountSignedInMarkup(user) : accountAuthMarkup()}</div>${sidePanel}</div>${user ? badgeShelfMarkup() : ""}${dataMarkup()}${privacyCard()}</div>`;
   bindAccount(target);
@@ -1048,7 +1053,9 @@ function bindDataZone(root) {
       if (
         !parsed ||
         parsed.app !== "StudyFlow" ||
-        typeof parsed.data !== "object"
+        !parsed.data ||
+        typeof parsed.data !== "object" ||
+        Array.isArray(parsed.data)
       ) {
         notify("That file is not a StudyFlow backup");
         return;
@@ -1059,6 +1066,10 @@ function bindDataZone(root) {
         `${count} records will overwrite everything here. Continue?`,
         () => {
           try {
+            // Freeze writers first: the reload fires beforeunload handlers
+            // that would otherwise re-save the pre-import state over the
+            // restored keys (the wipe path already does this).
+            haltPersist();
             Object.entries(parsed.data).forEach(([k, v]) => {
               if (typeof k === "string" && k.startsWith("sf-")) {
                 localStorage.setItem(

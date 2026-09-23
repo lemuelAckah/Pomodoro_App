@@ -6,7 +6,8 @@ import {
 } from "./core.js";
 import {
   sendCloudMessage, markMessageRead, subscribeToConversation, subscribeToPresence, avatarPublicUrl,
-  createWebRtcPeer, recordCall, updateCall, upsertCallParticipant,
+  createWebRtcPeer, recordCall, updateCall, upsertCallParticipant, getCallById, listCallParticipants,
+  dmCallRoomId, subscribeToIncomingCalls,
   uploadUserFile, getUserFileUrl, backendConfigured, reportUser, listPublicGroups,
   createCloudGroup, joinCloudGroup, leaveCloudGroup, deleteCloudGroup,
   groupCreate, groupAddMember, groupSetMember, groupLeave, groupTransfer,
@@ -127,7 +128,7 @@ function friendlyUploadError(err) {
   if (!navigator.onLine || /network|fetch|failed to/i.test(msg))
     return "Couldn't upload the photo because the connection is unavailable.";
   if (/too large|too big|maximum size|exceeded|payload|under \d/i.test(msg))
-    return msg.length < 120 ? msg : "Image is too large. Maximum size is 2 MB.";
+    return msg.length < 120 ? msg : "Image is too large. Maximum size is 50 MB.";
   if (/not signed in|sign in|session|permission|policy|not allowed|unauthorized|forbidden|owner or an admin|GROUP_FORBIDDEN|NOT_SIGNED_IN/i.test(msg))
     return "You are not signed in or you do not have permission to upload this photo.";
   return "Couldn't upload that photo. Please try again.";
@@ -367,6 +368,352 @@ async function refreshCloudNotifCount(force) {
 }
 
 let activePeer;
+// Full-mesh group calls: one RTCPeerConnection per remote peer (cap 6).
+// 1:1 keeps a single entry so existing mute/camera/share paths still work
+// through activePeer (bound to the first/only peer).
+const callPeers = new Map(); // peerId -> { peer, close }
+const callRemotes = new Map(); // peerId -> MediaStream
+let callIsInitiator = false; // true = we offer; false = we wait for offer
+let incomingCallSub = null;
+let pendingIncomingCall = null; // ringing call_history row awaiting our Accept
+let outgoingRingT = 0;
+let meshWatchT = 0; // periodic mid-call peer discovery (cap 6)
+let connectInFlight = false;
+let forceConnectPending = false; // Accept raced a live connect — re-offer after
+
+function callRoomSignalingId(roomId, a, b) {
+  // Pair-scoped channel inside a shared call room so group mesh signals
+  // never cross wires between different peer pairs.
+  if (!a || !b) return roomId;
+  return `${roomId}:${[a, b].sort().join("--")}`;
+}
+
+async function resolveCallTargets() {
+  const myId = state.user?.id || uid();
+  const targets = new Set();
+  const extras = Array.isArray(state.call?.extras) ? state.call.extras : [];
+  for (const id of extras) if (id && id !== myId) targets.add(id);
+  if (state.call?.kind === "group") {
+    try {
+      const { data: members } = await getGroupMembers(state.call.id);
+      for (const m of members || []) {
+        const id = m.user_id || m.id;
+        if (id && id !== myId) targets.add(id);
+      }
+    } catch {
+      /* roster unavailable — extras / participants still dial */
+    }
+  }
+  if (activeCallHistoryId) {
+    try {
+      const { data: parts } = await listCallParticipants(activeCallHistoryId);
+      for (const p of parts || []) {
+        if (p.user_id && p.user_id !== myId) targets.add(p.user_id);
+      }
+    } catch {
+      /* offline — local targets stand */
+    }
+  }
+  if (state.call?.peerId && state.call.peerId !== myId) targets.add(state.call.peerId);
+  if (!targets.size && state.call?.kind === "dm" && state.call.id) {
+    targets.add(state.call.id);
+  }
+  // Mesh cap: self + 5 remotes = 6.
+  return [...targets].slice(0, 5);
+}
+
+async function ensureCallPeer(peerId, stream) {
+  if (!peerId || callPeers.has(peerId) || !state.call) return;
+  const myId = state.user?.id || uid();
+  if (peerId === myId) return;
+  const pureDm = state.call.kind === "dm" && !(state.call.extras || []).length;
+  const initiator = pureDm ? callIsInitiator : myId < peerId;
+  try {
+    const handle = await createWebRtcPeer({
+      roomId: callRoomSignalingId(state.call.id, myId, peerId),
+      userId: myId,
+      initiator,
+      stream,
+      peerId,
+      onTrack: (incoming) => {
+        if (incoming) callRemotes.set(peerId, incoming);
+        remoteStream = callRemotes.values().next().value || remoteStream;
+        if (state.callStatus !== "connected") {
+          state.callStatus = "connected";
+          notify(sicon("user") + " A study partner joined the call");
+        }
+        renderCall();
+      },
+      onStateChange: (status) => {
+        if (status === "connected") {
+          if (state.callStatus !== "connected") state.callStatus = "connected";
+          startMeshWatch();
+        } else if (status === "failed" || status === "disconnected") {
+          callRemotes.delete(peerId);
+          if (!callRemotes.size && state.callStatus === "connected") {
+            state.callStatus = "connecting";
+            notify("Call connection lost. Press Connect to retry.");
+          }
+        }
+        renderCall();
+      },
+    });
+    callPeers.set(peerId, handle);
+    if (!activePeer) activePeer = handle;
+  } catch (err) {
+    console.warn("[call] peer failed", peerId, err);
+  }
+}
+
+// Additive mesh fill: dial any known participant we don't already have —
+// used by mid-call invites without tearing live peers.
+async function meshMissingPeers() {
+  if (!state.call || !activeCallStream) return;
+  const targets = await resolveCallTargets();
+  await Promise.all(targets.map((id) => ensureCallPeer(id, activeCallStream)));
+  if (callPeers.size) startMeshWatch();
+  renderCall();
+}
+
+function startMeshWatch() {
+  if (meshWatchT) return;
+  meshWatchT = setInterval(() => {
+    if (!state.call || state.callStatus === "idle") {
+      stopMeshWatch();
+      return;
+    }
+    meshMissingPeers().catch(() => {});
+  }, 8000);
+}
+
+function stopMeshWatch() {
+  if (meshWatchT) {
+    clearInterval(meshWatchT);
+    meshWatchT = 0;
+  }
+}
+
+function ensureIncomingCallSubscription() {
+  if (!backendConfigured || !state.user || incomingCallSub) return;
+  incomingCallSub = subscribeToIncomingCalls(state.user.id, {
+    onRinging: async (row) => {
+      if (!row?.id || pendingIncomingCall?.id === row.id) return;
+      if (row.initiator_id && row.initiator_id === state.user.id) return;
+      if (state.call && state.callStatus !== "idle") return; // already in a call
+      // Mid-call participant inserts only carry call_id — hydrate the full
+      // history row so Accept has room_id / initiator / group.
+      if (row._fromParticipant || !row.room_id) {
+        try {
+          const { data } = await getCallById(row.id);
+          if (data) row = data;
+        } catch {
+          /* fall through with partial row */
+        }
+        if (!row?.room_id || !row?.initiator_id) return;
+        if (row.initiator_id === state.user.id) return;
+      }
+      showIncomingCall(row);
+    },
+    onAccepted: (row) => {
+      if (!row?.id) return;
+      if (activeCallHistoryId && row.id !== activeCallHistoryId) return;
+      if (row.initiator_id !== state.user?.id || !state.call) return;
+      // They accepted — we offer (or re-offer if our early timeout offer
+      // went out before their signaling channel was up).
+      callIsInitiator = true;
+      if (state.callStatus === "connected" && activeCallStream) {
+        meshMissingPeers().catch(() => {});
+      } else {
+        connectCall({ force: true }).catch(() => {});
+      }
+    },
+    onCancelled: (row) => {
+      if (!row?.id) return;
+      if (pendingIncomingCall?.id === row.id) {
+        pendingIncomingCall = null;
+        $("#incoming-call-modal")?.remove();
+        notify("Missed call");
+      }
+      if (activeCallHistoryId && row.id === activeCallHistoryId && state.call) {
+        teardownCall(false);
+        notify("The other side ended the call");
+      }
+    },
+  });
+}
+
+function teardownCall(notifyEnd = true) {
+  clearTimeout(outgoingRingT);
+  stopMeshWatch();
+  callPeers.forEach((p) => {
+    try { p.close(); } catch { /* ignore */ }
+  });
+  callPeers.clear();
+  callRemotes.clear();
+  activePeer = null;
+  try {
+    activeCallStream?.getTracks().forEach((t) => t.stop());
+  } catch { /* ignore */ }
+  activeCallStream = null;
+  remoteStream = null;
+  state.call = null;
+  state.callStatus = "idle";
+  state.callStartedAt = 0;
+  state.callMinimized = false;
+  stopCallClock();
+  $("#call-window")?.remove();
+  if (activeCallHistoryId) {
+    updateCall(activeCallHistoryId, { status: "ended", ended_at: new Date().toISOString() }).catch(() => {});
+    if (state.user)
+      upsertCallParticipant({
+        call_id: activeCallHistoryId,
+        user_id: state.user.id,
+        status: "left",
+        left_at: new Date().toISOString(),
+      }).catch(() => {});
+    activeCallHistoryId = null;
+  }
+  if (notifyEnd) notify("Call ended — great studying together " + sicon("check"));
+}
+
+function showIncomingCall(row) {
+  if ($("#incoming-call-modal")) return;
+  pendingIncomingCall = row;
+  const friend = cloudFriends.find((f) => f.id === row.initiator_id) || null;
+  const name = friend?.name || friend?.handle || "Someone";
+  const handle = friend?.handle || "";
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  modal.id = "incoming-call-modal";
+  modal.innerHTML = `<div class="modal incoming-call"><div class="eyebrow">Incoming call</div><div class="incoming-call-who">${friendAvatarMarkup(row.initiator_id, handle || "?", name)}<div><h2>${esc(name)}</h2><p class="muted">${handle ? "@" + esc(handle) : ""} is calling you</p></div></div><div class="modal-actions"><button type="button" class="danger-button" data-ic-decline>${sicon("x")} Decline</button><button type="button" class="primary" data-ic-accept>${sicon("phone")} Accept</button></div></div>`;
+  $("#modal-root")?.append(modal);
+  modal.querySelector("[data-ic-decline]").onclick = async () => {
+    pendingIncomingCall = null;
+    modal.remove();
+    await updateCall(row.id, { status: "missed", ended_at: new Date().toISOString() }).catch(() => {});
+    await upsertCallParticipant({
+      call_id: row.id,
+      user_id: state.user.id,
+      status: "declined",
+      left_at: new Date().toISOString(),
+    }).catch(() => {});
+  };
+  modal.querySelector("[data-ic-accept]").onclick = async () => {
+    pendingIncomingCall = null;
+    modal.remove();
+    await acceptIncomingCall(row);
+  };
+}
+
+async function acceptIncomingCall(row) {
+  if (!state.user) return;
+  const friend = cloudFriends.find((f) => f.id === row.initiator_id) || null;
+  const room = row.room_id || dmCallRoomId(row.initiator_id, state.user.id);
+  state.call = {
+    id: room,
+    peerId: row.initiator_id,
+    kind: row.group_id ? "group" : "dm",
+    name: friend?.name || friend?.handle || "Study partner",
+    emoji: "◉",
+    color: "#47765a",
+    extras: [],
+  };
+  state.callMinimized = false;
+  state.callStatus = "connecting";
+  activeCallHistoryId = row.id;
+  callIsInitiator = false; // callee waits for the offer
+  renderCall();
+  // Join signaling BEFORE flipping history: the initiator's onAccepted
+  // offer must not race an empty channel.
+  try {
+    await connectCall();
+  } catch {
+    /* surface stays in connecting — user can retry */
+  }
+  await updateCall(row.id, { status: "connecting", connected_at: new Date().toISOString() }).catch(() => {});
+  await upsertCallParticipant({
+    call_id: row.id,
+    user_id: state.user.id,
+    status: "connected",
+    joined_at: new Date().toISOString(),
+  }).catch(() => {});
+  startMeshWatch();
+}
+async function startOutgoingCall(chatId) {
+  if (!requireAuth("start a call")) return;
+  const group = allGroups().find((g) => g.id === chatId);
+  const isGroup = Boolean(group);
+  const peerId = isGroup ? null : chatId;
+  const roomId = isGroup ? chatId : dmCallRoomId(state.user.id, chatId);
+  const peer = peerId ? (cloudFriends.find((f) => f.id === peerId) || null) : null;
+  state.call = isGroup
+    ? { id: roomId, kind: "group", name: group?.name || "Group call", emoji: group?.emoji || "◉", color: group?.color || "#47765a", extras: [] }
+    : { id: roomId, peerId, kind: "dm", name: peer?.name || peer?.handle || "Study partner", emoji: "◉", color: "#47765a", extras: [] };
+  state.callMinimized = false;
+  state.callStatus = "connecting";
+  callIsInitiator = true;
+  activeCallHistoryId = null;
+  renderCall();
+  if (backendConfigured && state.user && navigator.onLine !== false) {
+    try {
+      const result = await recordCall({
+        room_id: roomId,
+        initiator_id: state.user.id,
+        recipient_id: isGroup ? null : peerId,
+        group_id: isGroup ? chatId : null,
+        status: "ringing",
+        started_at: new Date().toISOString(),
+      });
+      activeCallHistoryId = result.data?.id || null;
+      if (activeCallHistoryId) {
+        await upsertCallParticipant({
+          call_id: activeCallHistoryId,
+          user_id: state.user.id,
+          status: "ringing",
+          joined_at: new Date().toISOString(),
+        }).catch(() => {});
+        if (peerId) {
+          await upsertCallParticipant({
+            call_id: activeCallHistoryId,
+            user_id: peerId,
+            status: "ringing",
+          }).catch(() => {});
+        } else {
+          // Group: ring every member (participant INSERT drives their modal).
+          try {
+            const { data: members } = await getGroupMembers(chatId);
+            for (const m of members || []) {
+              if (m.user_id && m.user_id !== state.user.id)
+                await upsertCallParticipant({
+                  call_id: activeCallHistoryId,
+                  user_id: m.user_id,
+                  status: "ringing",
+                }).catch(() => {});
+            }
+          } catch {
+            /* members list unavailable — mesh still dials known peers */
+          }
+        }
+      }
+      // 1:1: wait for Accept before offering (grace retry covers a lost
+      // early offer if their channel wasn't up yet).
+      if (!isGroup) {
+        clearTimeout(outgoingRingT);
+        outgoingRingT = setTimeout(() => {
+          if (state.call && state.callStatus === "connecting" && !callPeers.size) {
+            connectCall({ force: true }).catch(() => {});
+          }
+        }, 2500);
+        return;
+      }
+    } catch {
+      /* offline/local fallback below */
+    }
+  }
+  // Group or no backend: join immediately as mesh initiator for known peers.
+  connectCall().catch(() => {});
+  if (isGroup) startMeshWatch();
+}
 
 let conversationSubscription;
 let chatSubTarget = null; // id of the chat conversationSubscription points at
@@ -2285,12 +2632,12 @@ function storiesMarkup() {
   const live = liveStories();
   const unseen = live.filter((s) => !isSeen("story:" + s.id)).length;
   const unseenCloud = cloudStories.filter((s) => !isSeen("cstory:" + s.id)).length;
-  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Stories</h2><span class="tag">24h${unseen + unseenCloud ? ` · ${unseen + unseenCloud} new` : ""}</span></div><div class="story-strip"><button type="button" class="story-add" data-status-play title="Play the full status loop">${sicon("play")}<small>Status</small></button><button type="button" class="story-add" data-story-photo title="Post a photo or video">${sicon("camera")}<small>Photo</small></button><input type="file" id="story-file" accept="image/*,video/*" hidden>${localStoryRings(live)}${cloudStoryGroups().filter((g) => cloudFriends.some((f) => f.id === g.author.id)).map((g) => friendStatusRing(g.author.id, g.author.handle, g.author.name, g.items)).join("")}</div>${signedIn() ? `<div class="input-row" style="margin-top:10px;flex-wrap:wrap"><input class="input" id="cloud-story-text" maxlength="500" placeholder="Share a text story with your circle…" aria-label="Share a text story" value="${esc(state.storyDraft?.text || "")}" style="flex:1 1 160px;min-width:0"><select class="select" id="cloud-story-vis" aria-label="Story visibility" style="max-width:150px"><option value="connections">Connections</option><option value="private">Only me</option></select><button type="button" class="ghost" id="cloud-story-photo" title="Attach a photo" aria-label="Attach a photo">${sicon("camera")}</button><button type="button" class="primary" id="cloud-story-post">Post</button></div><input type="file" id="cloud-story-file" accept="image/jpeg,image/png,image/webp,image/gif" hidden aria-label="Choose a story photo"><div data-cloud-story-preview style="margin-top:8px">${cloudStoryPhoto?.url ? `<img src="${cloudStoryPhoto.url}" class="story-photo-preview" alt="Story photo preview"><div style="margin-top:6px"><button type="button" class="ghost" id="cloud-story-photo-remove">Remove photo</button></div>` : ""}</div><p class="muted" style="margin:6px 0 0">${state.storyDraft?.text ? "Draft restored — post when you're back online. " : ""}Photo stories upload to your private library and follow the same 24h + visibility rules as text.</p>` : ""}</div>`;
+  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Stories</h2><span class="tag">24h${unseen + unseenCloud ? ` · ${unseen + unseenCloud} new` : ""}</span></div><div class="story-strip"><button type="button" class="story-add" data-status-play title="Play the full status loop">${sicon("play")}<small>Status</small></button>${localStoryRings(live)}${cloudStoryGroups().filter((g) => cloudFriends.some((f) => f.id === g.author.id)).map((g) => friendStatusRing(g.author.id, g.author.handle, g.author.name, g.items)).join("")}</div><p class="muted" style="margin:8px 0 0">Statuses are view-only here — post from Community → Status.</p></div>`;
 }
 
-// Shared cloud-story post path (Discover composer + Status home composer).
-// Offline never fabricates a story: text is kept as a local draft, an
-// attached photo stays staged in memory, and the user is told plainly.
+// Shared cloud-story post path (Status home composer only — Discover is
+// view-only). Offline never fabricates a story: text is kept as a local
+// draft, an attached photo stays staged, and the user is told plainly.
 async function postCloudStory({ text, vis = "connections", file = null, btn = null } = {}) {
   const clean = String(text || "").trim().slice(0, 500);
   const visibility = ["public", "connections", "private"].includes(vis) ? vis : "connections";
@@ -2383,37 +2730,6 @@ async function postCloudStory({ text, vis = "connections", file = null, btn = nu
     return false;
   }
 }
-function bindStoryComposerPost(body) {
-  const post = $("#cloud-story-post", body);
-  if (post) post.onclick = () => postCloudStory({
-    text: $("#cloud-story-text", body)?.value,
-    vis: $("#cloud-story-vis", body)?.value || "connections",
-    file: cloudStoryPhoto?.file || null,
-    btn: post,
-  });
-}
-function bindStoryComposerPhoto(body) {
-  const photoBtn = $("#cloud-story-photo", body);
-  const photoInput = $("#cloud-story-file", body);
-  if (!photoBtn || !photoInput) return;
-  photoBtn.onclick = () => photoInput.click();
-  photoInput.onchange = async () => {
-    const file = photoInput.files?.[0];
-    photoInput.value = "";
-    if (!file) return;
-    // Shared validator: MIME aliases + extension + magic bytes, so a
-    // genuine PNG is never rejected for its reported MIME type.
-    const bad = await validateImageFile(file, 2 * 1024 * 1024, "discover-composer");
-    if (bad) return notify(bad);
-    clearCloudStoryPhoto();
-    cloudStoryPhoto = { file, url: URL.createObjectURL(file) };
-    renderCommunity();
-  };
-  $("#cloud-story-photo-remove", body)?.addEventListener("click", () => {
-    clearCloudStoryPhoto();
-    renderCommunity();
-  });
-}
 function bindStories(body) {
   if (signedIn()) {
     const before = JSON.stringify(cloudStories.map((s) => s.id));
@@ -2421,8 +2737,6 @@ function bindStories(body) {
       if (state.tab === "community" && state.subtab === "discover"
         && JSON.stringify(cloudStories.map((s) => s.id)) !== before) renderCommunity();
     }).catch(() => {});
-    bindStoryComposerPost(body);
-    bindStoryComposerPhoto(body);
   }
   $$("[data-cloud-story]", body).forEach(
     (b) => (b.onclick = () => {
@@ -2441,51 +2755,7 @@ function bindStories(body) {
       openStoryViewer(g.items, 0);
     }),
   );
-  $("[data-story-photo]", body).onclick = () =>
-    $("#story-file", body)?.click();
-  $("#story-file", body).onchange = async (e) => {
-    const file = e.target.files[0];
-    e.target.value = "";
-    if (!file) return;
-    const isVideo = String(file.type || "").startsWith("video/");
-    if (isVideo) {
-      if (file.size > 8 * 1024 * 1024)
-        return notify("Videos must be under 8 MB");
-    } else {
-      // Device-local photos stay small on purpose (base64 localStorage);
-      // the 2 MB cloud path is validated separately above.
-      const bad = await validateImageFile(file, 1.5 * 1024 * 1024, "device-photo");
-      if (bad) return notify(bad);
-    }
-    // Signed-in photo picks go to the cloud composer (storage upload, 24h,
-    // visibility rules) instead of base64 localStorage. Video + signed-out
-    // flows keep the existing device-local behavior.
-    if (signedIn() && !isVideo) {
-      clearCloudStoryPhoto();
-      cloudStoryPhoto = { file, url: URL.createObjectURL(file) };
-      renderCommunity();
-      notify("Photo attached — add a caption and Post");
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      state.stories.unshift({
-        id: uid(),
-        kind: isVideo ? "video" : "photo",
-        photo: isVideo ? "" : reader.result,
-        video: isVideo ? reader.result : "",
-        text: "",
-        author: state.profile.name,
-        ts: Date.now(),
-      });
-      state.stories = state.stories.filter((s) => Date.now() - s.ts < 86400000).slice(0, 30);
-      persist();
-      renderCommunity();
-      notify(isVideo ? "Video story live for 24h " + sicon("film") : "Story live for 24h " + sicon("camera"));
-    };
-    reader.readAsDataURL(file);
-  };
-  $("[data-status-play]", body).onclick = () => playAllStatuses();
+  $("[data-status-play]", body)?.addEventListener("click", playAllStatuses);
   $$("[data-story-view]", body).forEach(
     (b) => (b.onclick = () => openStatus("story:" + b.dataset.storyView)),
   );
@@ -2571,25 +2841,44 @@ function renderStatus(body) {
     }).catch(() => {});
   }
   const mine = signedIn()
-    ? cloudStories.filter((s) => s.mine).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+    ? cloudStories.filter((s) => s.mine).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
     : [];
   const device = liveStories();
+  const friendGroups = signedIn() ? friendsWithStories() : [];
   const unseenMine = mine.filter((s) => !isSeen("cstory:" + s.id)).length;
-  const latestMine = mine.length ? mine[mine.length - 1].createdAt : null;
+  const myRows = mine.map((s) => {
+    const unseen = !isSeen("cstory:" + s.id);
+    const preview = s.kind === "image" && s.mediaPath
+      ? `<img class="sv-list-thumb" data-story-thumb="${esc(s.mediaPath)}" alt="">`
+      : `<span class="sv-list-thumb sv-list-thumb-text">${sicon(s.kind === "image" ? "camera" : "fire")}</span>`;
+    return `<button type="button" class="status-row" data-mine-status="${esc(s.id)}">`
+      + `<span class="status-avatar sm" style="--sv-accent:${svAccent(state.profile.handle)}">${avatarMarkup(state.profile.photo, state.profile.avatar)}</span>`
+      + preview
+      + `<span class="status-meta"><strong>${esc(String(s.text || "Photo status").slice(0, 48))}</strong><small>${relTime(s.createdAt)}${s.visibility === "private" ? " · Only me" : ""}</small></span>`
+      + (unseen ? '<span class="status-dot" aria-label="Unseen"></span>' : `<span class="tag">${sicon("check")}</span>`)
+      + `</button>`;
+  }).join("");
+  const friendRings = friendGroups
+    .map((g) => friendStatusRing(g.author.id, g.author.handle, g.author.name, g.items))
+    .join("");
   body.innerHTML = `${signedIn() ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>New status</h2><span class="tag" data-st-mode>${cloudStoryPhoto ? "photo" : "text"}</span></div><textarea class="textarea" id="st-text" rows="3" maxlength="500" placeholder="What's on your mind?" aria-label="Write a status">${esc(state.storyDraft?.text || "")}</textarea><div class="st-composer-meta"><span><span data-st-count>0</span>/500 · 24h</span><span class="st-composer-actions"><select class="select" id="st-vis" aria-label="Status visibility"><option value="connections">Connections</option><option value="private">Only me</option></select><button type="button" class="ghost" id="st-photo" aria-label="Add photo">${sicon("camera")} Photo</button><button type="button" class="primary" id="st-post">Post</button></span></div><input type="file" id="st-file" accept="image/jpeg,image/png,image/webp,image/gif" hidden aria-label="Choose a status photo"><div data-st-preview>${cloudStoryPhoto?.url ? `<img src="${cloudStoryPhoto.url}" class="story-photo-preview" alt="Status photo preview"><div style="margin-top:6px"><button type="button" class="ghost" id="st-photo-remove">Remove</button></div>` : ""}</div>${state.storyDraft?.text ? `<p class="muted" style="margin:6px 0 0">Draft restored — post when you're back online.</p>` : ""}</div>` : `<div class="card" style="margin-bottom:18px"><h2>Status</h2><p class="muted">Sign in to post 24h statuses for your circle.</p></div>`}`
-    + `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>My Status</h2><span class="tag">${mine.length ? `${mine.length} update${mine.length === 1 ? "" : "s"}` : "none yet"}</span></div>${mine.length ? `<button type="button" class="status-row" data-status-mine><span class="status-avatar" style="--sv-accent:${svAccent(state.profile.handle)}">${avatarMarkup(state.profile.photo, state.profile.avatar)}</span><span class="status-meta"><strong>My Status</strong><small>${relTime(latestMine)}${unseenMine ? ` · ${unseenMine} new` : ""}</small></span>${unseenMine ? '<span class="status-dot" aria-label="Unseen updates"></span>' : `<span class="tag">${sicon("check")}</span>`}</button>` : `<p class="muted">Share your first update above — text or photo, live for 24h.</p>`}</div>`
+    + `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Your statuses</h2><span class="tag">${mine.length ? `${mine.length} update${mine.length === 1 ? "" : "s"}${unseenMine ? ` · ${unseenMine} new` : ""}` : "none yet"}</span></div>${mine.length ? myRows : `<p class="muted">Share your first update above — text or photo, live for 24h.</p>`}</div>`
+    + (signedIn() ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Friends' statuses</h2><span class="tag">${friendGroups.length ? `${friendGroups.length} active` : "quiet"}</span></div>${friendGroups.length ? `<div class="story-strip">${friendRings}</div>` : `<p class="muted">No friend statuses right now — you'll see rings here the moment someone posts.</p>`}</div>` : "")
     + (device.length ? `<div class="card"><div class="section-row"><h2>On this device</h2><span class="tag">local</span></div><div class="story-strip">${localStoryRings(device)}</div></div>` : "");
   bindStatusHome(body);
+  paintStoryThumbs(body);
 }
 function bindStatusHome(body) {
   bindFriendStoryRings(body);
-  $$("[data-status-mine]", body).forEach((b) => {
+  $$("[data-mine-status]", body).forEach((b) => {
     b.onclick = () => {
-      const items = cloudStories.filter((s) => s.mine)
-        .sort((a, b2) => new Date(a.createdAt) - new Date(b2.createdAt));
-      if (!items.length) return;
-      openStoryViewer(items, Math.max(0, items.findIndex((s) => !isSeen("cstory:" + s.id))));
+      const hit = cloudStories.find((s) => s.id === b.dataset.mineStatus);
+      if (!hit) return;
+      openStoryViewer([hit], 0);
     };
+  });
+  $$("[data-status-play-all]", body).forEach((b) => {
+    b.onclick = () => playAllStatuses();
   });
   $$("[data-story-view]", body).forEach(
     (b2) => (b2.onclick = () => openStatus("story:" + b2.dataset.storyView)),
@@ -2607,7 +2896,7 @@ function bindStatusHome(body) {
     const picked = file.files?.[0];
     file.value = "";
     if (!picked) return;
-    const bad = await validateImageFile(picked, 2 * 1024 * 1024, "status-composer");
+    const bad = await validateImageFile(picked, 50 * 1024 * 1024, "status-composer");
     if (bad) return notify(bad);
     clearCloudStoryPhoto();
     cloudStoryPhoto = { file: picked, url: URL.createObjectURL(picked) };
@@ -2728,7 +3017,7 @@ function openStoryViewer(items, startIdx) {
   };
   const ov = document.createElement("div");
   ov.id = "story-viewer";
-  ov.innerHTML = `<div class="sv-frame" role="dialog" aria-label="Status viewer"><div class="sv-progress" data-sv-progress></div><div class="sv-top"><span class="status-avatar sm" data-sv-avatar></span><span class="sv-who"><strong data-sv-name></strong><small data-sv-time></small></span><span class="sv-count" data-sv-count></span><button type="button" class="sv-more" data-sv-more aria-label="Status options" title="Status options" hidden>⋮</button><button type="button" class="sv-close" data-sv-close aria-label="Close status viewer">×</button></div><div class="sv-stage" data-sv-stage></div><button type="button" class="sv-tap left" data-sv-prev aria-label="Previous status">‹</button><button type="button" class="sv-tap right" data-sv-next aria-label="Next status">›</button><div class="sv-foot"><span class="muted" data-sv-views></span></div></div>`;
+  ov.innerHTML = `<div class="sv-frame" role="dialog" aria-label="Status viewer"><div class="sv-progress" data-sv-progress></div><div class="sv-top"><span class="status-avatar sm" data-sv-avatar></span><span class="sv-who"><strong data-sv-name></strong><small data-sv-time></small></span><button type="button" class="sv-more" data-sv-more aria-label="Status options" title="Status options" hidden>⋮</button><button type="button" class="sv-close" data-sv-close aria-label="Close status viewer">×</button></div><div class="sv-stage" data-sv-stage></div><button type="button" class="sv-tap left" data-sv-prev aria-label="Previous status">‹</button><button type="button" class="sv-tap right" data-sv-next aria-label="Next status">›</button><div class="sv-foot"><span class="muted" data-sv-views></span></div></div>`;
   document.body.append(ov);
   const bar = () => ov.querySelector("[data-sv-progress]");
   const stage = () => ov.querySelector("[data-sv-stage]");
@@ -2805,7 +3094,6 @@ function openStoryViewer(items, startIdx) {
     ov.querySelector("[data-sv-avatar]").style.setProperty("--sv-accent", svAccent(item.handle));
     ov.querySelector("[data-sv-name]").textContent = item.mine ? "My Status" : "@" + item.handle;
     ov.querySelector("[data-sv-time]").textContent = `${relTime(item.createdAt)} · ${item.visibility}`;
-    ov.querySelector("[data-sv-count]").textContent = `${st.idx + 1} / ${st.items.length}`;
     const views = ov.querySelector("[data-sv-views]");
     views.textContent = "";
     if (item.mine && signedIn()) {
@@ -5835,15 +6123,9 @@ function bindChat(root, id) {
   const call = $("[data-start-call]", root);
   if (call)
     call.onclick = () => {
-      const target = allGroups().find((g) => g.id === id);
-      state.call = target || {
-        id,
-        name: "Friend call",
-        emoji: "◉",
-        color: "#47765a",
-      };
-      state.callMinimized = false;
-      renderCall();
+      // Real ring path: history + participants + Accept/Decline — never a
+      // bare local state.call flip that never leaves this device.
+      startOutgoingCall(id);
     };
 }
 
@@ -7817,27 +8099,51 @@ function renderCall() {
   call.className = `call-window ${minimized ? "minimized" : ""} q-${q.cls}`;
   call.setAttribute("role", "dialog");
   call.setAttribute("aria-label", `Call with ${state.call.name}`);
-  const partnerTile = remoteStream
-    ? `<video class="call-video" data-call-remote autoplay playsinline></video><span class="tile-tag">${sicon("user")} Partner</span>`
-    : `<div class="tile-avatar">${state.call.emoji || "◉"}</div><span class="tile-tag">${sicon("user")} Partner</span><div class="tile-hint">${state.callStatus === "connecting" ? '<span class="call-dots"><i></i><i></i><i></i></span> Waiting for your partner to join…' : 'Press Connect to start the call'}</div>`;
+  // Keep 1:1 remoteStream mirror in sync with the mesh map.
+  if (callRemotes.size === 1) remoteStream = callRemotes.values().next().value;
+  else if (callRemotes.size === 0) remoteStream = null;
+  const isGroup = state.call.kind === "group" || callRemotes.size > 1;
+  const remoteTiles = [...callRemotes.entries()].map(([pid, stream], i) => {
+    const label = state.call.kind === "group" ? `Guest ${i + 1}` : "Partner";
+    return `<div class="call-tile remote" data-remote-tile="${esc(pid)}">${
+      stream
+        ? `<video class="call-video" data-call-remote="${esc(pid)}" autoplay playsinline></video>`
+        : `<div class="tile-avatar">${state.call.emoji || "◉"}</div><div class="tile-hint"><span class="call-dots"><i></i><i></i><i></i></span> Connecting…</div>`
+    }<span class="tile-tag">${sicon("user")} ${label}</span></div>`;
+  }).join("");
+  const partnerTile = callRemotes.size
+    ? (isGroup ? remoteTiles : `<div class="call-tile main">${
+        remoteStream
+          ? `<video class="call-video" data-call-remote autoplay playsinline></video><span class="tile-tag">${sicon("user")} Partner</span>`
+          : `<div class="tile-avatar">${state.call.emoji || "◉"}</div><span class="tile-tag">${sicon("user")} Partner</span>`
+      }</div>`)
+    : `<div class="call-tile main"><div class="tile-avatar">${state.call.emoji || "◉"}</div><span class="tile-tag">${sicon("user")} ${isGroup ? "Room" : "Partner"}</span><div class="tile-hint">${
+        state.callStatus === "connecting"
+          ? `<span class="call-dots"><i></i><i></i><i></i></span> ${state.call.kind === "dm" && callIsInitiator ? "Ringing your partner…" : "Waiting for others to join…"}`
+          : "Press Connect to start the call"
+      }</div></div>`;
   const selfTile = activeCallStream
     ? `<video class="call-video mirrored" data-call-self autoplay playsinline muted></video>`
     : `<div class="tile-avatar small">${state.profile.photo ? `<img src="${esc(state.profile.photo)}" alt="">` : esc(state.profile.avatar || "SL")}</div>`;
+  const stageInner = isGroup && callRemotes.size
+    ? `${selfTile ? `<div class="call-tile self-inline">${selfTile}<span class="tile-tag">${state.callMuted ? sicon("mute") + " Muted" : "You"}</span></div>` : ""}${remoteTiles}`
+    : `<div class="call-tile main">${partnerTile.replace(/^<div class="call-tile main">|<\/div>$/g, "")}</div>
+       <div class="call-tile self">${selfTile}<span class="tile-tag">${state.callMuted ? sicon("mute") + " Muted" : "You"}</span></div>`;
   call.innerHTML = `
     <div class="call-head">
-      <span class="call-live"><i class="call-dot"></i> ${esc(state.call.name)}</span>
+      <span class="call-live"><i class="call-dot"></i> ${esc(state.call.name)}${isGroup ? ` · ${callRemotes.size + 1}` : ""}</span>
       <span class="call-meta">
         <span class="call-timer" data-call-timer>${callDurationText()}</span>
         <span class="call-quality q-${q.cls}"><i></i>${q.label}</span>
       </span>
       <span class="call-head-actions">
+        ${state.callStatus === "connected" ? `<button type="button" class="call-icon" data-call-add title="Add people" aria-label="Add people to call">${sicon("users")}</button>` : ""}
         <button type="button" class="call-icon" data-call-pips title="${minimized ? "Expand call" : "Minimize"}" aria-label="${minimized ? "Expand call" : "Minimize call"}">${minimized ? sicon("expand") : sicon("tab")}</button>
         <button type="button" class="call-icon danger" data-end title="End call" aria-label="End call">${sicon("x")}</button>
       </span>
     </div>
-    <div class="call-stage" data-call-stage>
-      <div class="call-tile main">${partnerTile}</div>
-      <div class="call-tile self">${selfTile}<span class="tile-tag">${state.callMuted ? sicon("mute") + " Muted" : "You"}</span></div>
+    <div class="call-stage ${isGroup ? "group" : ""}" data-call-stage>
+      ${stageInner}
       ${state.callCameraOff && activeCallStream ? '<div class="cam-off-note">Camera is off</div>' : ""}
       ${state.callStatus === "connecting" ? '<div class="call-connecting"><span class="call-dots"><i></i><i></i><i></i></span><p>Connecting to your study partner…</p><p class="sub">End-to-end peer connection · audio + video</p></div>' : ""}
     </div>
@@ -7858,7 +8164,12 @@ function renderCall() {
   document.body.append(call);
   startCallClock();
   // Attach streams as soon as the tiles exist.
-  if (remoteStream) {
+  if (isGroup) {
+    callRemotes.forEach((stream, pid) => {
+      const rv = $(`[data-call-remote="${CSS.escape(pid)}"]`, call);
+      if (rv && stream) rv.srcObject = stream;
+    });
+  } else if (remoteStream) {
     const rv = $("[data-call-remote]", call);
     if (rv) rv.srcObject = remoteStream;
   }
@@ -7873,23 +8184,27 @@ function renderCall() {
     callReactions.forEach((r) => pushCallReaction(r.emoji));
   }
   $(`[data-connect]`, call) && ($(`[data-connect]`, call).onclick = connectCall);
+  $(`[data-call-add]`, call)?.addEventListener("click", () => inviteToActiveCall());
   $$('[data-call-reaction]', call).forEach(
     (b) => (b.onclick = () => pushCallReaction(b.dataset.callReaction === "fire" ? "🔥" : b.dataset.callReaction === "party" ? "🎉" : "💪")),
   );
+  const eachPeer = (fn) => {
+    callPeers.forEach((p) => { try { fn(p.peer); } catch { /* ignore */ } });
+    if (activePeer) { try { fn(activePeer.peer); } catch { /* ignore */ } }
+  };
   $(`[data-mute]`, call).onclick = () => {
     state.callMuted = !state.callMuted;
-    // Toggle the live track too — muting must actually silence the mic.
-    activePeer?.peer.getSenders().forEach((s) => {
+    eachPeer((peer) => peer.getSenders().forEach((s) => {
       if (s.track?.kind === "audio") s.track.enabled = !state.callMuted;
-    });
+    }));
     activeCallStream?.getAudioTracks().forEach((t) => (t.enabled = !state.callMuted));
     renderCall();
   };
   $(`[data-camera]`, call).onclick = () => {
     state.callCameraOff = !state.callCameraOff;
-    activePeer?.peer.getSenders().forEach((s) => {
+    eachPeer((peer) => peer.getSenders().forEach((s) => {
       if (s.track?.kind === "video") s.track.enabled = !state.callCameraOff;
-    });
+    }));
     activeCallStream?.getVideoTracks().forEach((t) => (t.enabled = !state.callCameraOff));
     renderCall();
   };
@@ -7904,9 +8219,9 @@ function renderCall() {
       const next = cams.find((d) => d.deviceId !== curId) || cams[0];
       const newStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: next.deviceId } } });
       const newTrack = newStream.getVideoTracks()[0];
-      activePeer?.peer.getSenders().forEach((s) => {
+      eachPeer((peer) => peer.getSenders().forEach((s) => {
         if (s.track?.kind === "video") s.replaceTrack(newTrack).catch(() => {});
-      });
+      }));
       videoTrack.stop();
       activeCallStream.removeTrack(videoTrack);
       activeCallStream.addTrack(newTrack);
@@ -7921,20 +8236,19 @@ function renderCall() {
       if (!display) return;
       notify("Screen sharing started");
       display.getVideoTracks().forEach((track) =>
-        activePeer?.peer.getSenders().forEach((s) => {
+        eachPeer((peer) => peer.getSenders().forEach((s) => {
           if (s.track?.kind === "video") s.replaceTrack(track).catch(() => {});
-        }),
+        })),
       );
       display.getVideoTracks().forEach((track) =>
         track.addEventListener(
           "ended",
           () => {
             notify("Screen sharing stopped");
-            // give the camera back to the call after a screen-share session
             activeCallStream?.getVideoTracks().forEach((cam) =>
-              activePeer?.peer.getSenders().forEach((s) => {
+              eachPeer((peer) => peer.getSenders().forEach((s) => {
                 if (s.track?.kind === "video") s.replaceTrack(cam).catch(() => {});
-              }),
+              })),
             );
           },
           { once: true },
@@ -7968,42 +8282,11 @@ function renderCall() {
     }
   }
   $$("[data-end]", call).forEach(
-    (b) =>
-      (b.onclick = () => {
-        if (activeCallHistoryId)
-          updateCall(activeCallHistoryId, {
-            status: "ended",
-            ended_at: new Date().toISOString(),
-          });
-        if (activeCallHistoryId && state.user)
-          upsertCallParticipant({
-            call_id: activeCallHistoryId,
-            user_id: state.user.id,
-            status: "left",
-            left_at: new Date().toISOString(),
-          });
-        activePeer?.close();
-        activePeer = null;
-        // Release the camera/mic so the OS indicator and other apps get
-        // the hardware back the moment the call ends.
-        try {
-          activeCallStream?.getTracks().forEach((t) => t.stop());
-        } catch {
-          /* ignore */
-        }
-        activeCallStream = null;
-        remoteStream = null;
-        state.call = null;
-        state.callStartedAt = 0;
-        stopCallClock();
-        call.remove();
-        activeCallHistoryId = null;
-        notify("Call ended — great studying together " + sicon("check"));
-      }),
+    (b) => (b.onclick = () => teardownCall(true)),
   );
   $("[data-call-chat]", call).onclick = () => {
     if (!state.call) return;
-    const chatId = state.call.id;
+    const chatId = state.call.peerId || state.call.id;
     state.callMinimized = true;
     state.tab = "community";
     state.subtab = "messages";
@@ -8014,22 +8297,59 @@ function renderCall() {
   };
 }
 
-async function connectCall() {
+// Mid-call invite: ring extra friends into the current room (group or 1:1
+// upgraded). Each invitee gets a ringing participant row + call_history echo
+// through the same subscription that powers Accept/Decline.
+async function inviteToActiveCall() {
+  if (!state.call || !activeCallHistoryId) return notify("Start the call first");
+  openFriendsPicker({
+    title: "Add people to the call",
+    eyebrow: "Mid-call invite",
+    note: "They'll get a ring and can join this room.",
+    cta: "Send invites",
+    onDone: async (ids) => {
+      if (!ids.length) return;
+      if (callPeers.size + ids.length > 5) return notify("This call is full (max 6 people)");
+      if (!Array.isArray(state.call.extras)) state.call.extras = [];
+      for (const id of ids) {
+        if (!state.call.extras.includes(id)) state.call.extras.push(id);
+        await upsertCallParticipant({
+          call_id: activeCallHistoryId,
+          user_id: id,
+          status: "ringing",
+        }).catch(() => {});
+        // Their incoming-call subscription keys off participant INSERT too.
+        await updateCall(activeCallHistoryId, { status: "ringing" }).catch(() => {});
+      }
+      startMeshWatch();
+      notify(`Ringing ${ids.length} friend${ids.length === 1 ? "" : "s"}…`);
+    },
+  });
+}
+
+// force=true tears existing peers first (Accept re-offer when an early
+// timeout offer went out before the callee's channel was up). Default is
+// additive: fill missing mesh slots without dropping live ones.
+async function connectCall({ force = false } = {}) {
   if (!backendConfigured)
     return notify("Add Supabase keys to enable live WebRTC calls");
   if (!state.call) return;
-  if (state.callStatus === "connecting") return;
-  // A retry must tear the previous peer down first, or the old signaling
-  // channel and tracks leak and the second connect always fails.
-  if (activePeer) {
-    try {
-      activePeer.close();
-    } catch {
-      /* ignore */
-    }
-    activePeer = null;
+  if (connectInFlight) {
+    // A second Accept/retry while the first connect is still opening media:
+    // remember it and re-run (force) as soon as the in-flight call finishes.
+    if (force) forceConnectPending = true;
+    return;
   }
+  connectInFlight = true;
   try {
+    // A force-retry must tear previous peers down first, or old signaling
+    // channels and tracks leak and the second connect always fails.
+    if (force && (callPeers.size || activePeer)) {
+      callPeers.forEach((p) => { try { p.close(); } catch { /* ignore */ } });
+      callPeers.clear();
+      callRemotes.clear();
+      activePeer = null;
+    }
     const permission = await navigator.permissions?.query?.({ name: "camera" });
     if (permission?.state === "denied")
       return notify(
@@ -8042,57 +8362,27 @@ async function connectCall() {
       return notify(
         "Microphone permission is blocked. Allow it in browser settings and try again.",
       );
-    state.callStatus = "connecting";
+    if (state.callStatus !== "connected") state.callStatus = "connecting";
     renderCall();
-    const stream = await navigator.mediaDevices.getUserMedia({
+    const stream = activeCallStream || await navigator.mediaDevices.getUserMedia({
       audio: true,
       video: true,
     });
     activeCallStream = stream;
     if (!state.callStartedAt) state.callStartedAt = Date.now();
-    activePeer = await createWebRtcPeer({
-      roomId: state.call.id,
-      userId: state.user?.id || uid(),
-      initiator: true,
-      stream,
-      onTrack: (incoming) => {
-        remoteStream = incoming || null;
-        notify(sicon("user") + " A study partner joined the call");
-        renderCall();
-      },
-      onStateChange: (status) => {
-        state.callStatus = status;
-        if (status === "connected") notify("Live call connected");
-        if (status === "disconnected" || status === "failed") {
-          remoteStream = null;
-          notify("Call connection lost. Press Connect to retry.");
-        }
-        renderCall();
-      },
-    });
-    if (state.user) {
-      const result = await recordCall({
-        room_id: state.call.id,
-        initiator_id: state.user.id,
-        group_id: allGroups().some((group) => group.id === state.call.id)
-          ? state.call.id
-          : null,
-        recipient_id: null,
-        status: "connected",
-        connected_at: new Date().toISOString(),
-      });
-      activeCallHistoryId = result.data?.id;
-      if (activeCallHistoryId)
-        await upsertCallParticipant({
-          call_id: activeCallHistoryId,
-          user_id: state.user.id,
-          status: "connected",
-          joined_at: new Date().toISOString(),
-        });
-    }
-    state.callStatus = "connected";
+    const targets = await resolveCallTargets();
+    await Promise.all(targets.map((id) => ensureCallPeer(id, stream)));
+    // Stay in "connecting" until onTrack reports real ICE — never claim
+    // "connected" before a peer is up.
+    if (!callPeers.size) state.callStatus = "idle";
     renderCall();
-    notify("Camera and microphone connected");
+    notify(callPeers.size
+      ? (callIsInitiator || state.call.kind === "group"
+          ? "Outgoing call live — waiting for peers"
+          : "Joined — waiting for the offer")
+      : "Camera and microphone connected");
+    ensureIncomingCallSubscription();
+    startMeshWatch();
   } catch (error) {
     // A failed start must not leave a half-open camera or a stuck
     // "connecting" state behind.
@@ -8103,17 +8393,30 @@ async function connectCall() {
     }
     activeCallStream = null;
     remoteStream = null;
+    callRemotes.clear();
+    callPeers.forEach((p) => { try { p.close(); } catch { /* ignore */ } });
+    callPeers.clear();
+    activePeer = null;
     if (state.call) {
       state.callStatus = "idle";
       renderCall();
     }
     notify(error?.message || "Could not start camera and microphone");
+  } finally {
+    connectInFlight = false;
+    if (forceConnectPending && state.call) {
+      forceConnectPending = false;
+      // Re-offer after a concurrent Accept — don't lose the ring handshake.
+      connectCall({ force: true }).catch(() => {});
+    } else {
+      forceConnectPending = false;
+    }
   }
 }
 
 
 
-export { allGroups, sprintTicker, weekKey, logFocusDay, weekMinutes, progressChallenges, fmtCountdown, clearSprintTicker, ensureSprintTicker, renderCommunity, groupMatches, groupCardWithReason, renderSprints, leaderboardMarkup, sprintGroupName, sprintBoardMarkup, challengeRow, challengeMarkup, eventWhen, eventMarkup, postGroupMessage, bindSprints, timeAgo, isSeen, markSeen, statusDuration, buildStatusSequence, pruneExpiredStories, ownStory, deleteStatus, liveStories, storiesMarkup, bindStories, statusSeq, statusIdx, statusTimer, statusItemStart, statusItemDur, statusElapsed, statusPaused, statusHoldTimer, statusHolding, statusTouch, statusNavToken, statusNextIdx, statusPrevIdx, statusRemaining, clearStatusTimer, openStatus, closeStatus, closeStatusMenu, toggleStatusMenu, askDeleteStatus, afterStatusDeleted, statusKeys, goStatus, showStatusItem, renderStatusProgress, setStatusFill, startStatusPlayback, pauseStatus, resumeStatus, statusPointerDown, statusPointerUp, statusPointerCancel, renderDiscover, bindFeed, renderComments, subjectForGroup, groupCard, bindGroupButtons, renderMyGroups, inviteText, myReferralCode, referralMarkup, redeemReferral, conversationSubscription, renderFriends, renderMessages, chatKey, REACT_EMOJI, escSnippet, messageText, pollVotes, messageHtml, chatMarkup, bindChat, openPollBuilder, startRecording, stopRecording, saveVoice, subscribePresenceFor, sendChat, subscribeToChat, activePeer, activeCallHistoryId, chatReply, voiceRec, presenceSub, presenceInfo, renderCall, connectCall };
+export { allGroups, sprintTicker, weekKey, logFocusDay, weekMinutes, progressChallenges, fmtCountdown, clearSprintTicker, ensureSprintTicker, renderCommunity, groupMatches, groupCardWithReason, renderSprints, leaderboardMarkup, sprintGroupName, sprintBoardMarkup, challengeRow, challengeMarkup, eventWhen, eventMarkup, postGroupMessage, bindSprints, timeAgo, isSeen, markSeen, statusDuration, buildStatusSequence, pruneExpiredStories, ownStory, deleteStatus, liveStories, storiesMarkup, bindStories, statusSeq, statusIdx, statusTimer, statusItemStart, statusItemDur, statusElapsed, statusPaused, statusHoldTimer, statusHolding, statusTouch, statusNavToken, statusNextIdx, statusPrevIdx, statusRemaining, clearStatusTimer, openStatus, closeStatus, closeStatusMenu, toggleStatusMenu, askDeleteStatus, afterStatusDeleted, statusKeys, goStatus, showStatusItem, renderStatusProgress, setStatusFill, startStatusPlayback, pauseStatus, resumeStatus, statusPointerDown, statusPointerUp, statusPointerCancel, renderDiscover, bindFeed, renderComments, subjectForGroup, groupCard, bindGroupButtons, renderMyGroups, inviteText, myReferralCode, referralMarkup, redeemReferral, conversationSubscription, renderFriends, renderMessages, chatKey, REACT_EMOJI, escSnippet, messageText, pollVotes, messageHtml, chatMarkup, bindChat, openPollBuilder, startRecording, stopRecording, saveVoice, subscribePresenceFor, sendChat, subscribeToChat, activePeer, activeCallHistoryId, chatReply, voiceRec, presenceSub, presenceInfo, renderCall, connectCall, ensureIncomingCallSubscription, startOutgoingCall, teardownCall, inviteToActiveCall };
 export { postOwnerId, isOwnPost, visiblePosts, postMenuMarkup, closePostMenus, togglePostMenu, startPostEdit, askDeletePost, BLOCK_REASONS, isUuid, blockKeyFor, isBlockedKey, askBlockUser, blockReasonDialog, submitBlock, unblockUser, blockedSectionMarkup };
 export { isGroupChat, groupById, isGroupOwner, isChatMuted, setChatMute, clearChatMute, muteLabel, searchGroupMessages, extractLinks, groupShared, groupRoster, senderLabel, groupMenuMarkup, leaveGroupById, openGroupSearch, jumpToGroupMessage, openGroupMedia, openMuteModal, openGroupInfo, openGroupMembers, openGroupSettings, openGroupReport, askClearGroupHistory, askLeaveGroup, askDisbandGroup, closeGroupMedia, closeMediaViewer };
 export { sanitizeSprint, ensureSprintFields, isSprintOwner, sprintCrewWithMe, crewPaceMarkup, inviteInboxMarkup, resolveOneInvite, openSprintEditor, missionDeskMarkup, bindMissionDesk };

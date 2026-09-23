@@ -1032,6 +1032,22 @@ export async function recordCall(call) {
   return supabase.from("call_history").insert(call).select().single();
 }
 
+export async function getCallById(callId) {
+  if (!supabase || !callId)
+    return { data: null, error: new Error("Call history is not configured") };
+  return supabase.from("call_history").select("*").eq("id", callId).maybeSingle();
+}
+
+export async function listCallParticipants(callId) {
+  if (!supabase || !callId)
+    return { data: [], error: new Error("Call history is not configured") };
+  return supabase
+    .from("call_participants")
+    .select("user_id,status,joined_at")
+    .eq("call_id", callId)
+    .limit(24);
+}
+
 export async function updateCall(callId, updates) {
   if (!supabase)
     return { data: null, error: new Error("Call history is not configured") };
@@ -1091,6 +1107,12 @@ export function createSignalingRoom(roomId, userId, onSignal) {
   };
 }
 
+// Sorted-pair room id — both sides of a 1:1 must join the SAME channel or
+// offers/answers never cross (each side used to sit on its own peer id).
+export function dmCallRoomId(a, b) {
+  return [a, b].filter(Boolean).sort().join("--");
+}
+
 export async function createWebRtcPeer({
   roomId,
   userId,
@@ -1098,34 +1120,61 @@ export async function createWebRtcPeer({
   stream,
   onTrack,
   onStateChange,
+  peerId = null, // remote user id — used as targetId for group mesh routing
 }) {
   const peer = new RTCPeerConnection({
     iceServers: [{ urls: "stun:stun.l.google.com:19302" }, ...turnServers],
   });
+  // Candidates that arrive before setRemoteDescription must be queued —
+  // addIceCandidate throws (or is dropped) without a remote description.
+  const pendingCandidates = [];
+  let hasRemoteDesc = false;
+  const drainCandidates = async () => {
+    while (pendingCandidates.length) {
+      try {
+        await peer.addIceCandidate(pendingCandidates.shift());
+      } catch {
+        /* skip poisoned candidate */
+      }
+    }
+  };
+  const target = peerId ? { targetId: peerId } : {};
   const room = createSignalingRoom(roomId, userId, async (signal) => {
-    if (signal.type === "offer") {
-      await peer.setRemoteDescription(signal.description);
-      const answer = await peer.createAnswer();
-      await peer.setLocalDescription(answer);
-      await room.send({ type: "answer", description: peer.localDescription });
-    } else if (signal.type === "answer") {
-      await peer.setRemoteDescription(signal.description);
-    } else if (signal.type === "candidate" && signal.candidate) {
-      await peer.addIceCandidate(signal.candidate);
+    // Mesh rooms are shared: only process signals addressed to us.
+    if (signal.targetId && signal.targetId !== userId) return;
+    try {
+      if (signal.type === "offer") {
+        await peer.setRemoteDescription(signal.description);
+        hasRemoteDesc = true;
+        await drainCandidates();
+        const answer = await peer.createAnswer();
+        await peer.setLocalDescription(answer);
+        await room.send({ type: "answer", description: peer.localDescription, ...target, targetId: signal.senderId });
+      } else if (signal.type === "answer") {
+        await peer.setRemoteDescription(signal.description);
+        hasRemoteDesc = true;
+        await drainCandidates();
+      } else if (signal.type === "candidate" && signal.candidate) {
+        if (!hasRemoteDesc) pendingCandidates.push(signal.candidate);
+        else await peer.addIceCandidate(signal.candidate);
+      }
+    } catch {
+      /* renegotiation glitch — connection state callback surfaces real failures */
     }
   });
   peer.onicecandidate = ({ candidate }) =>
-    candidate && room.send({ type: "candidate", candidate });
+    candidate && room.send({ type: "candidate", candidate, ...target, targetId: peerId || undefined });
   peer.ontrack = (event) => onTrack?.(event.streams[0]);
   peer.onconnectionstatechange = () => onStateChange?.(peer.connectionState);
   stream?.getTracks().forEach((track) => peer.addTrack(track, stream));
   if (initiator) {
     const offer = await peer.createOffer();
     await peer.setLocalDescription(offer);
-    await room.send({ type: "offer", description: peer.localDescription });
+    await room.send({ type: "offer", description: peer.localDescription, ...target, targetId: peerId || undefined });
   }
   return {
     peer,
+    peerId,
     addStream: (mediaStream) =>
       mediaStream
         .getTracks()
@@ -1135,6 +1184,53 @@ export async function createWebRtcPeer({
       peer.close();
     },
   };
+}
+
+// Ring/accept: watch for calls where I am the recipient and/or a participant
+// row is waiting on me. Returns an unsubscribe handle.
+export function subscribeToIncomingCalls(myUserId, { onRinging, onAccepted, onCancelled } = {}) {
+  if (!supabase || !myUserId) return { unsubscribe: () => {} };
+  const channel = supabase
+    .channel(`studyflow-calls-in:${myUserId}`)
+    .on(
+      "postgres_changes",
+      { event: "INSERT", schema: "public", table: "call_history", filter: `recipient_id=eq.${myUserId}` },
+      (payload) => {
+        const row = payload.new;
+        if (row && row.status === "ringing") onRinging?.(row);
+      },
+    )
+    .on(
+      "postgres_changes",
+      { event: "UPDATE", schema: "public", table: "call_history", filter: `recipient_id=eq.${myUserId}` },
+      (payload) => {
+        const row = payload.new;
+        if (!row) return;
+        if (row.status === "connecting" || row.status === "connected") onAccepted?.(row);
+        else if (row.status === "ended" || row.status === "missed" || row.status === "failed") onCancelled?.(row);
+      },
+    )
+    .on(
+      "postgres_changes",
+      { event: "UPDATE", schema: "public", table: "call_history" },
+      (payload) => {
+        // Initiator side: callee accepted/declined.
+        const row = payload.new;
+        if (!row || row.initiator_id !== myUserId) return;
+        if (row.status === "connecting" || row.status === "connected") onAccepted?.(row);
+        else if (row.status === "ended" || row.status === "missed" || row.status === "failed") onCancelled?.(row);
+      },
+    )
+    .on(
+      "postgres_changes",
+      { event: "INSERT", schema: "public", table: "call_participants", filter: `user_id=eq.${myUserId}` },
+      (payload) => {
+        const row = payload.new;
+        if (row && row.status === "ringing") onRinging?.({ id: row.call_id, _fromParticipant: true });
+      },
+    )
+    .subscribe();
+  return { unsubscribe: () => supabase.removeChannel(channel) };
 }
 
 // --- Phase 4: secure rewards & progression ----------------------------------
@@ -2254,7 +2350,7 @@ export async function deleteStory(storyId) {
 const GROUP_BUCKET = "studyflow-groups";
 const STORY_BUCKET = "studyflow-stories";
 const GROUP_AVATAR_MAX = 2 * 1024 * 1024;
-const STORY_PHOTO_MAX = 2 * 1024 * 1024;
+const STORY_PHOTO_MAX = 50 * 1024 * 1024;
 export { validateImageFile, IMAGE_FORMAT_ERROR };
 export const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 // "Muted forever" sentinel: a real timestamptz so expiry comparisons keep

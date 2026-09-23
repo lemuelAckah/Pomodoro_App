@@ -2,7 +2,7 @@
 import {
   state, $, $$, uid, get, save, esc, sicon, persist, notify, confirmBox, toast, viewHead,
   addCoins, fmt, fmtDur, dayKey, celebrate, addNotification, browserNotify,
-  ensureNotifyPermission, notifOn, updateBarPadding, makeDraggable,
+  ensureNotifyPermission, notifOn, updateBarPadding, makeDraggable, pushUserSettings,
 } from "./core.js";
 import { playChime, stopAllLayers, startAmbient, applyLinkToTimer, warmAudio } from "./audio.js";
 import { techniques, TECH_DETAILS, matchTech, totalDue, openTechniqueGuide } from "./techniques.js";
@@ -642,6 +642,7 @@ function applyTemplate(t) {
   state.endsAt = null;
   state.sessionTech = null;
   persist();
+  pushUserSettings();
   renderTimer();
 }
 
@@ -681,6 +682,9 @@ function applyCustomDuration(root) {
   state.running = false;
   state.endsAt = null;
   persist();
+  // Settings changes must reach user_settings too — otherwise the next
+  // signed-in boot's applyUserSettings() reverts this edit.
+  pushUserSettings();
   renderTimer();
   renderMiniTimer();
   // Silent apply — the ring and inputs visibly update in place. A toast after
@@ -972,21 +976,12 @@ function completeSession() {
     } catch {
       addCoins(reward);
     }
-    addNotification(
-      "Focus session complete",
-      `You earned ${reward} coins (includes ${streakBonus} streak bonus${extras.length ? ` · ${extras.join(" · ")}` : ""}) for showing up and doing the work.`,
-      "timer",
-    );
+    // No notifications-centre entry and no OS notification for focus
+    // completion — the in-page dialog, chime, card and confetti are enough.
     notify(
       `Session complete · +${reward} coins ${sicon("fire")} ${state.streak.count}-day streak`,
     );
-    if (notifOn("completion")) {
-      playChime("focus");
-      browserNotify(
-        "🎉 Focus complete",
-        "Beautiful work — time for a well-earned break.",
-      );
-    }
+    if (notifOn("completion")) playChime("focus");
     persist();
     updateTimerDom();
     renderMiniTimer();
