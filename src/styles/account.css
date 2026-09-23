@@ -398,8 +398,9 @@
 }
 
 /* First-run backdrop: the StudyFlow clock dial, oversized and quiet, on a
-   medium-dark "dusk" canvas — between the light app paper and full night.
-   Shared with the technique-check page (see .tc-bg in techcheck.css). */
+   mid-tone "dusk" canvas — the middle ground between bright paper and full
+   night. Shared with the technique-check page (see .tc-dusk in techcheck.css).
+   The dial breathes and its orbit dots drift so the page feels alive. */
 .landing-dusk {
   position: fixed;
   inset: 0;
@@ -407,10 +408,10 @@
   pointer-events: none;
   overflow: hidden;
   background:
-    radial-gradient(1100px 700px at 18% -10%, rgba(116, 168, 132, 0.28), transparent 65%),
-    radial-gradient(900px 640px at 88% 12%, rgba(233, 174, 63, 0.17), transparent 60%),
-    radial-gradient(1000px 720px at 50% 115%, rgba(72, 96, 118, 0.30), transparent 62%),
-    linear-gradient(168deg, #37453c 0%, #2c3830 48%, #27312a 100%);
+    radial-gradient(1100px 700px at 18% -10%, rgba(140, 190, 155, 0.40), transparent 65%),
+    radial-gradient(900px 640px at 88% 12%, rgba(233, 174, 63, 0.24), transparent 60%),
+    radial-gradient(1000px 720px at 50% 115%, rgba(96, 132, 160, 0.28), transparent 62%),
+    linear-gradient(168deg, #5f8470 0%, #537762 48%, #4a6d5a 100%);
 }
 
 /* Fine dot-grid texture keeps the big surfaces from feeling flat. */
@@ -418,58 +419,103 @@
   content: "";
   position: absolute;
   inset: 0;
-  background-image: radial-gradient(rgba(242, 240, 228, 0.13) 1px, transparent 1.4px);
+  background-image: radial-gradient(rgba(242, 240, 228, 0.16) 1px, transparent 1.4px);
   background-size: 30px 30px;
   mask-image: radial-gradient(90% 80% at 50% 20%, #000 25%, transparent 100%);
   -webkit-mask-image: radial-gradient(90% 80% at 50% 20%, #000 25%, transparent 100%);
-  opacity: 0.5;
+  opacity: 0.55;
 }
 
-/* The clock: a giant dial — ring, twelve ticks, and hands — rendered in pure
-   CSS so it stays crisp at any size and costs nothing. */
-.landing-dusk .dusk-dial {
+/* Soft radial glow behind the dial so it lifts off the mid-tone canvas. */
+.landing-dusk .dusk-glow {
   position: absolute;
-  right: -14vw;
+  right: -6vw;
   top: 50%;
-  width: min(78vw, 620px);
+  width: min(92vw, 780px);
   aspect-ratio: 1;
   transform: translateY(-50%);
   border-radius: 50%;
-  border: 2px solid rgba(242, 240, 228, 0.14);
+  background: radial-gradient(closest-side, rgba(214, 234, 206, 0.34), rgba(214, 234, 206, 0.08) 62%, transparent 74%);
+  animation: dusk-breathe 9s ease-in-out infinite;
+}
+
+/* The clock: a giant dial — soft green disc, concentric ring, pie icon —
+   rendered in pure CSS so it stays crisp at any size. */
+.landing-dusk .dusk-dial {
+  position: absolute;
+  right: -8vw;
+  top: 50%;
+  width: min(84vw, 680px);
+  aspect-ratio: 1;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  border: 3px solid rgba(242, 240, 228, 0.28);
   box-shadow:
-    inset 0 0 0 14px rgba(242, 240, 228, 0.035),
-    inset 0 0 0 15px rgba(242, 240, 228, 0.07),
-    0 30px 120px rgba(10, 16, 12, 0.35);
+    inset 0 0 0 18px rgba(214, 234, 206, 0.16),
+    inset 0 0 0 19px rgba(242, 240, 228, 0.22),
+    0 30px 120px rgba(10, 16, 12, 0.30);
   background:
-    radial-gradient(closest-side, rgba(242, 240, 228, 0.05), rgba(242, 240, 228, 0.012) 62%, transparent 70%);
-  opacity: 0.9;
+    radial-gradient(closest-side, rgba(203, 228, 190, 0.42), rgba(203, 228, 190, 0.14) 68%, transparent 78%);
+  animation: dusk-breathe 9s ease-in-out infinite;
 }
 
-/* Hands */
-.landing-dusk .dusk-dial::before {
-  content: "";
+/* Inner pie icon — the mark from the preview, slowly turning. */
+.landing-dusk .dusk-pie {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 4px;
-  height: 34%;
-  border-radius: 4px;
-  background: linear-gradient(180deg, rgba(242, 240, 228, 0.55), rgba(242, 240, 228, 0.08));
-  transform-origin: 50% 100%;
-  transform: translate(-50%, -100%) rotate(135deg);
+  width: 22%;
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 3px solid rgba(242, 240, 228, 0.75);
+  background:
+    conic-gradient(from -90deg,
+      rgba(242, 240, 228, 0.85) 0 25%,
+      transparent 25% 100%);
+  animation: dusk-spin-slow 40s linear infinite;
 }
 
-.landing-dusk .dusk-dial::after {
-  content: "";
+/* Thin secondary ring inside the disc. */
+.landing-dusk .dusk-ring {
   position: absolute;
-  left: 50%;
+  inset: 14%;
+  border-radius: 50%;
+  border: 1.5px dashed rgba(242, 240, 228, 0.28);
+  animation: dusk-spin-slow 70s linear infinite reverse;
+}
+
+/* Orbit path with two dots (coral + gold) circling the dial. */
+.landing-dusk .dusk-orbit {
+  position: absolute;
+  right: -8vw;
   top: 50%;
-  width: 3px;
-  height: 22%;
-  border-radius: 3px;
-  background: linear-gradient(180deg, rgba(233, 174, 63, 0.65), rgba(233, 174, 63, 0.1));
-  transform-origin: 50% 100%;
-  transform: translate(-50%, -100%) rotate(45deg);
+  width: min(84vw, 680px);
+  aspect-ratio: 1;
+  transform: translateY(-50%);
+  animation: dusk-orbit 28s linear infinite;
+}
+
+.landing-dusk .dusk-dot {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  box-shadow: 0 0 14px rgba(0, 0, 0, 0.18);
+}
+
+.landing-dusk .dusk-dot.a {
+  top: 8%;
+  right: 18%;
+  background: var(--coral, #e8795b);
+}
+
+.landing-dusk .dusk-dot.b {
+  bottom: 14%;
+  left: 12%;
+  width: 11px;
+  height: 11px;
+  background: var(--gold, #e9ae3f);
 }
 
 /* Second ring echoing the dial lower-left, for depth */
@@ -480,7 +526,8 @@
   width: min(50vw, 420px);
   aspect-ratio: 1;
   border-radius: 50%;
-  border: 1.5px dashed rgba(242, 240, 228, 0.10);
+  border: 1.5px dashed rgba(242, 240, 228, 0.18);
+  animation: dusk-drift 14s ease-in-out infinite;
 }
 
 /* The first-run pages sit on the dusk canvas, so their ink flips light. */
@@ -490,7 +537,7 @@
 
 .landing-on-dusk .card {
   background: rgba(20, 28, 23, 0.55);
-  border-color: rgba(242, 240, 228, 0.12);
+  border-color: rgba(242, 240, 228, 0.14);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   box-shadow: 0 20px 60px rgba(8, 14, 10, 0.35);
@@ -502,7 +549,7 @@
 }
 
 .landing-on-dusk .muted {
-  color: rgba(238, 240, 230, 0.66);
+  color: rgba(238, 240, 230, 0.72);
 }
 
 .landing-on-dusk .landing-hero h1 {
@@ -511,22 +558,61 @@
 }
 
 .landing-on-dusk .lede {
-  color: rgba(238, 240, 230, 0.78);
+  color: rgba(238, 240, 230, 0.84);
 }
 
 .landing-on-dusk .eyebrow {
-  color: rgba(233, 174, 63, 0.9);
+  color: rgba(233, 174, 63, 0.95);
 }
 
 .landing-on-dusk .brand-mark {
-  background: linear-gradient(140deg, rgba(242, 240, 228, 0.14), rgba(242, 240, 228, 0.05));
-  border: 1px solid rgba(242, 240, 228, 0.22);
+  background: linear-gradient(140deg, rgba(242, 240, 228, 0.16), rgba(242, 240, 228, 0.06));
+  border: 1px solid rgba(242, 240, 228, 0.26);
   color: #f4f3ea;
   box-shadow: 0 8px 30px rgba(8, 14, 10, 0.35);
 }
 
 .landing-on-dusk .landing-foot {
-  color: rgba(238, 240, 230, 0.45);
+  color: rgba(238, 240, 230, 0.55);
+}
+
+/* "How it works" ghost button — light outline on the mid-tone canvas. */
+.landing-on-dusk .landing-ghost {
+  background: rgba(242, 240, 228, 0.10);
+  border: 1.5px solid rgba(242, 240, 228, 0.40);
+  color: #eef0e6;
+}
+
+.landing-on-dusk .landing-ghost:hover {
+  background: rgba(242, 240, 228, 0.18);
+  border-color: rgba(242, 240, 228, 0.65);
+}
+
+@media (max-width: 720px) {
+  .landing-dusk .dusk-dial,
+  .landing-dusk .dusk-orbit {
+    right: -30vw;
+    width: min(120vw, 560px);
+  }
+  .landing-dusk .dusk-glow {
+    right: -24vw;
+    width: min(130vw, 640px);
+  }
+  .landing-dusk .dusk-dot {
+    width: 11px;
+    height: 11px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-dusk .dusk-dial,
+  .landing-dusk .dusk-glow,
+  .landing-dusk .dusk-pie,
+  .landing-dusk .dusk-ring,
+  .landing-dusk .dusk-orbit,
+  .landing-dusk .dusk-echo {
+    animation: none !important;
+  }
 }
 
 .landing-hero {

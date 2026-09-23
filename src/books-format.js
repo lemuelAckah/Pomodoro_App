@@ -77,68 +77,205 @@ function xmlEscape(s) {
 
 const W_NS = `xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"`;
 
-function docxRun(text, opts = {}) {
-  const rpr = opts.bold ? "<w:rPr><w:b/><w:color w:val=\"2D4327\"/></w:rPr>"
-    : opts.italic ? "<w:rPr><w:i/></w:rPr>"
-    : "";
-  return `<w:r>${rpr}<w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r>`;
+// Named palette — sage headings, gold accents, warm ink (matches the app).
+const DOCX_INK = "26301F";
+const DOCX_SAGE = "3F6B52";
+const DOCX_GOLD = "B8862A";
+const DOCX_MUTED = "5C6B60";
+
+function docxRPr(opts = {}) {
+  const bits = [];
+  if (opts.bold) bits.push("<w:b/>");
+  if (opts.italic) bits.push("<w:i/>");
+  if (opts.color) bits.push(`<w:color w:val="${opts.color}"/>`);
+  if (opts.size) bits.push(`<w:sz w:val="${opts.size}"/><w:szCs w:val="${opts.size}"/>`);
+  if (opts.caps) bits.push("<w:caps/>");
+  if (opts.spacing) bits.push(`<w:spacing w:val="${opts.spacing}"/>`);
+  if (!bits.length) return "";
+  return `<w:rPr>${bits.join("")}</w:rPr>`;
 }
 
-function inlineRuns(text) {
-  // **bold** and *italic* support; everything else literal.
+function docxRun(text, opts = {}) {
+  return `<w:r>${docxRPr(opts)}<w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r>`;
+}
+
+function docxPara(runs, pPr = "") {
+  return `<w:p>${pPr ? `<w:pPr>${pPr}</w:pPr>` : ""}${runs}</w:p>`;
+}
+
+// Inline **bold**, *italic*, `code` support.
+function inlineRuns(text, base = {}) {
   const out = [];
-  const re = /(\*\*[^*]+\*\*|\*[^*]+\*)/g;
+  const re = /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g;
   let last = 0;
   let m;
   while ((m = re.exec(text))) {
-    if (m.index > last) out.push(docxRun(text.slice(last, m.index)));
+    if (m.index > last) out.push(docxRun(text.slice(last, m.index), base));
     const tok = m[0];
-    if (tok.startsWith("**")) out.push(docxRun(tok.slice(2, -2), { bold: true }));
-    else out.push(docxRun(tok.slice(1, -1), { italic: true }));
+    if (tok.startsWith("**")) out.push(docxRun(tok.slice(2, -2), { ...base, bold: true }));
+    else if (tok.startsWith("`")) out.push(docxRun(tok.slice(1, -1), { ...base, color: DOCX_SAGE }));
+    else out.push(docxRun(tok.slice(1, -1), { ...base, italic: true }));
     last = m.index + tok.length;
   }
-  if (last < text.length) out.push(docxRun(text.slice(last)));
+  if (last < text.length) out.push(docxRun(text.slice(last), base));
   return out.join("");
+}
+
+// Named Word styles: Title page, chapter page-breaks, sage headings, gold
+// quotes — so the export opens looking designed, not like plain text.
+function docxStylesXml() {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles ${W_NS}>
+<w:docDefaults>
+  <w:rPrDefault><w:rPr>
+    <w:rFonts w:ascii="Georgia" w:hAnsi="Georgia" w:cs="Georgia"/>
+    <w:sz w:val="23"/><w:szCs w:val="23"/>
+    <w:color w:val="${DOCX_INK}"/>
+    <w:lang w:val="en-US"/>
+  </w:rPr></w:rPrDefault>
+  <w:pPrDefault><w:pPr>
+    <w:spacing w:after="160" w:line="276" w:lineRule="auto"/>
+  </w:pPr></w:pPrDefault>
+</w:docDefaults>
+
+<w:style w:type="paragraph" w:default="1" w:styleId="Normal">
+  <w:name w:val="Normal"/><w:qFormat/>
+</w:style>
+
+<w:style w:type="paragraph" w:styleId="Title">
+  <w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:next w:val="Subtitle"/><w:qFormat/>
+  <w:pPr><w:spacing w:before="0" w:after="120"/><w:jc w:val="center"/></w:pPr>
+  <w:rPr><w:b/><w:color w:val="${DOCX_SAGE}"/><w:sz w:val="56"/><w:szCs w:val="56"/><w:spacing w:val="10"/></w:rPr>
+</w:style>
+
+<w:style w:type="paragraph" w:styleId="Subtitle">
+  <w:name w:val="Subtitle"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>
+  <w:pPr><w:spacing w:after="80"/><w:jc w:val="center"/></w:pPr>
+  <w:rPr><w:i/><w:color w:val="${DOCX_MUTED}"/><w:sz w:val="26"/><w:szCs w:val="26"/></w:rPr>
+</w:style>
+
+<w:style w:type="paragraph" w:styleId="Heading1">
+  <w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>
+  <w:pPr><w:keepNext/><w:pageBreakBefore/><w:spacing w:before="0" w:after="240"/><w:outlineLvl w:val="0"/><w:jc w:val="left"/></w:pPr>
+  <w:rPr><w:b/><w:color w:val="${DOCX_SAGE}"/><w:sz w:val="40"/><w:szCs w:val="40"/><w:spacing w:val="8"/></w:rPr>
+</w:style>
+
+<w:style w:type="paragraph" w:styleId="Heading2">
+  <w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>
+  <w:pPr><w:keepNext/><w:spacing w:before="320" w:after="160"/><w:outlineLvl w:val="1"/></w:pPr>
+  <w:rPr><w:b/><w:color w:val="${DOCX_SAGE}"/><w:sz w:val="30"/><w:szCs w:val="30"/></w:rPr>
+</w:style>
+
+<w:style w:type="paragraph" w:styleId="Heading3">
+  <w:name w:val="heading 3"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>
+  <w:pPr><w:keepNext/><w:spacing w:before="240" w:after="120"/><w:outlineLvl w:val="2"/></w:pPr>
+  <w:rPr><w:b/><w:color w:val="${DOCX_INK}"/><w:sz w:val="26"/><w:szCs w:val="26"/></w:rPr>
+</w:style>
+
+<w:style w:type="paragraph" w:styleId="Quote">
+  <w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>
+  <w:pPr>
+    <w:spacing w:before="120" w:after="160"/>
+    <w:ind w:left="567" w:right="567"/>
+    <w:jc w:val="left"/>
+    <w:pBdr><w:left w:val="single" w:sz="18" w:space="12" w:color="${DOCX_GOLD}"/></w:pBdr>
+  </w:pPr>
+  <w:rPr><w:i/><w:color w:val="${DOCX_MUTED}"/></w:rPr>
+</w:style>
+
+<w:style w:type="paragraph" w:styleId="Ornament">
+  <w:name w:val="Ornament"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/>
+  <w:pPr><w:spacing w:before="200" w:after="200"/><w:jc w:val="center"/></w:pPr>
+  <w:rPr><w:color w:val="${DOCX_GOLD}"/><w:sz w:val="24"/></w:rPr>
+</w:style>
+
+<w:style w:type="paragraph" w:styleId="ListParagraph">
+  <w:name w:val="List Paragraph"/><w:basedOn w:val="Normal"/><w:qFormat/>
+  <w:pPr><w:spacing w:after="80"/><w:ind w:left="720" w:hanging="360"/></w:pPr>
+</w:style>
+</w:styles>`;
+}
+
+function docxStyleP(styleId, runs) {
+  return `<w:p><w:pPr><w:pStyle w:val="${styleId}"/></w:pPr>${runs}</w:p>`;
 }
 
 // md: canonical markdown string, meta: { title, author }
 export function markdownToDocxBlob(md, meta = {}) {
   const title = String(meta.title || "Book").slice(0, 200);
   const author = String(meta.author || "Unknown author").slice(0, 200);
+  const src = String(md || "");
+  const srcLines = src.split("\n");
+
+  // Detect a leading `# Title` (+ optional *author*) so we don't double-title;
+  // those lines become the styled title page instead of a body heading.
+  let i = 0;
+  const skipBlank = () => { while (i < srcLines.length && !srcLines[i].trim()) i++; };
+  skipBlank();
+  let bodyTitle = title;
+  let bodyAuthor = author;
+  if (i < srcLines.length && /^#\s+/.test(srcLines[i])) {
+    bodyTitle = srcLines[i].replace(/^#\s+/, "").trim() || title;
+    i++;
+    skipBlank();
+    if (i < srcLines.length && /^\*[^*]+\*$/.test(srcLines[i].trim())) {
+      const a = srcLines[i].trim().slice(1, -1).trim();
+      if (a && a !== "Unknown author") bodyAuthor = a;
+      i++;
+      skipBlank();
+    }
+    if (i < srcLines.length && /^\s*(---|___|\*\*\*)\s*$/.test(srcLines[i])) i++;
+  }
+
+  // Title page: sage title, muted author, gold ornament, then a page break
+  // (Heading1's pageBreakBefore lands body content on page 2).
+  const titlePage =
+    docxStyleP("Title", docxRun(bodyTitle, { bold: true, color: DOCX_SAGE, size: 56, spacing: 10 })) +
+    docxStyleP("Subtitle", docxRun(bodyAuthor, { italic: true, color: DOCX_MUTED, size: 26 })) +
+    docxStyleP("Ornament", docxRun("◆  ◆  ◆", { color: DOCX_GOLD, size: 24 })) +
+    docxStyleP("Normal", docxRun("Exported from StudyFlow", { italic: true, color: DOCX_MUTED, size: 20 }));
+
   const paras = [];
-  for (const raw of String(md || "").split("\n")) {
-    const line = raw.replace(/\s+$/, "");
-    if (/^#{1,3}\s+/.test(line)) {
-      const level = line.match(/^#+/)[0].length;
-      paras.push(`<w:p><w:pPr><w:spacing w:before="${level === 1 ? 480 : 360}" w:after="200"/><w:jc w="center"/></w:pPr>${docxRun(line.replace(/^#+\s+/, ""), { bold: true })}</w:p>`);
+  for (let j = i; j < srcLines.length; j++) {
+    const line = srcLines[j].replace(/\s+$/, "");
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      const level = h[1].length;
+      const text = h[2].trim();
+      if (!text) continue;
+      // Body chapters start at ## (title page ate the #), map into Word styles.
+      const style = level <= 2 ? "Heading1" : level === 3 ? "Heading2" : "Heading3";
+      paras.push(docxStyleP(style, inlineRuns(text, { bold: true, size: level <= 2 ? 40 : level === 3 ? 30 : 26 })));
     } else if (/^\s*(---|___|\*\*\*)\s*$/.test(line)) {
-      paras.push(`<w:p><w:pPr><w:jc w="center"/></w:pPr>${docxRun("· · ·", { italic: true })}</w:p>`);
+      paras.push(docxStyleP("Ornament", docxRun("·  ·  ·", { color: DOCX_GOLD, size: 24 })));
     } else if (/^>\s?/.test(line)) {
-      paras.push(`<w:p><w:pPr><w:ind w:left="720"/></w:pPr>${docxRun(line.replace(/^>\s?/, ""), { italic: true })}</w:p>`);
+      paras.push(docxStyleP("Quote", inlineRuns(line.replace(/^>\s?/, ""), { italic: true, color: DOCX_MUTED })));
+    } else if (/^\s*[-*+]\s+/.test(line)) {
+      const text = line.replace(/^\s*[-*+]\s+/, "");
+      paras.push(docxPara(docxRun("•  ", { color: DOCX_GOLD, bold: true }) + inlineRuns(text), `<w:pStyle w:val="ListParagraph"/>`));
+    } else if (/^\s*\d+[.)]\s+/.test(line)) {
+      const m = line.match(/^\s*(\d+)[.)]\s+(.*)$/);
+      paras.push(docxPara(docxRun(`${m[1]}.  `, { bold: true, color: DOCX_SAGE }) + inlineRuns(m[2]), `<w:pStyle w:val="ListParagraph"/>`));
     } else if (!line.trim()) {
-      // skip doubled blanks — spacing is style-driven
+      // spacing is style-driven — skip doubled blanks
     } else {
-      paras.push(`<w:p><w:pPr><w:spacing w:after="160"/><w:jc w="both"/></w:pPr>${inlineRuns(line)}</w:p>`);
+      paras.push(docxPara(inlineRuns(line), `<w:spacing w:after="160"/><w:jc w:val="both"/>`));
     }
   }
-  // A styled title page leads the document.
-  const titlePage =
-    `<w:p><w:pPr><w:spacing w:before="2400" w:after="240"/><w:jc w="center"/></w:pPr>${docxRun(title, { bold: true })}</w:p>` +
-    `<w:p><w:pPr><w:jc w="center"/></w:pPr>${docxRun(author, { italic: true })}</w:p>` +
-    `<w:p><w:pPr><w:jc w="center"/></w:pPr>${docxRun("· · ·")}</w:p>`;
+
   const docXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document ${W_NS}><w:body>
-<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
-${titlePage}${paras.join("\n")}
+${titlePage}
+${paras.join("\n")}
+<w:sectPr>
+  <w:pgSz w:w="11906" w:h="16838"/>
+  <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/>
+  <w:cols w:space="720"/>
+  <w:docGrid w:linePitch="360"/>
+</w:sectPr>
 </w:body></w:document>`;
 
-  const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:styles ${W_NS}>
-<w:docDefaults><w:rPrDefault><w:rPr>
-<w:rFonts w:ascii="Georgia" w:hAnsi="Georgia"/><w:sz w:val="23"/><w:szCs w:val="23"/>
-<w:color w:val="26301f"/>
-</w:rPr></w:rPrDefault></w:docDefaults>
-</w:styles>`;
+  const stylesXml = docxStylesXml();
 
   const enc = new TextEncoder();
   const t = (s) => enc.encode(s);
@@ -149,10 +286,12 @@ ${titlePage}${paras.join("\n")}
 <Default Extension="xml" ContentType="application/xml"/>
 <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
 <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
 </Types>`) },
     { name: "_rels/.rels", data: t(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
 </Relationships>`) },
     { name: "word/_rels/document.xml.rels", data: t(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -160,6 +299,12 @@ ${titlePage}${paras.join("\n")}
 </Relationships>`) },
     { name: "word/styles.xml", data: t(stylesXml) },
     { name: "word/document.xml", data: t(docXml) },
+    { name: "docProps/core.xml", data: t(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<dc:title>${xmlEscape(bodyTitle)}</dc:title>
+<dc:creator>${xmlEscape(bodyAuthor)}</dc:creator>
+<cp:lastModifiedBy>StudyFlow</cp:lastModifiedBy>
+</cp:coreProperties>`) },
   ]);
 }
 

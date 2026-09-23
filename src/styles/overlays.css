@@ -67,10 +67,12 @@
   pointer-events: none;
 }
 
+/* Tour sits above confetti (200), modals (50), notify (200) and the
+   confirm backdrop (500) so nothing ever paints over the spotlight. */
 #tour-veil {
   position: fixed;
   inset: 0;
-  z-index: 150;
+  z-index: 600;
 }
 
 /* The veil is two layers: a soft dark wash, and a spotlight layer whose mask
@@ -80,7 +82,7 @@
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(120% 90% at 50% 30%, rgba(14, 24, 18, 0.55), rgba(10, 18, 13, 0.72));
+    radial-gradient(120% 90% at 50% 30%, rgba(14, 24, 18, 0.58), rgba(10, 18, 13, 0.75));
   animation: tour-fade .3s ease;
 }
 
@@ -91,17 +93,18 @@
 
 .tour-tip {
   position: fixed;
-  width: min(360px, calc(100vw - 24px));
+  width: min(380px, calc(100vw - 24px));
   background:
-    linear-gradient(160deg, rgba(246, 247, 242, 0.06), rgba(246, 247, 242, 0) 42%),
-    var(--panel, #fff);
-  border: 1px solid var(--line);
-  border-radius: 20px;
-  padding: 20px 20px 16px;
+    linear-gradient(160deg, rgba(246, 247, 242, 0.10), rgba(246, 247, 242, 0) 46%) padding-box,
+    linear-gradient(var(--panel, #fff), var(--panel, #fff)) padding-box,
+    linear-gradient(140deg, rgba(71, 118, 90, 0.55), rgba(233, 174, 63, 0.35)) border-box;
+  border: 1.5px solid transparent;
+  border-radius: 22px;
+  padding: 22px 22px 18px;
   box-shadow:
-    0 6px 18px rgba(12, 20, 15, 0.14),
-    0 30px 80px rgba(12, 20, 15, 0.3);
-  z-index: 152;
+    0 6px 18px rgba(12, 20, 15, 0.16),
+    0 30px 90px rgba(12, 20, 15, 0.38);
+  z-index: 602;
   animation: tour-pop .32s cubic-bezier(.2, 1.4, .4, 1);
 }
 
@@ -118,23 +121,25 @@
 }
 
 .tour-tip-ico {
-  width: 38px;
-  height: 38px;
+  width: 42px;
+  height: 42px;
   flex-shrink: 0;
   display: grid;
   place-items: center;
-  border-radius: 12px;
+  border-radius: 14px;
   color: #fff;
   background: linear-gradient(140deg, var(--sage, #47765a), #2c4f3a);
-  box-shadow: 0 6px 16px rgba(44, 79, 58, .35);
-  font-size: 18px;
+  box-shadow:
+    0 0 0 3px rgba(233, 174, 63, 0.35),
+    0 6px 16px rgba(44, 79, 58, .4);
+  font-size: 19px;
 }
 
-.tour-tip-ico .sicon { width: 18px; height: 18px; }
+.tour-tip-ico .sicon { width: 19px; height: 19px; }
 
 .tour-tip h2 {
   margin: 4px 0 6px;
-  font-size: 20px;
+  font-size: 21px;
   letter-spacing: -0.015em;
 }
 
@@ -175,7 +180,17 @@
 
 .tour-actions .tour-nav {
   display: flex;
+  align-items: center;
   gap: 8px;
+}
+
+/* Keyboard hint — quiet nudge that arrows work. */
+.tour-keys {
+  font: 700 10px "Space Mono", monospace;
+  color: var(--muted);
+  opacity: .7;
+  letter-spacing: .06em;
+  user-select: none;
 }
 
 /* Connector arrow between card and spotlight. */
@@ -198,11 +213,10 @@
   transform: rotate(225deg);
 }
 
-/* Centered (unanchored) step — the finale. */
+/* Centered (unanchored) step — the finale. Position is computed inline by
+   placeTourCard; this class only handles layout/typography, never transform
+   (a CSS translate(-50%,-50%) plus inline top/left double-offset the card). */
 .tour-tip.tour-center {
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
   text-align: center;
 }
 
@@ -211,10 +225,10 @@
 }
 
 .tour-tip.tour-center .tour-tip-ico {
-  width: 52px;
-  height: 52px;
-  border-radius: 16px;
-  font-size: 24px;
+  width: 54px;
+  height: 54px;
+  border-radius: 18px;
+  font-size: 25px;
 }
 
 .tour-tip.tour-center .tour-progress {
@@ -234,7 +248,7 @@
    never clips inside overflow:hidden parents (the old outline did). */
 .tour-glow {
   position: relative;
-  z-index: 151;
+  z-index: 601;
   border-radius: 12px;
   box-shadow:
     0 0 0 3px var(--gold, #e9ae3f),
@@ -248,7 +262,7 @@
   to { box-shadow: 0 0 0 3px var(--gold, #e9ae3f), 0 0 0 6px rgba(233, 174, 63, 0.28), 0 0 34px rgba(233, 174, 63, 0.5); }
 }
 
-/* --- Tour on phones: docked bottom sheet, thumb-reachable actions --- */
+/* --- Tour on phones / short windows: docked bottom sheet --- */
 .tour-tip.tour-docked {
   top: auto !important;
   bottom: 12px;
@@ -265,17 +279,26 @@
 
 .tour-tip.tour-docked h2 { font-size: 17px; }
 .tour-tip.tour-docked .muted { font-size: 12.5px; }
-.tour-tip.tour-docked .tour-tip-ico { width: 32px; height: 32px; font-size: 15px; border-radius: 10px; }
+.tour-tip.tour-docked .tour-tip-ico { width: 34px; height: 34px; font-size: 15px; border-radius: 11px; }
 .tour-tip.tour-docked .tour-actions { margin-top: 10px; }
 .tour-tip.tour-docked .tour-actions .primary,
 .tour-tip.tour-docked .tour-actions .ghost {
   padding: 10px 14px;
   font-size: 13px;
 }
+.tour-tip.tour-docked .tour-keys { display: none; }
 
-/* Short landscape phones (tour card + glow must both fit) */
+/* Short landscape windows (tour card + glow must both fit) */
 @media (max-height: 480px) {
   .tour-tip { max-height: calc(100vh - 24px); overflow-y: auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tour-tip,
+  .tour-spot,
+  .tour-glow {
+    animation: none !important;
+  }
 }
 
 #update-toast {

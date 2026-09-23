@@ -13,6 +13,7 @@ import {
 import { openReader, readerOpenId, repaintReader } from "./books-reader.js";
 import { mirrorBooks, deleteBookEverywhere, pullBooks, BOOK_UUID_RE } from "./services/books-sync.js";
 import { txtToMarkdown, mdToMarkdown, epubSectionsToMarkdown, sectionsToMarkdown, markdownToDocxBlob } from "./books-format.js";
+import { parseEpub, epubSupported } from "./books-epub.js";
 
 export function newBookId() {
   try {
@@ -429,6 +430,18 @@ export async function getBookBlob(book) {
 }
 export async function getBookText(book) {
   if (book.textContent) return book.textContent;
+  // Canonical formatted document written at upload (txt/md/epub → clean MD).
+  // Read it first so exports and the text reader always see the styled source.
+  const key = book.fileKey || book.id;
+  const canonical = await bookBlobGet("text:" + key);
+  if (canonical) {
+    try {
+      const text = await canonical.text();
+      if (text) return text;
+    } catch {
+      /* fall through to the raw file */
+    }
+  }
   const blob = await getBookBlob(book);
   if (!blob) return "";
   try {
@@ -1193,6 +1206,23 @@ function openUploadBook() {
         } catch {
           return fail("Could not read that text file.");
         }
+      } else if (kind === "epub") {
+        // Convert EPUB → canonical Markdown at upload so highlights, the text
+        // reader path, and .md / .docx exports all work without re-parsing.
+        if (epubSupported()) {
+          saveBtn.textContent = "Formatting EPUB…";
+          try {
+            const meta = { title, author: author || "Unknown author" };
+            const parsed = await parseEpub(file);
+            canonicalMd = epubSectionsToMarkdown(parsed.chapters, meta);
+            parsed.release?.();
+            const words = canonicalMd.split(/\s+/).filter(Boolean).length;
+            wordCount = words;
+            pageCount = Math.max(1, Math.ceil(words / 250));
+          } catch {
+            canonicalMd = ""; // corrupt EPUB — reader will surface its own error
+          }
+        }
       } else if (kind === "pdf") {
         saveBtn.textContent = "Inspecting PDF…";
         pageCount = await estimatePdfPages(file);
@@ -1491,7 +1521,7 @@ export function openExportSheet(book, anchor) {
   if (!b) return;
   const sheet = document.createElement("div");
   sheet.className = "modal-backdrop export-sheet-backdrop";
-  sheet.innerHTML = `<div class="modal export-sheet"><div class="eyebrow">Export “${esc(b.title || "book")}”</div><h2>Choose a format</h2><p class="muted">Your highlights and notes stay in StudyFlow — the document exports clean and beautifully formatted.</p><div class="export-opts"><button type="button" class="export-opt" data-export-md><span class="export-ico">${sicon("doc")}</span><span class="export-txt"><strong>Markdown (.md)</strong><small>Clean chapters · opens in any editor, Notion, Obsidian</small></span><span class="export-go">→</span></button><button type="button" class="export-opt" data-export-docx><span class="export-ico">${sicon("memo")}</span><span class="export-txt"><strong>Word document (.docx)</strong><small>Styled title page · Georgia serif · ready to share</small></span><span class="export-go">→</span></button></div><div class="modal-actions"><button type="button" class="ghost" data-export-cancel>Cancel</button></div></div>`;
+  sheet.innerHTML = `<div class="modal export-sheet"><div class="eyebrow">Export “${esc(b.title || "book")}”</div><h2>Choose a format</h2><p class="muted">Your highlights and notes stay in StudyFlow — the document exports clean, chapter-structured, and beautifully styled.</p><div class="export-opts"><button type="button" class="export-opt" data-export-md><span class="export-ico">${sicon("doc")}</span><span class="export-txt"><strong>Markdown (.md)</strong><small>Title page · chapters · opens in Notion, Obsidian, any editor</small></span><span class="export-go">→</span></button><button type="button" class="export-opt" data-export-docx><span class="export-ico">${sicon("memo")}</span><span class="export-txt"><strong>Word document (.docx)</strong><small>Styled title page · sage headings · page breaks · ready to share</small></span><span class="export-go">→</span></button></div><div class="modal-actions"><button type="button" class="ghost" data-export-cancel>Cancel</button></div></div>`;
   document.body.append(sheet);
   sheet.addEventListener("click", (e) => { if (e.target === sheet) sheet.remove(); });
   sheet.querySelector("[data-export-cancel]").onclick = () => sheet.remove();

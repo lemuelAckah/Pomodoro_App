@@ -558,7 +558,7 @@ function renderLanding() {
   if (!root) return;
   applyEquippedTheme();
   applyDisplay();
-  root.innerHTML = `<div class="landing landing-on-dusk"><div class="landing-dusk" aria-hidden="true"><span class="dusk-dial"></span><span class="dusk-echo"></span></div><div class="landing-hero"><div class="brand-mark landing-mark">◷</div><div class="eyebrow">StudyFlow</div><h1>Focus with intention.</h1><p class="lede">Pomodoro sessions, streaks, study buddies and rewards — one calm workspace for deep work.</p><div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:20px"><button type="button" class="primary" data-enter style="padding:14px 28px;font-size:15px">Open Focus Desk →</button><button type="button" class="ghost" data-landing-how style="border-color:rgba(242,240,228,.35);color:#eef0e6">How it works</button></div><div class="muted" style="margin-top:12px;font-size:12px">Free forever · No account needed to start</div></div><div class="grid three landing-feats"><div class="card"><div class="emoji">${sicon("timer")}</div><h3>Smart timer</h3><p class="muted">Focus, short and long breaks with custom lengths and gentle anti-distraction rules.</p></div><div class="card"><div class="emoji">${sicon("fire")}</div><h3>Streaks & garden</h3><p class="muted">Every session plants a flower and pays coins. Consistency compounds.</p></div><div class="card"><div class="emoji">${sicon("users")}</div><h3>Study together</h3><p class="muted">Sprint rooms, group challenges, messages and voice notes with buddies.</p></div></div><div class="card" id="landing-how" style="margin-top:18px"><h2>How it works</h2><ol class="detail-steps"><li><strong>Pick a task</strong> — name what you'll work on.</li><li><strong>Start a session</strong> — focused minutes, phone down.</li><li><strong>Rest & repeat</strong> — short breaks between, coins and streaks after.</li></ol></div><footer class="landing-foot muted">StudyFlow · made for deep work</footer></div>`;
+  root.innerHTML = `<div class="landing landing-on-dusk"><div class="landing-dusk" aria-hidden="true"><span class="dusk-glow"></span><span class="dusk-dial"><i class="dusk-pie"></i><i class="dusk-ring"></i></span><span class="dusk-orbit"><b class="dusk-dot a"></b><b class="dusk-dot b"></b></span><span class="dusk-echo"></span></div><div class="landing-hero"><div class="brand-mark landing-mark">◷</div><div class="eyebrow">StudyFlow</div><h1>Focus with intention.</h1><p class="lede">Pomodoro sessions, streaks, study buddies and rewards — one calm workspace for deep work.</p><div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:20px"><button type="button" class="primary" data-enter style="padding:14px 28px;font-size:15px">Open Focus Desk →</button><button type="button" class="ghost landing-ghost" data-landing-how>How it works</button></div><div class="muted" style="margin-top:12px;font-size:12px">Free forever · No account needed to start</div></div><div class="grid three landing-feats"><div class="card"><div class="emoji">${sicon("timer")}</div><h3>Smart timer</h3><p class="muted">Focus, short and long breaks with custom lengths and gentle anti-distraction rules.</p></div><div class="card"><div class="emoji">${sicon("fire")}</div><h3>Streaks & garden</h3><p class="muted">Every session plants a flower and pays coins. Consistency compounds.</p></div><div class="card"><div class="emoji">${sicon("users")}</div><h3>Study together</h3><p class="muted">Sprint rooms, group challenges, messages and voice notes with buddies.</p></div></div><div class="card" id="landing-how" style="margin-top:18px"><h2>How it works</h2><ol class="detail-steps"><li><strong>Pick a task</strong> — name what you'll work on.</li><li><strong>Start a session</strong> — focused minutes, phone down.</li><li><strong>Rest & repeat</strong> — short breaks between, coins and streaks after.</li></ol></div><footer class="landing-foot muted">StudyFlow · made for deep work</footer></div>`;
   $("[data-enter]").onclick = () => {
     state.entered = true;
     persist();
@@ -1218,8 +1218,8 @@ function bindSettings(root) {
     openWhatsNew(true),
   );
   $("[data-tour-replay]", root)?.addEventListener("click", () => {
-    state.tab = "timer";
-    persist();
+    // Don't pre-set state.tab — startTour always rebuilds the shell so the
+    // timer anchors (#task-input, [data-toggle]) exist even mid-settings.
     startTour();
   });
   $$("[data-auto]", root).forEach((box) =>
@@ -1315,12 +1315,23 @@ let tourRaf = 0;
 
 function startTour() {
   tourStep = 0;
-  if (state.tab !== "timer") {
-    state.tab = "timer";
-    persist();
-    shell();
+  state.tab = "timer";
+  persist();
+  // Always rebuild the shell so tour anchors exist — even when state.tab was
+  // already "timer" the view might still be Settings (replay path) or the
+  // landing page (first-run), and a missing anchor centers the card uselessly.
+  shell();
+  // Wait for fonts + a double frame so anchor geometry is final before we
+  // measure — a bare 350ms timer races webfont swap on slower devices.
+  const begin = () => requestAnimationFrame(() => requestAnimationFrame(() => showTourStep()));
+  if (document.fonts?.ready) {
+    let done = false;
+    const go = () => { if (!done) { done = true; begin(); } };
+    document.fonts.ready.then(go);
+    setTimeout(go, 500);
+  } else {
+    setTimeout(begin, 350);
   }
-  setTimeout(showTourStep, 350);
 }
 
 function tourAnchorFor(step) {
@@ -1328,9 +1339,14 @@ function tourAnchorFor(step) {
   try {
     const candidates = step.sel.split(",").map((s) => s.trim());
     for (const sel of candidates) {
-      const visible = [...document.querySelectorAll(sel)].filter(
-        (el) => el.offsetParent !== null || el === document.body,
-      );
+      // Rect-size check, not offsetParent — offsetParent is null for
+      // position:fixed elements and some transformed ancestors, which made
+      // anchors look "hidden" on certain laptop/phone layouts.
+      const visible = [...document.querySelectorAll(sel)].filter((el) => {
+        if (el === document.body) return true;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== "hidden";
+      });
       // Prefer the biggest visible match (e.g. the pill, not the label span).
       visible.sort((a, b) => (b.offsetWidth * b.offsetHeight) - (a.offsetWidth * a.offsetHeight));
       if (visible[0]) return visible[0];
@@ -1359,35 +1375,39 @@ function placeTourCard(veil, card, anchor) {
   const cw = card.offsetWidth;
   const ch = card.offsetHeight;
   const margin = 14;
-  // Small screens: the card docks to the bottom as a sheet — thumbs reach it,
-  // and the anchored element stays visible above it.
-  if (vw < 640) {
+  // Dock to a bottom sheet on phones AND short/narrow laptop windows — a
+  // fixed 640px threshold left mid-size windows clipping the card off-screen.
+  const shouldDock = vw < 640 || vh < 560;
+  if (shouldDock) {
     card.style.top = "";
     card.style.left = "";
     card.style.right = "";
     card.style.bottom = "10px";
-    card.style.left = "50%";
-    card.style.transform = "translateX(-50%)";
+    card.style.transform = "";
     card.classList.add("tour-docked");
     if (anchor) {
       const r = anchor.getBoundingClientRect();
       const spot = veil.querySelector(".tour-spot");
-      if (spot) spot.style.cssText += ";" + tourSpotStyle(r);
+      if (spot) spot.style.cssText = tourSpotStyle(r);
     }
     return;
   }
   card.classList.remove("tour-docked");
-  card.style.transform = "";
+  card.style.bottom = "";
+  card.style.right = "";
   if (!anchor) {
-    card.style.top = Math.max(margin, (vh - ch) / 2) + "px";
-    card.style.left = Math.max(margin, (vw - cw) / 2) + "px";
+    // Center purely via inline top/left — the .tour-center class no longer
+    // applies its own transform (that double-offset pushed cards off-screen).
+    card.style.top = Math.max(margin, Math.round((vh - ch) / 2)) + "px";
+    card.style.left = Math.max(margin, Math.round((vw - cw) / 2)) + "px";
+    card.style.transform = "";
     const spot0 = veil.querySelector(".tour-spot");
-    if (spot0) spot0.style.cssText += ";" + tourSpotStyle({ left: vw / 2 - 1, right: vw / 2 + 1, top: vh / 2 - 1, bottom: vh / 2 + 1 });
+    if (spot0) spot0.style.cssText = tourSpotStyle({ left: vw / 2 - 1, right: vw / 2 + 1, top: vh / 2 - 1, bottom: vh / 2 + 1 });
     return;
   }
   const r = anchor.getBoundingClientRect();
   const spot = veil.querySelector(".tour-spot");
-  if (spot) spot.style.cssText += ";" + tourSpotStyle(r);
+  if (spot) spot.style.cssText = tourSpotStyle(r);
   // Prefer below; flip above when there isn't room; clamp sideways.
   let top = r.bottom + 14;
   if (top + ch > vh - margin) top = r.top - ch - 14;
@@ -1403,6 +1423,7 @@ function placeTourCard(veil, card, anchor) {
   }
   card.style.top = Math.max(margin, top) + "px";
   card.style.left = left + "px";
+  card.style.transform = "";
 }
 
 function showTourStep() {
@@ -1412,7 +1433,7 @@ function showTourStep() {
   const anchor = tourAnchorFor(step);
   // Bring the anchor into view first — on short screens the Start button sits
   // below the fold and the spotlight would punch a hole nobody can see.
-  try { anchor?.scrollIntoView({ block: "center", inline: "nearest" }); } catch { /* older engines */ }
+  try { anchor?.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" }); } catch { /* older engines */ }
   const veil = document.createElement("div");
   veil.id = "tour-veil";
   const spotStyle = anchor ? tourSpotStyle(anchor.getBoundingClientRect()) : tourSpotStyle({ left: window.innerWidth / 2 - 1, right: window.innerWidth / 2 + 1, top: window.innerHeight / 2 - 1, bottom: window.innerHeight / 2 + 1 });
@@ -1422,7 +1443,7 @@ function showTourStep() {
     + `<div class="tour-tip-head"><span class="tour-tip-ico" aria-hidden="true">${sicon(step.icon || "sparkle")}</span><span class="eyebrow">Step ${tourStep + 1} of ${TOUR_STEPS.length}</span></div>`
     + `<h2>${step.title}</h2><p class="muted">${step.text}</p>`
     + `<div class="tour-progress" aria-hidden="true">${TOUR_STEPS.map((_, i) => `<i class="${i < tourStep ? "done" : i === tourStep ? "now" : ""}"></i>`).join("")}</div>`
-    + `<div class="modal-actions tour-actions"><button type="button" class="ghost" data-tour-skip>Skip</button><span class="tour-nav">${tourStep ? '<button type="button" class="ghost" data-tour-back>Back</button>' : ""}<button type="button" class="primary" data-tour-next>${tourStep === TOUR_STEPS.length - 1 ? "Start focusing " + sicon("fire") : "Next →"}</button></span></div>`
+    + `<div class="modal-actions tour-actions"><button type="button" class="ghost" data-tour-skip>Skip</button><span class="tour-nav"><span class="tour-keys" aria-hidden="true">← →</span>${tourStep ? '<button type="button" class="ghost" data-tour-back>Back</button>' : ""}<button type="button" class="primary" data-tour-next>${tourStep === TOUR_STEPS.length - 1 ? "Start focusing " + sicon("fire") : "Next →"}</button></span></div>`
     + `</div>`;
   document.body.append(veil);
   const card = veil.querySelector(".tour-tip");
@@ -1436,11 +1457,14 @@ function showTourStep() {
   const onKey = (e) => {
     if (e.key === "Escape") { e.stopPropagation(); finishTour(); }
     else if (e.key === "ArrowRight" || e.key === "Enter") {
-      if (document.activeElement?.tagName !== "TEXTAREA" && document.activeElement?.tagName !== "INPUT") {
-        e.preventDefault();
-        tourStep++;
-        showTourStep();
-      }
+      // Enter on a focused tour button would fire BOTH the keydown handler
+      // and the button's native click — skip so a single press advances once.
+      const ae = document.activeElement;
+      if (e.key === "Enter" && ae && ae !== document.body && veil.contains(ae)) return;
+      if (ae?.tagName === "TEXTAREA" || ae?.tagName === "INPUT") return;
+      e.preventDefault();
+      tourStep++;
+      showTourStep();
     } else if (e.key === "ArrowLeft" && tourStep > 0) {
       e.preventDefault();
       tourStep--;

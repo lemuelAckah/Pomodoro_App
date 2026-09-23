@@ -344,12 +344,14 @@ function techInfo(id) {
   return techniques.find((x) => x[0] === id) || null;
 }
 
+const DUSK_BG = `<div class="tc-dusk" aria-hidden="true"><span class="dusk-glow"></span><span class="dusk-dial"><i class="dusk-pie"></i><i class="dusk-ring"></i></span><span class="dusk-orbit"><b class="dusk-dot a"></b><b class="dusk-dot b"></b></span><span class="dusk-echo"></span></div>`;
+
 function renderTechCheck() {
   const root = $("#root");
   if (!root || !tcSession) return;
   const n = TECH_CHECK_QUESTIONS.length;
   if (tcSession.step < 0) {
-    root.innerHTML = `<div class="tc-dusk" aria-hidden="true"><span class="dusk-dial"></span><span class="dusk-echo"></span></div><div class="tc-wrap"><div class="tc-brand"><div class="brand-mark">◷</div><strong>StudyFlow</strong></div><div class="card tc-card tc-anim"><div class="eyebrow">First-time setup · Study Technique Check</div><h1>Let's discover how you learn best.</h1><p class="lede">There is no right or wrong answer. Your responses will help us find the study techniques that may work best for you.</p><p class="muted">${n} quick questions · about a minute · you can go back anytime</p><div class="tc-actions"><button type="button" class="primary" data-tc-begin>Begin my check</button><button type="button" class="ghost" data-tc-skip>Skip for now</button></div></div></div>`;
+    root.innerHTML = `${DUSK_BG}<div class="tc-wrap"><div class="tc-brand"><div class="brand-mark">◷</div><strong>StudyFlow</strong></div><div class="card tc-card tc-anim"><div class="eyebrow">First-time setup · Study Technique Check</div><h1>Let's discover how you learn best.</h1><p class="lede">There is no right or wrong answer. Your responses will help us find the study techniques that may work best for you.</p><p class="muted">${n} quick questions · about a minute · you can go back anytime</p><div class="tc-actions"><button type="button" class="primary" data-tc-begin>Begin my check</button><button type="button" class="ghost" data-tc-skip>Skip for now</button></div></div></div>`;
     $("[data-tc-begin]", root).onclick = () => {
       tcSession.step = 0;
       renderTechCheck();
@@ -363,7 +365,7 @@ function renderTechCheck() {
     const pct = Math.round((100 * done) / n);
     const picked = tcSession.answers[tcSession.step];
     const last = tcSession.step === n - 1;
-    root.innerHTML = `<div class="tc-dusk" aria-hidden="true"><span class="dusk-dial"></span><span class="dusk-echo"></span></div><div class="tc-wrap"><div class="tc-brand"><div class="brand-mark">◷</div><strong>StudyFlow</strong></div><div class="tc-top"><span class="muted">Question ${tcSession.step + 1} of ${n} · ${done} answered</span></div><div class="tc-progress" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" aria-label="Check progress"><i style="width:${pct}%"></i></div><div class="card tc-card tc-anim" data-tc-step="${tcSession.step}"><h2>${esc(item.q)}</h2><p class="muted">No right or wrong answers — go with your gut.</p><div class="tc-opts">${item.options.map((opt, i) => `<button type="button" class="tc-opt${picked === i ? " selected" : ""}" data-tc-opt="${i}" aria-pressed="${picked === i}"><span class="tc-radio"></span><span>${esc(opt.t)}</span><span class="tc-picked">${sicon("check")}</span></button>`).join("")}</div></div><div class="tc-nav"><button type="button" class="ghost" data-tc-back>← Back</button><button type="button" class="primary" data-tc-next>${last ? "See My Results →" : "Next →"}</button></div></div>`;
+    root.innerHTML = `${DUSK_BG}<div class="tc-wrap"><div class="tc-brand"><div class="brand-mark">◷</div><strong>StudyFlow</strong></div><div class="tc-top"><span class="muted">Question ${tcSession.step + 1} of ${n} · ${done} answered</span></div><div class="tc-progress" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" aria-label="Check progress"><i style="width:${pct}%"></i></div><div class="card tc-card tc-anim" data-tc-step="${tcSession.step}"><h2>${esc(item.q)}</h2><p class="muted">No right or wrong answers — go with your gut.</p><div class="tc-opts">${item.options.map((opt, i) => `<button type="button" class="tc-opt${picked === i ? " selected" : ""}" data-tc-opt="${i}" aria-pressed="${picked === i}"><span class="tc-radio"></span><span>${esc(opt.t)}</span><span class="tc-picked">${sicon("check")}</span></button>`).join("")}</div></div><div class="tc-nav"><button type="button" class="ghost" data-tc-back>← Back</button><button type="button" class="primary" data-tc-next>${last ? "See My Results →" : "Next →"}</button></div></div>`;
     $$("[data-tc-opt]", root).forEach(
       (b) => (b.onclick = () => answerTechCheck(Number(b.dataset.tcOpt))),
     );
@@ -388,7 +390,7 @@ function renderTechCheck() {
     .sort((a, b) => b.pct - a.pct);
   const label = (i) =>
     i === 0 ? "Best match" : i === 1 ? "Strong match" : "Also strong";
-  root.innerHTML = `<div class="tc-dusk" aria-hidden="true"><span class="dusk-dial"></span><span class="dusk-echo"></span></div><div class="tc-wrap"><div class="tc-brand"><div class="brand-mark">◷</div><strong>StudyFlow</strong></div><div class="tc-results-head tc-anim"><div class="eyebrow">Your study profile is ready</div><h1>Your Study Technique Profile</h1><p class="lede">These techniques may work particularly well for you — nothing here is the only way to study.</p></div>${ranked.map((r, i) => {
+  root.innerHTML = `${DUSK_BG}<div class="tc-wrap"><div class="tc-brand"><div class="brand-mark">◷</div><strong>StudyFlow</strong></div><div class="tc-results-head tc-anim"><div class="eyebrow">Your study profile is ready</div><h1>Your Study Technique Profile</h1><p class="lede">These techniques may work particularly well for you — nothing here is the only way to study.</p></div>${ranked.map((r, i) => {
     const sig = (tc.signals || {})[r.id];
     const qshort =
       typeof sig === "number" && TECH_CHECK_QUESTIONS[sig]

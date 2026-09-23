@@ -166,3 +166,56 @@
     opacity: 1;
   }
 }
+
+/* ---- First-run dusk dial: quiet life behind the landing / tech-check ---- */
+@keyframes dusk-breathe {
+  0%,
+  100% {
+    transform: translateY(-50%) scale(1);
+    opacity: 0.92;
+  }
+  50% {
+    transform: translateY(-50%) scale(1.035);
+    opacity: 1;
+  }
+}
+
+@keyframes dusk-breathe-flat {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.04);
+    opacity: 1;
+  }
+}
+
+@keyframes dusk-orbit {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes dusk-drift {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  50% {
+    transform: translate(10px, -14px);
+  }
+}
+
+@keyframes dusk-spin-slow {
+  from {
+    transform: translate(-50%, -50%) rotate(0deg);
+  }
+  to {
+    transform: translate(-50%, -50%) rotate(360deg);
+  }
+}

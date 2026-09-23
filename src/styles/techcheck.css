@@ -274,8 +274,9 @@
 }
 
 /* ---- Dusk backdrop shared with the landing page --------------------------
-   Same first-run family: medium-dark canvas, giant clock dial, dot grid.
-   Darker vignette than the landing so question cards stay the hero. */
+   Same first-run family: mid-tone canvas (between paper and night), giant
+   breathing clock dial, orbit dots, dot grid. Slightly deeper vignette than
+   the landing so question cards stay the hero. */
 .tc-dusk {
   position: fixed;
   inset: 0;
@@ -283,59 +284,104 @@
   pointer-events: none;
   overflow: hidden;
   background:
-    radial-gradient(1000px 640px at 14% -8%, rgba(116, 168, 132, 0.22), transparent 62%),
-    radial-gradient(880px 600px at 90% 10%, rgba(233, 174, 63, 0.13), transparent 58%),
-    radial-gradient(1100px 780px at 50% 118%, rgba(46, 62, 82, 0.42), transparent 65%),
-    linear-gradient(168deg, #333f36 0%, #28322b 52%, #222b25 100%);
+    radial-gradient(1000px 640px at 14% -8%, rgba(140, 190, 155, 0.34), transparent 62%),
+    radial-gradient(880px 600px at 90% 10%, rgba(233, 174, 63, 0.20), transparent 58%),
+    radial-gradient(1100px 780px at 50% 118%, rgba(72, 100, 130, 0.34), transparent 65%),
+    linear-gradient(168deg, #567a66 0%, #4c6f5b 52%, #446654 100%);
 }
 
 .tc-dusk::before {
   content: "";
   position: absolute;
   inset: 0;
-  background-image: radial-gradient(rgba(242, 240, 228, 0.12) 1px, transparent 1.4px);
+  background-image: radial-gradient(rgba(242, 240, 228, 0.15) 1px, transparent 1.4px);
   background-size: 28px 28px;
   mask-image: radial-gradient(85% 75% at 50% 25%, #000 20%, transparent 100%);
   -webkit-mask-image: radial-gradient(85% 75% at 50% 25%, #000 20%, transparent 100%);
-  opacity: 0.45;
+  opacity: 0.5;
+}
+
+.tc-dusk .dusk-glow {
+  position: absolute;
+  left: -12vw;
+  top: -12vh;
+  width: min(78vw, 640px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(214, 234, 206, 0.30), rgba(214, 234, 206, 0.07) 62%, transparent 74%);
+  animation: dusk-breathe-flat 10s ease-in-out infinite;
 }
 
 .tc-dusk .dusk-dial {
   position: absolute;
-  left: -16vw;
-  top: -18vh;
-  width: min(64vw, 520px);
+  left: -12vw;
+  top: -14vh;
+  width: min(70vw, 560px);
   aspect-ratio: 1;
   border-radius: 50%;
-  border: 2px solid rgba(242, 240, 228, 0.10);
-  box-shadow: inset 0 0 0 12px rgba(242, 240, 228, 0.03), 0 30px 120px rgba(8, 14, 10, 0.4);
-  opacity: 0.9;
+  border: 3px solid rgba(242, 240, 228, 0.26);
+  box-shadow:
+    inset 0 0 0 16px rgba(214, 234, 206, 0.14),
+    inset 0 0 0 17px rgba(242, 240, 228, 0.20),
+    0 30px 120px rgba(8, 14, 10, 0.35);
+  background:
+    radial-gradient(closest-side, rgba(203, 228, 190, 0.38), rgba(203, 228, 190, 0.12) 68%, transparent 78%);
+  animation: dusk-breathe-flat 10s ease-in-out infinite;
 }
 
-.tc-dusk .dusk-dial::before {
-  content: "";
+.tc-dusk .dusk-pie {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 4px;
-  height: 32%;
-  border-radius: 4px;
-  background: linear-gradient(180deg, rgba(242, 240, 228, 0.4), rgba(242, 240, 228, 0.06));
-  transform-origin: 50% 100%;
-  transform: translate(-50%, -100%) rotate(200deg);
+  width: 22%;
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 3px solid rgba(242, 240, 228, 0.72);
+  background:
+    conic-gradient(from -90deg,
+      rgba(242, 240, 228, 0.82) 0 25%,
+      transparent 25% 100%);
+  animation: dusk-spin-slow 44s linear infinite;
 }
 
-.tc-dusk .dusk-dial::after {
-  content: "";
+.tc-dusk .dusk-ring {
   position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 3px;
-  height: 20%;
-  border-radius: 3px;
-  background: linear-gradient(180deg, rgba(233, 174, 63, 0.5), rgba(233, 174, 63, 0.08));
-  transform-origin: 50% 100%;
-  transform: translate(-50%, -100%) rotate(310deg);
+  inset: 14%;
+  border-radius: 50%;
+  border: 1.5px dashed rgba(242, 240, 228, 0.26);
+  animation: dusk-spin-slow 75s linear infinite reverse;
+}
+
+.tc-dusk .dusk-orbit {
+  position: absolute;
+  left: -12vw;
+  top: -14vh;
+  width: min(70vw, 560px);
+  aspect-ratio: 1;
+  animation: dusk-orbit 32s linear infinite;
+}
+
+.tc-dusk .dusk-dot {
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  box-shadow: 0 0 14px rgba(0, 0, 0, 0.18);
+}
+
+.tc-dusk .dusk-dot.a {
+  top: 10%;
+  right: 16%;
+  background: var(--coral, #e8795b);
+}
+
+.tc-dusk .dusk-dot.b {
+  bottom: 16%;
+  left: 12%;
+  width: 10px;
+  height: 10px;
+  background: var(--gold, #e9ae3f);
 }
 
 .tc-dusk .dusk-echo {
@@ -345,19 +391,20 @@
   width: min(46vw, 380px);
   aspect-ratio: 1;
   border-radius: 50%;
-  border: 1.5px dashed rgba(242, 240, 228, 0.09);
+  border: 1.5px dashed rgba(242, 240, 228, 0.16);
+  animation: dusk-drift 16s ease-in-out infinite;
 }
 
 /* Ink flips light on the dusk canvas. */
 body:has(.tc-dusk) {
-  background: #2c3830;
+  background: #4c6f5b;
 }
 
 .tc-wrap { position: relative; z-index: 1; }
 
 body:has(.tc-dusk) .tc-card {
-  background: rgba(22, 30, 25, 0.6);
-  border-color: rgba(242, 240, 228, 0.13);
+  background: rgba(22, 30, 25, 0.62);
+  border-color: rgba(242, 240, 228, 0.15);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   box-shadow: 0 24px 70px rgba(6, 12, 9, 0.45);
@@ -371,7 +418,7 @@ body:has(.tc-dusk) .tc-card h2 {
 
 body:has(.tc-dusk) .tc-card .muted,
 body:has(.tc-dusk) .tc-top .muted {
-  color: rgba(238, 240, 230, 0.62);
+  color: rgba(238, 240, 230, 0.70);
 }
 
 body:has(.tc-dusk) .tc-brand strong {
@@ -379,34 +426,41 @@ body:has(.tc-dusk) .tc-brand strong {
 }
 
 body:has(.tc-dusk) .brand-mark {
-  background: linear-gradient(140deg, rgba(242, 240, 228, 0.14), rgba(242, 240, 228, 0.05));
-  border: 1px solid rgba(242, 240, 228, 0.22);
+  background: linear-gradient(140deg, rgba(242, 240, 228, 0.16), rgba(242, 240, 228, 0.06));
+  border: 1px solid rgba(242, 240, 228, 0.26);
   color: #f4f3ea;
 }
 
 body:has(.tc-dusk) .tc-opt {
-  background: rgba(242, 240, 228, 0.04);
-  border-color: rgba(242, 240, 228, 0.14);
+  background: rgba(242, 240, 228, 0.06);
+  border-color: rgba(242, 240, 228, 0.16);
   color: #eef0e6;
 }
 
 body:has(.tc-dusk) .tc-opt:hover {
-  border-color: rgba(233, 174, 63, 0.5);
+  border-color: rgba(233, 174, 63, 0.55);
 }
 
 body:has(.tc-dusk) .tc-opt.selected {
   border-color: var(--sage);
-  background: rgba(116, 168, 132, 0.14);
+  background: rgba(116, 168, 132, 0.18);
 }
 
 body:has(.tc-dusk) .tc-progress {
-  background: rgba(242, 240, 228, 0.1);
+  background: rgba(242, 240, 228, 0.12);
 }
 
 body:has(.tc-dusk) .tc-actions .ghost,
 body:has(.tc-dusk) .tc-nav .ghost {
-  border-color: rgba(242, 240, 228, 0.3);
+  background: rgba(242, 240, 228, 0.10);
+  border: 1.5px solid rgba(242, 240, 228, 0.36);
   color: #eef0e6;
+}
+
+body:has(.tc-dusk) .tc-actions .ghost:hover,
+body:has(.tc-dusk) .tc-nav .ghost:hover {
+  background: rgba(242, 240, 228, 0.18);
+  border-color: rgba(242, 240, 228, 0.60);
 }
 
 /* The old light backdrop stays defined but is superseded whenever .tc-dusk
@@ -416,5 +470,19 @@ body:has(.tc-dusk) .tc-bg {
 }
 
 @media (max-width: 560px) {
-  .tc-dusk .dusk-dial { width: 84vw; left: -22vw; top: -12vh; }
+  .tc-dusk .dusk-dial,
+  .tc-dusk .dusk-orbit { width: 96vw; left: -34vw; top: -8vh; }
+  .tc-dusk .dusk-glow { width: 110vw; left: -40vw; top: -6vh; }
+  .tc-dusk .dusk-dot { width: 11px; height: 11px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tc-dusk .dusk-dial,
+  .tc-dusk .dusk-glow,
+  .tc-dusk .dusk-pie,
+  .tc-dusk .dusk-ring,
+  .tc-dusk .dusk-orbit,
+  .tc-dusk .dusk-echo {
+    animation: none !important;
+  }
 }
