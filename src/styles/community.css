@@ -3997,3 +3997,109 @@ mark {
 .chat-invite-card .ci-body small {
   font-size: 11px;
 }
+
+.chat-invite-card .primary {
+  flex-shrink: 0;
+  padding: 7px 12px;
+  font-size: 12px;
+}
+
+/* ---------- multi-select delete chats ---------- */
+.wa-select-head h2 {
+  font-size: 18px;
+}
+.wa-select-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.conv-check {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  display: grid;
+  place-items: center;
+  background: transparent;
+  color: transparent;
+  transition: border-color 0.14s ease, background 0.14s ease, color 0.14s ease;
+}
+.conv-check .sicon {
+  width: 13px;
+  height: 13px;
+}
+.conv-check.on {
+  background: var(--sage);
+  border-color: var(--sage);
+  color: #fff;
+}
+.conv-row.select-mode {
+  cursor: pointer;
+}
+.conv-row.select-mode.selected {
+  background: color-mix(in srgb, var(--sage) 12%, transparent);
+}
+.wa-root.selecting .wa-list {
+  border-right: none;
+}
+@media (max-width: 860px) {
+  .wa-root.selecting .wa-chat {
+    display: none;
+  }
+}
+
+/* Focus desk pending invites */
+.mission-invites {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 12px;
+}
+.mission-invite {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--gold);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(217, 164, 65, 0.1), rgba(232, 121, 91, 0.06));
+}
+.mission-invite .mi-ico {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, var(--gold, #d9a441), #e8795b);
+  color: #fff;
+}
+.mission-invite .mi-ico .sicon {
+  width: 16px;
+  height: 16px;
+}
+.mission-invite .mi-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.mission-invite .mi-body strong {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mission-invite .mi-body small {
+  font-size: 11px;
+}
+.mission-invite .invite-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.mission-invite .invite-actions .primary,
+.mission-invite .invite-actions .ghost {
+  padding: 6px 10px;
+  font-size: 12px;
+}

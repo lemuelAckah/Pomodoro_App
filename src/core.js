@@ -221,6 +221,8 @@ const state = {
   activeChallengeId: get("sf-active-challenge", null),
   privacyAccepted: get("sf-privacy-accepted", null),
   eventInvites: get("sf-event-invites", []),
+  challengeInvites: get("sf-challenge-invites", []),
+  deletedChats: get("sf-deleted-chats", {}),
   events: get("sf-events", []),
   pins: get("sf-pins", {}),
   stories: get("sf-stories", []),
@@ -378,6 +380,8 @@ function persistNow() {
   save("sf-challenges", state.challenges || []);
   save("sf-active-challenge", state.activeChallengeId || null);
   save("sf-event-invites", (state.eventInvites || []).slice(-20));
+  save("sf-challenge-invites", (state.challengeInvites || []).slice(-20));
+  save("sf-deleted-chats", state.deletedChats || {});
   save("sf-privacy-accepted", state.privacyAccepted || null);
   save("sf-events", state.events || []);
   save("sf-pins", state.pins || {});
@@ -987,9 +991,9 @@ async function hydrateCloudState(user) {
 export function setCloudSubscription(sub) {
   cloudStateSubscription = sub;
 }
-const STATE_ARRAYS = ["tasks", "favorites", "owned", "friends", "customGroups", "songs", "posts", "books", "bookFavorites", "bookRecent", "stories", "challenges", "events", "sprints", "sprintInvites", "eventInvites", "garden", "focusLog", "notifications", "purchases", "boxes", "achievements", "decks", "mindmaps", "feynmanNotes", "duckChat", "cornellNotes", "reports"];
+const STATE_ARRAYS = ["tasks", "favorites", "owned", "friends", "customGroups", "songs", "posts", "books", "bookFavorites", "bookRecent", "stories", "challenges", "events", "sprints", "sprintInvites", "eventInvites", "challengeInvites", "garden", "focusLog", "notifications", "purchases", "boxes", "achievements", "decks", "mindmaps", "feynmanNotes", "duckChat", "cornellNotes", "reports"];
 const STATE_OBJECT_DEFAULTS = {
-  messages: {}, pins: {}, statusSeen: {}, focusDays: {}, techUses: {},
+  messages: {}, pins: {}, statusSeen: {}, focusDays: {}, techUses: {}, deletedChats: {},
   techStats: {}, techTime: {}, storeQty: {}, soundMix: {}, blocks: {}, mutedChats: {},
   bookProgress: {}, bookLocal: {},
   bookStats: { opened: {}, completed: [], seconds: 0, pages: 0 },

@@ -17,7 +17,7 @@ import {
   listFriendships, sendFriendRequest, respondFriendRequest, removeFriend,
   listBlocks, blockUser, unblockUser as serverUnblock,
   createStory, listStories, viewStory, deleteStory, listStoryViews,
-  listNotifications, markNotificationRead, markAllNotificationsRead,
+  listNotifications, markNotificationRead, markAllNotificationsRead, notifyEvent,
   getPublicProfiles, listUserFriends, searchUsers, editCloudMessage,
   uploadGroupAvatar, removeGroupAvatar, getGroupAvatarUrl,
   uploadStoryPhoto, deleteStoryMedia, getStoryMediaUrl,
@@ -360,6 +360,7 @@ async function refreshCloudNotifCount(force) {
   if (!force && Date.now() - cloudNotifAt < 60000 && cloudNotifAt) return cloudNotifCount;
   try {
     const { data } = await listNotifications(50).catch(() => ({ data: [] }));
+    harvestInvitesFromNotifs(data || []);
     cloudNotifCount = (data || []).filter((n) => !n.read_at).length;
     cloudNotifAt = Date.now();
   } catch {
@@ -1227,6 +1228,7 @@ function sanitizeChallenge(c) {
 // so keep the first undone one and park the rest as joinable.
 function ensureChallengeFields() {
   if (!Array.isArray(state.challenges)) state.challenges = [];
+  if (!Array.isArray(state.challengeInvites)) state.challengeInvites = [];
   const wk = weekKey(new Date());
   let kept = false;
   state.challenges.forEach((c) => {
@@ -1790,11 +1792,14 @@ function ensureSprintFields() {
   if (!Array.isArray(state.sprints)) state.sprints = [];
   state.sprints.forEach(sanitizeSprint);
   if (!Array.isArray(state.sprintInvites)) state.sprintInvites = [];
+  if (!Array.isArray(state.eventInvites)) state.eventInvites = [];
   // Invites only ever appear here when a real friend sends one — no demo data.
   // Purge demo invites left over from earlier versions.
   const hadDemo = state.sprintInvites.some((i) => i && i.demo);
   state.sprintInvites = state.sprintInvites.filter((i) => i && !i.demo);
-  if (hadDemo) persist();
+  const hadDemoEv = state.eventInvites.some((i) => i && i.demo);
+  state.eventInvites = state.eventInvites.filter((i) => i && !i.demo);
+  if (hadDemo || hadDemoEv) persist();
 }
 
 function isSprintOwner(sp) {
@@ -1892,10 +1897,15 @@ function challengeMarkup() {
   ensureChallengeFields();
   const wk = weekKey(new Date());
   const list = (state.challenges || []).filter((c) => c.weekKey === wk);
+  const pendingCh = (state.challengeInvites || []).filter((i) => i.status === "pending");
+  const decidedCh = (state.challengeInvites || []).filter((i) => i.status !== "pending").slice(-3).reverse();
   const groups = allGroups().filter((g) =>
     get("sf-joined", []).includes(g.id),
   );
-  return `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Group challenges</h2><span class="tag">this week</span></div>${list.map(challengeRow).join("") || '<p class="muted">No active challenges — launch the first one.</p>'}<div class="section-row" style="margin-top:14px"><h3>New challenge</h3><span class="tag">you host</span></div><div class="grid two"><input class="input" id="ch-title" placeholder="e.g. 10 focus sessions"><select class="select" id="ch-group">${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("") || '<option value="">No joined groups yet</option>'}</select><div class="input-row" style="margin:0"><input class="input" id="ch-target" type="number" min="1" max="500" value="10" aria-label="Target"><select class="select" id="ch-unit" aria-label="Unit"><option value="sessions">sessions</option><option value="minutes">minutes</option></select></div><div class="input-row" style="margin:0" title="Session length for this challenge"><input class="input" id="ch-min" type="number" min="0" max="180" value="25" aria-label="Minutes per session"><span class="muted">min</span><input class="input" id="ch-sec" type="number" min="0" max="59" value="0" aria-label="Seconds per session"><span class="muted">sec</span></div></div><div><button type="button" class="primary" id="ch-create">Launch</button></div></div>`;
+  const inbox = pendingCh.length || decidedCh.length
+    ? `<div class="card invite-inbox" style="margin-bottom:18px"><div class="section-row"><h2>${sicon("trophy")} Challenge invites</h2><span class="tag">${pendingCh.length} pending</span></div>${pendingCh.map((inv) => `<div class="invite-card"><div class="invite-glow"></div><div><strong>${esc(inv.title)}</strong><br><small class="muted">from <b>@${esc(inv.from || "a friend")}</b> · ${inv.target || 10} ${inv.unit || "sessions"} this week · ${inv.sessionMin || 25}:${String(inv.sessionSec || 0).padStart(2, "0")} pace</small>${inv.purpose ? `<p class="purpose">“${esc(inv.purpose)}”</p>` : ""}</div><div class="invite-actions"><button type="button" class="primary" data-ch-inv-accept="${inv.id}">Join challenge</button><button type="button" class="ghost" data-ch-inv-decline="${inv.id}">Decline</button></div></div>`).join("")}${decidedCh.map((inv) => `<div class="board-row"><span>${esc(inv.title)} · @${esc(inv.from || "?")}</span><span class="tag">${inv.status === "accepted" ? sicon("check") + " joined" : "declined"}</span></div>`).join("")}</div>`
+    : "";
+  return `${inbox}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Group challenges</h2><span class="tag">this week</span></div>${list.map(challengeRow).join("") || '<p class="muted">No active challenges — launch the first one.</p>'}<div class="section-row" style="margin-top:14px"><h3>New challenge</h3><span class="tag">you host</span></div><div class="grid two"><input class="input" id="ch-title" placeholder="e.g. 10 focus sessions"><select class="select" id="ch-group">${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("") || '<option value="">No joined groups yet</option>'}</select><div class="input-row" style="margin:0"><input class="input" id="ch-target" type="number" min="1" max="500" value="10" aria-label="Target"><select class="select" id="ch-unit" aria-label="Unit"><option value="sessions">sessions</option><option value="minutes">minutes</option></select></div><div class="input-row" style="margin:0" title="Session length for this challenge"><input class="input" id="ch-min" type="number" min="0" max="180" value="25" aria-label="Minutes per session"><span class="muted">min</span><input class="input" id="ch-sec" type="number" min="0" max="59" value="0" aria-label="Seconds per session"><span class="muted">sec</span></div></div><div style="margin-top:10px;position:relative"><button type="button" class="ghost" id="ch-friends-go" style="width:100%">👥 Invite friends — optional DM invites</button><span class="fp-chip" id="ch-picked" hidden></span></div><div><button type="button" class="primary" id="ch-create" style="margin-top:10px">Launch</button></div></div>`;
 }
 
 function eventWhen(e) {
@@ -2019,34 +2029,66 @@ function inviteRecipients(ids) {
 
 function inviteMessageRow(inv, prefix) {
   const isSprint = prefix === "sprint";
+  const isChallenge = prefix === "challenge";
   const when = inv.startsAt || inv.at;
-  const text = isSprint
-    ? `Sprint invite — “${inv.title}” · ${Math.round((inv.durationSec || 1500) / 60)} min · ${new Date(when || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}. Open Community → Sprints to join.`
-    : `Study session invite — “${inv.title}” · ${new Date(when || Date.now()).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })} · ${inv.durationMin || 25} min. Open Community → Sprints to RSVP.`;
-  return {
-    sender_id: state.user.id,
-    group_id: null,
-    recipient_id: inv.toId,
-    text,
-    kind: "text",
-    metadata: {
-      invite: {
+  const text = isChallenge
+    ? `Challenge invite — “${inv.title}” · ${inv.target || 10} ${inv.unit || "sessions"} this week · ${inv.sessionMin || 25}:${String(inv.sessionSec || 0).padStart(2, "0")} pace. Open Community → Challenges to join.`
+    : isSprint
+      ? `Sprint invite — “${inv.title}” · ${Math.round((inv.durationSec || 1500) / 60)} min · ${new Date(when || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}. Open Community → Sprints to join.`
+      : `Study session invite — “${inv.title}” · ${new Date(when || Date.now()).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })} · ${inv.durationMin || 25} min. Open Community → Sprints to RSVP.`;
+  const invite = isChallenge
+    ? {
+        t: "challenge",
+        id: inv.refId,
+        title: inv.title,
+        purpose: inv.purpose || "",
+        target: inv.target || 10,
+        unit: inv.unit || "sessions",
+        sessionMin: inv.sessionMin ?? 25,
+        sessionSec: inv.sessionSec ?? 0,
+        groupId: inv.groupId || "",
+      }
+    : {
         t: prefix, // "sprint" | "session"
         id: inv.refId,
         title: inv.title,
         purpose: inv.purpose || "",
         at: when,
         durationSec: inv.durationSec || (inv.durationMin || 25) * 60,
-      },
-    },
+      };
+  return {
+    sender_id: state.user.id,
+    group_id: null,
+    recipient_id: inv.toId,
+    text,
+    kind: "text",
+    metadata: { invite },
   };
 }
 
 async function sendInviteDms(prefix, inv, toIds) {
   if (!signedIn()) return;
   const targets = inviteRecipients(toIds);
+  const titles = { sprint: "Sprint invite", session: "Session invite", challenge: "Challenge invite" };
+  const title = titles[prefix] || "Invite";
   for (const toId of targets) {
-    await pushInviteDm(inviteMessageRow({ ...inv, toId }, prefix));
+    const row = inviteMessageRow({ ...inv, toId }, prefix);
+    await pushInviteDm(row);
+    // Cloud bell rides the security-definer notify path (029) so the
+    // recipient sees the invite without opening this chat first.
+    notifyEvent({
+      type: "invite",
+      eventKey: `invite:${prefix}:${inv.refId || ""}:${toId}`,
+      entityId: inv.refId || null,
+      userId: toId,
+      metadata: {
+        title,
+        text: row.text,
+        invite: row.metadata.invite,
+        from: state.profile?.handle || "",
+        fromId: state.user.id,
+      },
+    }).catch(() => {});
   }
   if (targets.length) persist();
 }
@@ -2059,6 +2101,7 @@ async function pushInviteDm(payload) {
     text: payload.text,
     ts: Date.now(),
     deliveryStatus: "sent",
+    metadata: payload.metadata && Object.keys(payload.metadata).length ? payload.metadata : undefined,
   };
   state.messages[payload.recipient_id] = [...(state.messages[payload.recipient_id] || []), local];
   try {
@@ -2090,10 +2133,10 @@ async function sendInviteReplyDm(inv, status) {
 // this, so the same invite must not double up).
 function adoptIncomingInvite(inv, fromHandle, fromId) {
   if (!inv || !inv.t || !inv.id || !inv.title) return false;
-  const store = inv.t === "sprint" ? "sprintInvites" : "eventInvites";
+  const store = inv.t === "sprint" ? "sprintInvites" : inv.t === "challenge" ? "challengeInvites" : "eventInvites";
   if (!Array.isArray(state[store])) state[store] = [];
   if (state[store].some((i) => i.refId === inv.id || (i.sprintId === inv.id && inv.t === "sprint"))) return false;
-  state[store].push({
+  const row = {
     id: uid(),
     refId: inv.id,
     demo: false,
@@ -2107,8 +2150,24 @@ function adoptIncomingInvite(inv, fromHandle, fromId) {
     at: inv.at,
     durationMin: Math.max(1, Math.round((inv.durationSec || 1500) / 60)),
     sprintId: inv.t === "sprint" ? inv.id : undefined,
-  });
+  };
+  if (inv.t === "challenge") {
+    row.target = inv.target || 10;
+    row.unit = inv.unit || "sessions";
+    row.sessionMin = inv.sessionMin ?? 25;
+    row.sessionSec = inv.sessionSec ?? 0;
+    row.groupId = inv.groupId || "";
+  }
+  state[store].push(row);
   state[store] = state[store].slice(-20);
+  const label = inv.t === "sprint" ? "Sprint invite" : inv.t === "challenge" ? "Challenge invite" : "Session invite";
+  addNotification(label, `${fromHandle || "A friend"} invited you to “${inv.title}”`, inv.t === "session" ? "calendar" : inv.t === "challenge" ? "trophy" : "bolt");
+  refreshNotifBadge();
+  try {
+    browserNotify(label, `Invited to “${inv.title}” — open Community to respond.`);
+  } catch {
+    /* permission denied — in-app bell is enough */
+  }
   persist();
   return true;
 }
@@ -2158,6 +2217,146 @@ function harvestInvitesFromRows(rows, resolveFrom) {
   return changed;
 }
 
+// Cloud notifications carry the same invite payload in metadata so the bell
+// delivers without the recipient ever opening the DM (029 invite type).
+function harvestInvitesFromNotifs(rows) {
+  let changed = false;
+  for (const n of rows || []) {
+    const meta = n?.metadata;
+    if (!meta?.invite) continue;
+    if (adoptIncomingInvite(meta.invite, meta.from || "a friend", meta.fromId || null)) changed = true;
+  }
+  return changed;
+}
+
+// Shared invite decisions — bound from both the Sprints inbox and the
+// Focus desk mission card so either surface can accept without re-binding.
+function refreshInviteSurfaces(root) {
+  persist();
+  if (root && (root.id === "tab-timer" || root.querySelector?.(".mission-desk"))) {
+    // Focus desk: re-render just the timer panel via shell's current tab.
+    try { shell(); } catch { /* shell always available after boot */ }
+    return;
+  }
+  renderCommunity();
+}
+
+function acceptSprintInvite(invId, root) {
+  const inv = (state.sprintInvites || []).find((x) => x.id === invId);
+  if (!inv || inv.status !== "pending") return;
+  inv.status = "accepted";
+  sendInviteReplyDm(inv, "accepted").catch(() => {});
+  const dur = inv.durationMin || 25;
+  state.sprints.push(sanitizeSprint({
+    id: inv.sprintId || uid(),
+    title: inv.title || `${dur}-min sprint`,
+    purpose: inv.purpose || "",
+    groupId: "",
+    durationSec: dur * 60,
+    startsAt: inv.startsAt || Date.now() + 2 * 60000,
+    joined: true,
+    liveNotified: false,
+    result: null,
+    ownerId: "",
+    visibility: "friends",
+    invites: [],
+    roster: [makeCrewPeer(inv.from || "Host")],
+  }));
+  refreshInviteSurfaces(root);
+  celebrate(false);
+  notify(`You're in “${inv.title}” — see it on your Focus desk`);
+}
+
+function declineSprintInvite(invId, root) {
+  const inv = (state.sprintInvites || []).find((x) => x.id === invId);
+  if (!inv) return;
+  inv.status = "declined";
+  sendInviteReplyDm(inv, "declined").catch(() => {});
+  refreshInviteSurfaces(root);
+  notify("Invite passed — no hard feelings");
+}
+
+function acceptEventInvite(invId, root) {
+  const inv = (state.eventInvites || []).find((x) => x.id === invId);
+  if (!inv || inv.status !== "pending") return;
+  inv.status = "accepted";
+  sendInviteReplyDm({ ...inv, t: "session" }, "accepted").catch(() => {});
+  state.events.push({
+    id: uid(),
+    title: inv.title || "Study session",
+    groupId: "",
+    at: inv.at || Date.now() + 3600000,
+    durationMin: inv.durationMin || 25,
+    mine: true,
+    reminded: false,
+    ownerId: "",
+    visibility: "friends",
+    invites: [],
+  });
+  refreshInviteSurfaces(root);
+  celebrate(false);
+  notify(`You're going to “${inv.title}” — it's on your Focus desk`);
+}
+
+function declineEventInvite(invId, root) {
+  const inv = (state.eventInvites || []).find((x) => x.id === invId);
+  if (!inv) return;
+  inv.status = "declined";
+  sendInviteReplyDm({ ...inv, t: "session" }, "declined").catch(() => {});
+  refreshInviteSurfaces(root);
+  notify("Invite passed — no hard feelings");
+}
+
+function acceptChallengeInvite(invId, root) {
+  const inv = (state.challengeInvites || []).find((x) => x.id === invId);
+  if (!inv || inv.status !== "pending") return;
+  inv.status = "accepted";
+  sendInviteReplyDm({ ...inv, t: "challenge" }, "accepted").catch(() => {});
+  const wk = weekKey(new Date());
+  const existing = (state.challenges || []).find((c) => c.id === inv.refId || c.title === inv.title);
+  if (existing) {
+    if (!existing.joined && !existing.done) joinChallenge(existing.id);
+  } else {
+    const ch = sanitizeChallenge({
+      id: inv.refId || uid(),
+      groupId: inv.groupId || "",
+      title: inv.title || "Challenge",
+      target: inv.target || 10,
+      unit: inv.unit || "sessions",
+      weekKey: wk,
+      progress: 0,
+      done: false,
+      sessionMin: inv.sessionMin ?? 25,
+      sessionSec: inv.sessionSec ?? 0,
+      ownerId: inv.fromId || "",
+      joined: false,
+      members: [],
+    });
+    state.challenges.push(ch);
+    joinChallenge(ch.id);
+  }
+  refreshInviteSurfaces(root);
+  celebrate(false);
+  notify(`You're in “${inv.title}” — timer locked to the challenge pace`);
+}
+
+function declineChallengeInvite(invId, root) {
+  const inv = (state.challengeInvites || []).find((x) => x.id === invId);
+  if (!inv) return;
+  inv.status = "declined";
+  sendInviteReplyDm({ ...inv, t: "challenge" }, "declined").catch(() => {});
+  refreshInviteSurfaces(root);
+  notify("Invite passed — no hard feelings");
+}
+
+function openInviteDestination(nav) {
+  state.tab = "community";
+  state.subtab = nav === "challenges" ? "challenges" : "sprints";
+  state.activeChat = null;
+  persist();
+  shell();
+}
+
 function openSprintEditor(id) {
   const sp = state.sprints.find((x) => x.id === id);
   if (!sp) return notify("That room no longer exists");
@@ -2186,7 +2385,27 @@ function openSprintEditor(id) {
 /* ---------- Focus Desk live mission (sprints + challenges + scheduled) ---------- */
 function missionDeskMarkup() {
   ensureSprintFields();
+  ensureEventFields();
+  ensureChallengeFields();
   const now = Date.now();
+  const pendingInvites = [
+    ...(state.sprintInvites || []).filter((i) => i.status === "pending").map((i) => ({ ...i, kind: "sprint" })),
+    ...(state.eventInvites || []).filter((i) => i.status === "pending").map((i) => ({ ...i, kind: "session" })),
+    ...(state.challengeInvites || []).filter((i) => i.status === "pending").map((i) => ({ ...i, kind: "challenge" })),
+  ].slice(0, 3);
+  const inviteBlock = pendingInvites.length
+    ? `<div class="mission-invites">${pendingInvites.map((inv) => {
+        const icon = inv.kind === "challenge" ? "trophy" : inv.kind === "session" ? "calendar" : "bolt";
+        const when = inv.kind === "challenge"
+          ? `${inv.target || 10} ${inv.unit || "sessions"} this week`
+          : inv.kind === "session"
+            ? new Date(inv.at || now).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })
+            : `starts ${new Date(inv.startsAt || now).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+        const acc = inv.kind === "challenge" ? `data-ch-inv-accept="${inv.id}"` : inv.kind === "session" ? `data-ev-inv-accept="${inv.id}"` : `data-inv-accept="${inv.id}"`;
+        const dec = inv.kind === "challenge" ? `data-ch-inv-decline="${inv.id}"` : inv.kind === "session" ? `data-ev-inv-decline="${inv.id}"` : `data-inv-decline="${inv.id}"`;
+        return `<div class="mission-invite"><span class="mi-ico">${sicon(icon)}</span><div class="mi-body"><strong>${esc(inv.title)}</strong><small class="muted">@${esc(inv.from || "friend")} · ${esc(when)}</small></div><div class="invite-actions"><button type="button" class="primary" ${acc}>Join</button><button type="button" class="ghost" ${dec}>Pass</button></div></div>`;
+      }).join("")}</div>`
+    : "";
   const live = (state.sprints || []).find((s) => s.joined && !s.result && now >= s.startsAt && now < s.startsAt + s.durationSec * 1000);
   const next = (state.sprints || [])
     .filter((s) => s.joined && !s.result && s.startsAt + s.durationSec * 1000 > now && (!live || s.id !== live.id))
@@ -2198,10 +2417,11 @@ function missionDeskMarkup() {
     .filter((e) => e.mine && e.at + e.durationMin * 60000 > now)
     .sort((a, b) => a.at - b.at)[0];
   if (!focus && !challenges.length && !upcomingEv) {
+    if (inviteBlock) return `<div class="card mission-desk idle"><div class="mission-top"><span class="mission-eyebrow">${sicon("gift")} Pending invites</span><button type="button" class="ghost" data-mission-goto>Open Sprints</button></div>${inviteBlock}<p class="muted">Accept an invite and it docks here as a live mission.</p></div>`;
     return `<div class="card mission-desk idle"><div class="mission-top"><span class="mission-eyebrow">${sicon("bolt")} Live mission</span><button type="button" class="ghost" data-mission-goto>Open Sprints</button></div><p class="muted">Nothing racing right now. Launch a sprint room and it will dock here so you never have to hunt for it.</p></div>`;
   }
   const inSession = focus && (state.sprintSession === focus.id || (state.running && state.mode === "focus"));
-  return `<div class="card mission-desk${live ? " live" : ""}"><div class="mission-glow"></div><div class="mission-top"><span class="mission-eyebrow"><span class="mission-dot"></span> Live mission · Focus desk</span><button type="button" class="ghost" data-mission-goto>Open Sprints</button></div>${focus ? `<div class="mission-sprint"><div><strong>${esc(focus.title)}</strong><br><small class="muted">${live ? "happening now" : "starts " + new Date(focus.startsAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${Math.round(focus.durationSec / 60)} min${focus.purpose ? ` · ${esc(focus.purpose.slice(0, 80))}${focus.purpose.length > 80 ? "…" : ""}` : ""}</small></div><span class="tag ${live ? "live" : ""}" data-mission-cd="${focus.id}">${live ? "● LIVE" : "scheduled"}</span></div>${focus && live && !inSession ? `<button type="button" class="primary" data-mission-join="${focus.id}">Jump in — start focus</button>` : ""}${focus && live && inSession ? `<span class="tag live">${sicon("fire")} you're racing this one</span>` : ""}` : ""}${challenges.map((c) => {
+  return `${inviteBlock}<div class="card mission-desk${live ? " live" : ""}"><div class="mission-glow"></div><div class="mission-top"><span class="mission-eyebrow"><span class="mission-dot"></span> Live mission · Focus desk</span><button type="button" class="ghost" data-mission-goto>Open Sprints</button></div>${focus ? `<div class="mission-sprint"><div><strong>${esc(focus.title)}</strong><br><small class="muted">${live ? "happening now" : "starts " + new Date(focus.startsAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${Math.round(focus.durationSec / 60)} min${focus.purpose ? ` · ${esc(focus.purpose.slice(0, 80))}${focus.purpose.length > 80 ? "…" : ""}` : ""}</small></div><span class="tag ${live ? "live" : ""}" data-mission-cd="${focus.id}">${live ? "● LIVE" : "scheduled"}</span></div>${focus && live && !inSession ? `<button type="button" class="primary" data-mission-join="${focus.id}">Jump in — start focus</button>` : ""}${focus && live && inSession ? `<span class="tag live">${sicon("fire")} you're racing this one</span>` : ""}` : ""}${challenges.map((c) => {
     const pct = Math.min(100, Math.round((c.progress / Math.max(1, c.target)) * 100));
     const locked = state.activeChallengeId === c.id && !c.done;
     return `<div class="mission-row"><span>${sicon("trophy")} ${locked ? "🔒 " : ""}${esc(c.title)}</span><span class="tag">${c.progress}/${c.target}</span></div><div class="crew-track slim"><span class="crew-fill" style="width:${pct}%"></span></div>`;
@@ -2217,6 +2437,12 @@ function bindMissionDesk(root) {
       shell();
     }),
   );
+  $$("[data-inv-accept]", root).forEach((b) => (b.onclick = () => acceptSprintInvite(b.dataset.invAccept, root)));
+  $$("[data-inv-decline]", root).forEach((b) => (b.onclick = () => declineSprintInvite(b.dataset.invDecline, root)));
+  $$("[data-ev-inv-accept]", root).forEach((b) => (b.onclick = () => acceptEventInvite(b.dataset.evInvAccept, root)));
+  $$("[data-ev-inv-decline]", root).forEach((b) => (b.onclick = () => declineEventInvite(b.dataset.evInvDecline, root)));
+  $$("[data-ch-inv-accept]", root).forEach((b) => (b.onclick = () => acceptChallengeInvite(b.dataset.chInvAccept, root)));
+  $$("[data-ch-inv-decline]", root).forEach((b) => (b.onclick = () => declineChallengeInvite(b.dataset.chInvDecline, root)));
   $$("[data-mission-join]", root).forEach(
     (b) => (b.onclick = () => {
       const sp = (state.sprints || []).find((x) => x.id === b.dataset.missionJoin);
@@ -2256,6 +2482,7 @@ function bindMissionDesk(root) {
 // dropdowns to manage; the chip simply shows how many friends were chosen.
 let sprintPickedIds = [];
 let eventPickedIds = [];
+let challengePickedIds = [];
 function paintPickedChip(chipEl, n) {
   if (!chipEl) return;
   chipEl.hidden = !n;
@@ -2320,8 +2547,22 @@ function bindSprints(body) {
       roster: crewSeeds,
     });
     state.sprints.push(sp);
-    if (groupId)
+    if (groupId) {
       postGroupMessage(groupId, `Sprint room open: “${title}”${purpose ? ` — ${purpose}` : ""} — ${dur} min, starts in ${mins} min. Join from Community → Sprints.`, "bolt");
+      notifyEvent({
+        type: "group_activity",
+        eventKey: `sprint:${sp.id}`,
+        entityId: sp.id,
+        groupId,
+        metadata: {
+          title: "Sprint room open",
+          text: `“${title}” — ${dur} min, starts in ${mins} min. Open Community → Sprints to join.`,
+          invite: { t: "sprint", id: sp.id, title, purpose, at: sp.startsAt, durationSec: sp.durationSec },
+          from: state.profile?.handle || "",
+          fromId: state.user?.id || null,
+        },
+      }).catch(() => {});
+    }
     // Real delivery: invited friends receive the sprint as a DM with
     // structured metadata (works for cloud connections with real ids).
     sendInviteDms("sprint", {
@@ -2356,47 +2597,10 @@ function bindSprints(body) {
     });
   };
   paintCrewBtn(body);
-  $$("[data-inv-accept]", body).forEach(
-    (b) =>
-      (b.onclick = () => {
-        const inv = state.sprintInvites.find((x) => x.id === b.dataset.invAccept);
-        if (!inv || inv.status !== "pending") return;
-        inv.status = "accepted";
-        sendInviteReplyDm(inv, "accepted").catch(() => {});
-        const dur = inv.durationMin || 25;
-        state.sprints.push(sanitizeSprint({
-          id: inv.sprintId || uid(),
-          title: inv.title || `${dur}-min sprint`,
-          purpose: inv.purpose || "",
-          groupId: "",
-          durationSec: dur * 60,
-          startsAt: inv.startsAt || Date.now() + 2 * 60000,
-          joined: true,
-          liveNotified: false,
-          result: null,
-          ownerId: "",
-          visibility: "friends",
-          invites: [],
-          roster: [makeCrewPeer(inv.from || "Host")],
-        }));
-        persist();
-        renderCommunity();
-        celebrate(false);
-        notify(`You're in “${inv.title}” — see it on your Focus desk`);
-      }),
-  );
-  $$("[data-inv-decline]", body).forEach(
-    (b) =>
-      (b.onclick = () => {
-        const inv = state.sprintInvites.find((x) => x.id === b.dataset.invDecline);
-        if (!inv) return;
-        inv.status = "declined";
-        sendInviteReplyDm(inv, "declined").catch(() => {});
-        persist();
-        renderCommunity();
-        notify("Invite passed — no hard feelings");
-      }),
-  );
+  $$("[data-inv-accept]", body).forEach((b) => (b.onclick = () => acceptSprintInvite(b.dataset.invAccept, body)));
+  $$("[data-inv-decline]", body).forEach((b) => (b.onclick = () => declineSprintInvite(b.dataset.invDecline, body)));
+  $$("[data-ch-inv-accept]", body).forEach((b) => (b.onclick = () => acceptChallengeInvite(b.dataset.chInvAccept, body)));
+  $$("[data-ch-inv-decline]", body).forEach((b) => (b.onclick = () => declineChallengeInvite(b.dataset.chInvDecline, body)));
   $$("[data-sprint-edit]", body).forEach(
     (b) => (b.onclick = () => openSprintEditor(b.dataset.sprintEdit)),
   );
@@ -2487,11 +2691,25 @@ function bindSprints(body) {
         notify("Jumped in late — make it count " + sicon("fire"));
       }),
   );
+  $("#ch-friends-go", body)?.addEventListener("click", () => {
+    openFriendsPicker({
+      title: "Invite friends to the challenge",
+      eyebrow: "Challenge invites",
+      note: "Friends get a DM + notification even without a shared group.",
+      cta: "Save invite list",
+      selected: challengePickedIds,
+      onDone: (ids) => {
+        challengePickedIds = ids;
+        paintPickedChip($("#ch-picked", body), ids.length);
+      },
+    });
+  });
+  paintPickedChip($("#ch-picked", body), challengePickedIds.length);
   $("#ch-create", body).onclick = () => {
     if (!requireAuth("host group challenges")) return;
     const target = Math.min(500, Math.max(1, parseInt($("#ch-target", body).value, 10) || 10));
     const groupId = $("#ch-group", body).value || "";
-    if (!groupId) return notify("Join a group first to challenge it");
+    if (!groupId && !challengePickedIds.length) return notify("Join a group or pick friends to challenge");
     const unit = $("#ch-unit", body).value === "minutes" ? "minutes" : "sessions";
     const title = $("#ch-title", body).value.trim() || `${target} ${unit} this week`;
     let paceMin = Math.min(180, Math.max(0, parseInt($("#ch-min", body)?.value, 10)));
@@ -2516,7 +2734,34 @@ function bindSprints(body) {
     });
     state.challenges.push(ch);
     postGroupMessage(groupId, `New challenge: “${title}” — ${target} ${unit} this week at ${fmtPace(ch)} a session. Who's in?`, "trophy");
+    // Friend invite path: DMs with structured challenge metadata + cloud bells
+    // so recipients get it in Notifications / Focus desk without joining a group.
+    sendInviteDms("challenge", {
+      refId: ch.id,
+      title,
+      purpose: "",
+      target,
+      unit,
+      sessionMin: paceMin,
+      sessionSec: paceSec,
+      groupId,
+    }, challengePickedIds).catch(() => {});
+    if (groupId)
+      notifyEvent({
+        type: "group_activity",
+        eventKey: `challenge:${ch.id}`,
+        entityId: ch.id,
+        groupId,
+        metadata: {
+          title: "Challenge launched",
+          text: `“${title}” — ${target} ${unit} this week. Open Community → Challenges to join.`,
+          invite: { t: "challenge", id: ch.id, title, purpose: "", target, unit, sessionMin: paceMin, sessionSec: paceSec, groupId },
+          from: state.profile?.handle || "",
+          fromId: state.user?.id || null,
+        },
+      }).catch(() => {});
     const seated = joinChallenge(ch.id);
+    challengePickedIds = [];
     persist();
     renderCommunity();
     notify(seated ? `Challenge launched — your timer is locked to ${fmtPace(ch)}` : "Challenge launched — leave your current race to join it");
@@ -2634,8 +2879,22 @@ function bindSprints(body) {
       invites: aud === "friends" ? invites : [],
     };
     state.events.push(e);
-    if (e.groupId)
+    if (e.groupId) {
       postGroupMessage(e.groupId, `Scheduled: “${title}” — ${new Date(at).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}. RSVP in Community → Sprints.`, "calendar");
+      notifyEvent({
+        type: "group_activity",
+        eventKey: `session:${e.id}`,
+        entityId: e.id,
+        groupId: e.groupId,
+        metadata: {
+          title: "Session scheduled",
+          text: `“${title}” — open Community → Sprints to RSVP.`,
+          invite: { t: "session", id: e.id, title, purpose: "", at, durationSec: durationMin * 60 },
+          from: state.profile?.handle || "",
+          fromId: state.user?.id || null,
+        },
+      }).catch(() => {});
+    }
     // Real delivery: invited friends receive the session as a DM with
     // structured metadata (works for cloud connections with real ids).
     sendInviteDms("session", {
@@ -2651,43 +2910,8 @@ function bindSprints(body) {
     renderCommunity();
     notify(e.visibility === "friends" ? `Scheduled — invites sent to ${invites.length} friend${invites.length === 1 ? "" : "s"}` : "Session scheduled — I'll remind you");
   };
-  $$("[data-ev-inv-accept]", body).forEach(
-    (b) =>
-      (b.onclick = () => {
-        const inv = (state.eventInvites || []).find((x) => x.id === b.dataset.evInvAccept);
-        if (!inv || inv.status !== "pending") return;
-        inv.status = "accepted";
-        sendInviteReplyDm({ ...inv, t: "session" }, "accepted").catch(() => {});
-        state.events.push({
-          id: uid(),
-          title: inv.title || "Study session",
-          groupId: "",
-          at: inv.at || Date.now() + 3600000,
-          durationMin: inv.durationMin || 25,
-          mine: true,
-          reminded: false,
-          ownerId: "",
-          visibility: "friends",
-          invites: [],
-        });
-        persist();
-        renderCommunity();
-        celebrate(false);
-        notify(`You're going to “${inv.title}” — it's on your Focus desk`);
-      }),
-  );
-  $$("[data-ev-inv-decline]", body).forEach(
-    (b) =>
-      (b.onclick = () => {
-        const inv = (state.eventInvites || []).find((x) => x.id === b.dataset.evInvDecline);
-        if (!inv) return;
-        inv.status = "declined";
-        sendInviteReplyDm({ ...inv, t: "session" }, "declined").catch(() => {});
-        persist();
-        renderCommunity();
-        notify("Invite passed — no hard feelings");
-      }),
-  );
+  $$("[data-ev-inv-accept]", body).forEach((b) => (b.onclick = () => acceptEventInvite(b.dataset.evInvAccept, body)));
+  $$("[data-ev-inv-decline]", body).forEach((b) => (b.onclick = () => declineEventInvite(b.dataset.evInvDecline, body)));
   $$("[data-event-nudge]", body).forEach(
     (b) =>
       (b.onclick = () => {
@@ -5341,6 +5565,7 @@ function renderNotifications(body) {
     }
     cloudNotifList = data;
     cloudNotifListAt = Date.now();
+    harvestInvitesFromNotifs(data);
     cloudNotifCount = data.filter((n) => !n.read_at).length;
     cloudNotifAt = Date.now();
     if (state.tab === "community" && state.subtab === "notifications") {
@@ -5452,6 +5677,64 @@ function cloudFriendPhoto(id) {
   cloudPhotoCache.set(id, "");
   return "";
 }
+// Multi-select bulk delete for the Chats list — entered from either three-dot
+// menu ("Delete chats"). The open conversation closes first so the list is free
+// to paint checkboxes.
+let chatSelectMode = false;
+let selectedChats = new Set();
+
+function startChatSelectMode(preselectId) {
+  chatSelectMode = true;
+  selectedChats = new Set(preselectId ? [preselectId] : []);
+  state.activeChat = null;
+  window.__sfChatVisRefresh = null;
+  const body = $("#tab-messages") || $("#community-body");
+  if (state.tab === "community" && state.subtab === "messages") renderCommunity();
+  else if (body) renderMessages(body);
+  else shell();
+}
+
+function exitChatSelectMode() {
+  chatSelectMode = false;
+  selectedChats.clear();
+  const body = $("#tab-messages") || $("#community-body");
+  if (state.tab === "community" && state.subtab === "messages") renderCommunity();
+  else if (body) renderMessages(body);
+}
+
+function deleteSelectedChats() {
+  const ids = [...selectedChats];
+  if (!ids.length) return;
+  confirmBox(
+    `Delete ${ids.length} chat${ids.length === 1 ? "" : "s"}?`,
+    "Messages and pins for the selected chats are removed on this device. New messages still arrive.",
+    () => {
+      const msgs = { ...(state.messages || {}) };
+      const pins = { ...(state.pins || {}) };
+      const deleted = { ...(state.deletedChats || {}) };
+      for (const id of ids) {
+        delete msgs[id];
+        delete pins[id];
+        deleted[id] = Date.now();
+        if (groupNav?.id === id) groupNav = null;
+        if (groupSearch?.id === id) groupSearch = null;
+        if (state.activeChat === id) state.activeChat = null;
+      }
+      state.messages = msgs;
+      state.pins = pins;
+      state.deletedChats = deleted;
+      chatSelectMode = false;
+      selectedChats.clear();
+      persist();
+      const body = $("#tab-messages") || $("#community-body");
+      if (state.tab === "community" && state.subtab === "messages") renderCommunity();
+      else if (body) renderMessages(body);
+      notify(`${ids.length} chat${ids.length === 1 ? "" : "s"} deleted`);
+    },
+    { eyebrow: "Delete chats", yesLabel: "Delete", noLabel: "Keep" },
+  );
+}
+
 function conversationRow(c) {
   const isGroup = allGroups().some((g) => g.id === c.id);
   const msgs = state.messages[c.id] || [];
@@ -5463,13 +5746,17 @@ function conversationRow(c) {
     ? esc(previewLabel(c.id, last, isGroup)) + escSnippet(messageText(last), 46)
     : '<em class="conv-empty">No messages yet</em>';
   const tick = last && last.me ? `<span class="conv-tick${state.messageStatus[last.id] === "read" ? " read" : ""}" aria-hidden="true">${sicon("checkDouble")}</span>` : "";
-  return `<button type="button" class="conv-row ${active}${unread ? " has-unread" : ""}" data-select-chat="${c.id}">`
+  const check = chatSelectMode
+    ? `<span class="conv-check${selectedChats.has(c.id) ? " on" : ""}" aria-hidden="true">${selectedChats.has(c.id) ? sicon("check") : ""}</span>`
+    : "";
+  return `<button type="button" class="conv-row ${active}${unread ? " has-unread" : ""}${chatSelectMode ? " select-mode" : ""}${chatSelectMode && selectedChats.has(c.id) ? " selected" : ""}" ${chatSelectMode ? `data-toggle-select="${c.id}"` : `data-select-chat="${c.id}"`}>`
+    + check
     + convAvatarHtml(c, 49)
     + `<span class="conv-main">`
     + `<span class="conv-top"><span class="conv-name">${esc(c.name || "@" + c.username)}${muted ? ` <span class="mute-ico" title="Muted">${sicon("mute")}</span>` : ""}</span>`
     + `<span class="conv-time${unread ? " unread-time" : ""}">${last ? relTime(last.ts) : ""}</span></span>`
     + `<span class="conv-preview">${tick}${preview}</span></span>`
-    + (unread ? `<span class="conv-unread" title="${unread} unread message${unread === 1 ? "" : "s"}">${unread > 99 ? "99+" : unread}</span>` : "")
+    + (unread && !chatSelectMode ? `<span class="conv-unread" title="${unread} unread message${unread === 1 ? "" : "s"}">${unread > 99 ? "99+" : unread}</span>` : "")
     + `</button>`;
 }
 
@@ -5484,7 +5771,7 @@ function renderMessages(body) {
     ...allGroups().filter((g) => get("sf-joined", []).includes(g.id)),
     ...(state.friends || []).filter((f) => !isBlockedKey(f.id)),
     ...cloudConns.filter((c) => !(state.friends || []).some((f) => f.id === c.id)),
-  ];
+  ].filter((c) => !(state.deletedChats || {})[c.id] || (state.messages[c.id] || []).length);
   if (state.activeChat && (isBlockedKey(state.activeChat) || cloudBlocked.has(state.activeChat))) state.activeChat = null;
   const totalUnread = chats.reduce((sum, c) => sum + (state.activeChat === c.id ? 0 : unreadCount(c.id)), 0);
   const sorted = [...chats].sort((a, b) => {
@@ -5493,16 +5780,29 @@ function renderMessages(body) {
     const tb = (state.messages[b.id] || []).at(-1)?.ts || 0;
     return tb - ta;
   });
-  body.innerHTML = `<div class="wa-root${state.activeChat ? " has-chat" : ""}"><div class="wa-list">`
-    + `<div class="wa-list-head"><h2>Chats</h2>${signedIn() ? "" : `<span class="tag">local</span>`}</div>`
+  body.innerHTML = `<div class="wa-root${state.activeChat ? " has-chat" : ""}${chatSelectMode ? " selecting" : ""}"><div class="wa-list">`
+    + (chatSelectMode
+      ? `<div class="wa-list-head wa-select-head"><h2>Select chats</h2><div class="wa-select-actions"><button type="button" class="ghost" data-select-cancel>Cancel</button><button type="button" class="delete" data-select-delete${selectedChats.size ? "" : " disabled"}>Delete${selectedChats.size ? ` (${selectedChats.size})` : ""}</button></div></div>`
+      : `<div class="wa-list-head"><h2>Chats</h2>${signedIn() ? "" : `<span class="tag">local</span>`}</div>`)
     + messagesStoryStrip()
     + `<div class="wa-search"><span class="wa-search-ico">${sicon("search")}</span><input id="wa-chat-filter" type="search" placeholder="Search or start a new chat" aria-label="Search chats" autocomplete="off"></div>`
     + `<div class="wa-rows" id="wa-rows">${conversationRow({ id: SELF_CHAT_ID, name: "You (Message yourself)", emoji: avatarMarkup(resolvePhoto(state.profile.photo), (state.profile.name || "Y")[0].toUpperCase()) })}${sorted.map(conversationRow).join("") || ""}</div></div>`
-    + `<div class="chat wa-chat">${state.activeChat ? (groupSearch && groupSearch.id === state.activeChat ? groupSearchMarkup(state.activeChat) : chatMarkup(state.activeChat)) : waPlaceholderMarkup()}</div></div>`;
+    + `<div class="chat wa-chat">${!chatSelectMode && state.activeChat ? (groupSearch && groupSearch.id === state.activeChat ? groupSearchMarkup(state.activeChat) : chatMarkup(state.activeChat)) : waPlaceholderMarkup()}</div></div>`;
   paintMessagesBadge(totalUnread);
   // The story rings under the "Chats" heading only worked on the Status tab
   // (bindFriendStoryRings was never called here) — clicking them did nothing.
   bindFriendStoryRings(body);
+  $("[data-select-cancel]", body)?.addEventListener("click", exitChatSelectMode);
+  $("[data-select-delete]", body)?.addEventListener("click", deleteSelectedChats);
+  $$("[data-toggle-select]", body).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const id = b.dataset.toggleSelect;
+        if (selectedChats.has(id)) selectedChats.delete(id);
+        else selectedChats.add(id);
+        renderMessages(body);
+      }),
+  );
   $$("[data-select-chat]", body).forEach(
     (b) =>
       (b.onclick = () => {
@@ -5676,7 +5976,26 @@ function pollVotes(m) {
 function messageHtml(m) {
   const key = chatKey();
   let body = "";
-  if (m.kind === "voice" && m.audio) {
+  const inviteMeta = m.metadata?.invite;
+  const inviteMatch = !inviteMeta && typeof m.text === "string"
+    ? m.text.match(/^(Sprint invite|Study session invite|Challenge invite|Sprint room open|New challenge|Scheduled:)/)
+    : null;
+  const isInviteMsg = Boolean(inviteMeta || inviteMatch);
+  if (isInviteMsg && (m.kind == null || m.kind === "text")) {
+    const t = inviteMeta?.t
+      || (m.text.startsWith("Challenge") || m.text.startsWith("New challenge") ? "challenge"
+        : m.text.startsWith("Study session") || m.text.startsWith("Scheduled") ? "session" : "sprint");
+    const icon = t === "challenge" ? "trophy" : t === "session" ? "calendar" : "bolt";
+    const nav = t === "challenge" ? "challenges" : "sprints";
+    const title = inviteMeta?.title
+      || (m.text.match(/“([^”]+)”/) || [, "StudyFlow invite"])[1];
+    const sub = inviteMeta?.t === "challenge"
+      ? `${inviteMeta.target || 10} ${inviteMeta.unit || "sessions"} this week`
+      : inviteMeta?.t === "session" || (!inviteMeta && t === "session")
+        ? "Scheduled study session"
+        : "Focus sprint room";
+    body = `<div class="chat-invite-card" data-invite-open="${nav}"><span class="ci-ico">${sicon(icon)}</span><div class="ci-body"><strong>${esc(title)}</strong><small class="muted">${esc(sub)} · Open to respond</small></div><button type="button" class="primary" data-invite-nav="${nav}">Open</button></div>`;
+  } else if (m.kind === "voice" && m.audio) {
     const dur = Math.max(1, Math.round(m.dur || 0));
     const label = m.me ? "You" : "Voice message";
     body = `<div class="vmsg" data-vmsg data-vid="${esc(m.id)}" data-dur="${dur}"><button type="button" class="vmsg-play" data-vmsg-play title="Play voice message" aria-label="Play voice message">${sicon("play")}${sicon("pause")}</button><div class="vmsg-main"><div class="vmsg-wave" data-vmsg-wave aria-hidden="true">${vmsgWave(m.id)}</div><div class="vmsg-meta"><span class="vmsg-label">${esc(label)}</span><span class="vmsg-time"><span data-vmsg-now>0:00</span> / ${fmtClock(dur)}</span></div></div><a class="vmsg-dl" href="${m.audio}" download="voice-note.webm" title="Save voice note" aria-label="Save voice note">${sicon("download")}</a></div>`;
@@ -5728,7 +6047,7 @@ function messageHtml(m) {
     : "";
   const editedTag = m.edited ? ' · <span class="edited-tag">edited</span>' : "";
   const canEdit = m.me && (m.kind == null || m.kind === "text") && typeof m.text === "string";
-  return `${quote}${sysIcon}${body}<div class="bubble-tools"><small class="message-meta">${new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} ${status}${editedTag}</small><span class="bubble-actions"><button type="button" data-react-open="${m.id}" title="React">${sicon("smile")}</button><button type="button" data-reply-to="${m.id}" title="Reply">${sicon("reply")}</button><button type="button" data-pin="${m.id}" title="Pin message">${sicon("pin")}</button>${canEdit ? `<button type="button" data-edit-msg="${m.id}" title="Edit message" aria-label="Edit message">${sicon("memo")}</button>` : ""}${m.me ? `<button type="button" data-del-msg="${m.id}" title="Delete message">${sicon("trash")}</button>` : ""}</span></div>${chips ? `<div class="react-row">${chips}</div>` : ""}<div class="react-picker" data-picker="${m.id}" hidden>${REACT_EMOJI.map((e) => `<button type="button" data-react="${m.id}:${e}" title="${REACT_LABELS[e]}" aria-label="React ${REACT_LABELS[e]}">${REACT_LABELS[e]}</button>`).join("")}</div>`;
+  return `${quote}${sysIcon}${body}<div class="bubble-tools"><small class="message-meta">${new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} ${status}${editedTag}</small><span class="bubble-actions"><button type="button" data-react-open="${m.id}" title="React">${sicon("smile")}</button><button type="button" data-reply-to="${m.id}" title="Reply">${sicon("reply")}</button><button type="button" data-pin="${m.id}" title="Pin message">${sicon("pin")}</button><button type="button" data-copy-msg="${m.id}" title="Copy message" aria-label="Copy message">${sicon("clip")}</button>${canEdit ? `<button type="button" data-edit-msg="${m.id}" title="Edit message" aria-label="Edit message">${sicon("memo")}</button>` : ""}${m.me ? `<button type="button" data-del-msg="${m.id}" title="Delete message">${sicon("trash")}</button>` : ""}</span></div>${chips ? `<div class="react-row">${chips}</div>` : ""}<div class="react-picker" data-picker="${m.id}" hidden>${REACT_EMOJI.map((e) => `<button type="button" data-react="${m.id}:${e}" title="${REACT_LABELS[e]}" aria-label="React ${REACT_LABELS[e]}">${REACT_LABELS[e]}</button>`).join("")}</div>`;
 }
 
 // ---------- group chat options (three-dot menu + utilities) ----------
@@ -5843,6 +6162,7 @@ function groupMenuMarkup(id) {
     + `${item("info", "book", "Group info", "About this group")}`
     + `<hr class="gsep">`
     + `${canManage ? item("settings", "gear", "Group settings", "Name, description, topics") : ""}`
+    + `${item("selectchats", "trash", "Delete chats", "Multi-select chats to remove")}`
     + `${item("clear", "trash", "Clear local history", "Removes messages on this device")}`
     + `${owner ? "" : item("report", "flag", "Report group", "Alert moderation")}`
     + `${owner ? item("disband", "trash", "Delete group", "Remove this group") : item("leave", "run", "Leave group", "Stop receiving messages")}`;
@@ -5890,6 +6210,7 @@ function dmMenuMarkup(id) {
     + `${muted ? item("unmute", "volume", "Unmute notifications", esc(muteLabel(id))) : item("mute", "mute", "Mute notifications", "Silence this chat")}`
     + `${social}`
     + `<hr class="gsep">`
+    + `${item("selectchats", "trash", "Delete chats", "Multi-select chats to remove")}`
     + `${item("clear", "trash", "Clear local history", "Removes messages on this device")}`
     + `${self ? "" : item("report", "flag", "Report", "Alert moderation")}`
     + `${self || !isFriendChat ? "" : item("block", "lock", "Block", "Stop all contact")}`;
@@ -6352,6 +6673,23 @@ function bindChat(root, id) {
         askDeleteMessage(cid, del.dataset.delMsg, root);
         return;
       }
+      const copy = e.target.closest("[data-copy-msg]");
+      if (copy && root.contains(copy)) {
+        e.stopPropagation();
+        const msg = (state.messages[cid] || []).find((m) => m.id === copy.dataset.copyMsg);
+        if (!msg) return;
+        const text = messageText(msg);
+        (navigator.clipboard?.writeText(text) || Promise.reject())
+          .then(() => toast("Message copied"))
+          .catch(() => toast("Couldn't copy — select the text manually"));
+        return;
+      }
+      const inviteNav = e.target.closest("[data-invite-nav]");
+      if (inviteNav && root.contains(inviteNav)) {
+        e.stopPropagation();
+        openInviteDestination(inviteNav.dataset.inviteNav);
+        return;
+      }
       const edit = e.target.closest("[data-edit-msg]");
       if (edit && root.contains(edit)) {
         e.stopPropagation();
@@ -6572,6 +6910,7 @@ function dmAction(act, id, root) {
   if (act === "media") return openGroupMedia(id);
   if (act === "mute") return openDmMuteModal(id, name);
   if (act === "unmute") return clearChatMute(id);
+  if (act === "selectchats") return startChatSelectMode(id);
   if (act === "contact") return isSelfChat(id) ? notify("This is your own space — notes to yourself live here.") : openContactCard(id, info);
   if (act === "clear") {
     return confirmBox(`Clear ${isSelfChat(id) ? "your notes" : name} history?`, "Messages on this device will be removed. New messages still arrive.", () => {
@@ -7202,6 +7541,7 @@ function groupAction(act, id, root) {
   if (act === "search") openGroupSearch(id);
   else if (act === "mute") openMuteModal(id);
   else if (act === "unmute") clearChatMute(id);
+  else if (act === "selectchats") startChatSelectMode(id);
   else if (act === "media") openGroupMedia(id);
   else if (act === "members") openGroupMembers(id);
   else if (act === "info") openGroupInfo(id);
@@ -7808,6 +8148,7 @@ function mergeCloudRows(id, rows, names, me) {
       kind: r.kind && r.kind !== "text" ? r.kind : undefined,
       ts: r.created_at ? new Date(r.created_at).getTime() : Date.now(),
       edited: Boolean(r.edited_at),
+      metadata: r.metadata && Object.keys(r.metadata).length ? r.metadata : undefined,
     });
     if (r.sender_id === me) state.messageStatus[r.id] = "delivered";
     added++;
@@ -8059,6 +8400,13 @@ function subscribeToChat(id) {
       // realtime), just paint — never append a twin.
       const dupe = (state.messages[id] || []).some((m) => m.id === message.id || m.cloudId === message.id);
       if (dupe) return;
+      // A previously bulk-deleted chat reopens itself when a new message lands.
+      if (state.deletedChats?.[id]) {
+        const d = { ...state.deletedChats };
+        delete d[id];
+        state.deletedChats = d;
+        persist();
+      }
       // Structured invite DMs (sprints / sessions) route themselves even when
       // this conversation is closed — the inbox is the destination, not the
       // chat window.
@@ -8071,6 +8419,7 @@ function subscribeToChat(id) {
         ts: message.created_at ? new Date(message.created_at).getTime() : Date.now(),
         me: false,
         sender_id: message.sender_id,
+        metadata: message.metadata && Object.keys(message.metadata).length ? message.metadata : undefined,
       };
       const attach = async () => {
         // Sender name resolution happens after the bubble is on screen —
