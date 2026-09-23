@@ -209,7 +209,7 @@ const state = {
   decks: get("sf-decks", []),
   cornellNotes: get("sf-cornell", []),
   sessionTech: null,
-  equipped: get("sf-equipped", { theme: null, avatar: null, badge: null }),
+  equipped: get("sf-equipped", { theme: null, avatar: null, badges: [] }),
   boosts: get("sf-boosts", { shields: 0, multiplierUntil: 0, doubleArmed: false }),
   checkin: get("sf-checkin", { last: "" }),
   boxes: get("sf-boxes", []),
@@ -372,7 +372,7 @@ function persistNow() {
   save("sf-mindmaps", state.mindmaps || []);
   save("sf-decks", state.decks || []);
   save("sf-cornell", state.cornellNotes || []);
-  save("sf-equipped", state.equipped || { theme: null, avatar: null, badge: null });
+  save("sf-equipped", state.equipped || { theme: null, avatar: null, badges: [] });
   save("sf-boosts", state.boosts || { shields: 0, multiplierUntil: 0, doubleArmed: false });
   save("sf-checkin", state.checkin || { last: "" });
   save("sf-boxes", state.boxes || []);
@@ -589,6 +589,9 @@ function cloudSnapshot() {
     boxes: state.boxes,
     freeBox: state.freeBox,
     night: state.night,
+    // Equipped loadout (theme/avatar + showcased badge ids) must follow the
+    // account — without this the badge shelf resets on every sign-out.
+    equipped: state.equipped,
   };
 }
 
@@ -857,6 +860,33 @@ async function pullCloudProfile() {
   return true;
 }
 
+// Showcase badges live in equipped.badges. A remote row that predates the
+// multi-badge shape (or was written without them) must never wipe a local
+// showcase; when the cloud HAS a badges array (even empty), it is truth.
+function applyRemoteEquipped(rem) {
+  const local =
+    state.equipped && typeof state.equipped === "object" && !Array.isArray(state.equipped)
+      ? state.equipped
+      : {};
+  const r = rem && typeof rem === "object" && !Array.isArray(rem) ? rem : {};
+  const badgeList = (src) => {
+    if (!src || typeof src !== "object") return null;
+    if (Array.isArray(src.badges))
+      return [...new Set(src.badges.filter((id) => typeof id === "string" && id))];
+    if (typeof src.badge === "string" && src.badge) return [src.badge];
+    return null;
+  };
+  const remoteBadges = badgeList(r);
+  const localBadges = badgeList(local) || [];
+  const badges = remoteBadges !== null ? remoteBadges : localBadges;
+  const next = { ...local, ...r, badges };
+  // Retire the legacy single-badge key once the array is the source of truth.
+  if (Array.isArray(r.badges) || badges.length) delete next.badge;
+  else if (typeof r.badge === "string") next.badge = r.badge;
+  state.equipped = next;
+  save("sf-equipped", next);
+}
+
 // Per-key cloud→local merge. Cloud still wins whenever it has a real value,
 // but an empty/zero remote field never wipes a non-empty local one — a guest
 // with tasks/coins who signs into a fresh cloud row keeps their work, then
@@ -870,6 +900,10 @@ function applyRemoteState(remote) {
     v === "";
   for (const [k, v] of Object.entries(remote)) {
     if (k === "streak") continue; // applyRemoteStreak owns it
+    if (k === "equipped") {
+      applyRemoteEquipped(v);
+      continue;
+    }
     if (isEmptyish(v) && !isEmptyish(state[k])) continue;
     state[k] = v;
   }
@@ -910,6 +944,7 @@ async function hydrateCloudState(user) {
     save("sf-freebox", state.freeBox);
     save("sf-techcheck", state.techCheck);
     save("sf-night", state.night);
+    save("sf-equipped", state.equipped || { theme: null, avatar: null, badges: [] });
     sanitizeState();
     await pullCloudProfile();
     try {
@@ -987,6 +1022,7 @@ async function hydrateCloudState(user) {
     save("sf-freebox", state.freeBox);
     save("sf-techcheck", state.techCheck);
     save("sf-night", state.night);
+    save("sf-equipped", state.equipped || { theme: null, avatar: null, badges: [] });
     sanitizeState();
     if (!state.running) shell();
   });
@@ -1002,7 +1038,7 @@ const STATE_OBJECT_DEFAULTS = {
   techStats: {}, techTime: {}, storeQty: {}, soundMix: {}, blocks: {}, mutedChats: {},
   bookProgress: {}, bookLocal: {},
   bookStats: { opened: {}, completed: [], seconds: 0, pages: 0 },
-  equipped: { theme: null, avatar: null, badge: null },
+  equipped: { theme: null, avatar: null, badges: [] },
   boosts: { shields: 0, multiplierUntil: 0, doubleArmed: false },
   checkin: { last: "" },
   freeBox: { lastClaimDay: "", history: [], pending: null },

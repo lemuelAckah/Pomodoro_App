@@ -3,6 +3,7 @@ import {
   state, $, $$, uid, get, save, esc, sicon, persist, pushUserSettings, notify, confirmBox, viewHead, requireAuth,
   spendCoins, addCoins, addNotification, dayKey, applyEquippedTheme, celebrate, confettiBurst,
   refreshServerTime, serverDayKey, serverNow, paintBackendPill, registerBackendPillResolver, backendPillMarkup,
+  scheduleCloudSync,
 } from "./core.js";
 import { backendConfigured, searchUsers, sendCloudMessage, sendGiftNotification, loadInventory, loadDailyDeals } from "./services/backend.js";
 import { SOUND_EQUIP, startLayer, stopLayer, playChime } from "./audio.js";
@@ -490,6 +491,8 @@ function ownedBadges() {
 }
 function toggleShowcaseBadge(item) {
   if (!item || item.category !== "Badges") return "not-badge";
+  if (!state.equipped || typeof state.equipped !== "object" || Array.isArray(state.equipped))
+    state.equipped = { theme: null, avatar: null, badges: [] };
   const ids = showcasedBadgeIds();
   if (ids.includes(item.id)) {
     state.equipped.badges = ids.filter((x) => x !== item.id);
@@ -498,6 +501,10 @@ function toggleShowcaseBadge(item) {
   }
   // Legacy single-badge key is retired on first toggle.
   if ("badge" in (state.equipped || {})) delete state.equipped.badge;
+  // Local persist + debounced cloud snapshot (equipped is in cloudSnapshot)
+  // so the showcase survives sign-out and shows up on a fresh sign-in.
+  persist();
+  if (state.user) scheduleCloudSync();
   return ids.includes(item.id) ? "removed" : "added";
 }
 
