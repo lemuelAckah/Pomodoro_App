@@ -376,15 +376,18 @@ let activePeer;
 const callPeers = new Map(); // peerId -> { peer, close }
 const callRemotes = new Map(); // peerId -> MediaStream
 let callIsInitiator = false; // true = we offer; false = we wait for offer
+let callInitiatorId = null; // user id that started this call (host)
 let incomingCallSub = null;
 let pendingIncomingCall = null; // ringing call_history row awaiting our Accept
 let outgoingRingT = 0;
+let outgoingCancelT = 0; // caller auto-cancel if nobody answers
 let meshWatchT = 0; // periodic mid-call peer discovery (cap 6)
 let connectInFlight = false;
 let forceConnectPending = false; // Accept raced a live connect — re-offer after
 let ringChimeT = 0; // repeating ring tone while the global ring is up
 let ringTimeoutT = 0; // auto-miss if nobody answers
 let ringPollT = 0; // realtime-failure backup poll for ringing rows
+let remoteLostT = 0; // grace before auto-ending a dead 1:1 peer
 // Terminal + transition keys already notified for a call id — stop the bell
 // from ringing twice for the same miss/decline/end on one device.
 const callNotifKeys = new Set();
@@ -480,13 +483,9 @@ function restoreSectionAfterCall() {
   const snap = callReturnTo;
   callReturnTo = null;
   if (!snap) return;
-  // Minimized + user navigated: leave them where they are. Full-screen end
-  // (or far-side hang-up while the room was open) returns to the snapshot.
-  if (state.callMinimized && snap.tab === state.tab && snap.subtab === state.subtab) return;
-  const wasFullRoom = !state.callMinimized;
-  if (!wasFullRoom && state.callMinimized) return;
+  // Always put this device back where it was before the room opened.
+  // Each side keeps its own snapshot — never force both users to one screen.
   if (state.tab === snap.tab && state.subtab === snap.subtab && state.activeChat === snap.activeChat) return;
-  if (!wasFullRoom) return;
   state.tab = snap.tab || state.tab;
   state.subtab = snap.subtab || state.subtab;
   state.activeChat = snap.activeChat ?? null;
@@ -510,6 +509,34 @@ async function refreshCallParticipantsUi() {
   }
 }
 
+// Realtime can drop the far side's end/decline. Poll the row so nobody
+// stays stuck on a call that already finished on the other device.
+const CALL_TERMINAL = new Set(["ended", "declined", "missed", "cancelled", "failed"]);
+async function checkCallRemoteEnded() {
+  if (!activeCallHistoryId || !state.call) return;
+  try {
+    const { data } = await getCallById(activeCallHistoryId);
+    if (!data?.status || !CALL_TERMINAL.has(data.status)) return;
+    if (!state.call || activeCallHistoryId !== data.id) return;
+    const who = state.call.name || "Your partner";
+    if (data.status === "declined") {
+      notifyCall("Call declined", `${who} declined the call`, "phone", `${data.id}:declined-poll`);
+      toast("Call declined");
+    } else if (data.status === "missed") {
+      notifyCall("Missed call", `${who} did not answer`, "phone", `${data.id}:missed-poll`);
+      toast("Missed call");
+    } else if (data.status === "cancelled") {
+      notifyCall("Call cancelled", `${who} ended the ring`, "phone", `${data.id}:cancelled-poll`);
+      toast("Call cancelled");
+    } else {
+      toast("Call ended");
+    }
+    teardownCall(false);
+  } catch {
+    /* next tick */
+  }
+}
+
 function startCallParticipantPoll() {
   if (callParticipantPollT) return;
   callParticipantPollT = setInterval(() => {
@@ -517,6 +544,9 @@ function startCallParticipantPoll() {
       stopCallParticipantPoll();
       return;
     }
+    // Backup hang-up path: if realtime missed the far side's "ended"
+    // UPDATE, this poll still tears the local call down within ~5s.
+    checkCallRemoteEnded().catch(() => {});
     refreshCallParticipantsUi().catch(() => {});
   }, 5000);
 }
@@ -690,30 +720,46 @@ async function ensureCallPeer(peerId, stream) {
           setCallStatus("connected", { force: true });
           if (!state.callStartedAt) state.callStartedAt = Date.now();
           startCallClock();
-          toast("A study partner joined the call");
-          logCallEvent(callChatIdFor(state.call), `${callModeTitle()} connected`, "phone", true, `${activeCallHistoryId || state.call?.id}:connected`);
         }
         renderCall();
         updateOngoingCallPill();
       },
       onStateChange: (status) => {
         if (status === "connected") {
+          if (remoteLostT) {
+            clearTimeout(remoteLostT);
+            remoteLostT = 0;
+          }
           if (state.callStatus !== "connected") {
             setCallStatus("connected", { force: true });
             if (!state.callStartedAt) state.callStartedAt = Date.now();
             startCallClock();
-            logCallEvent(callChatIdFor(state.call), `${callModeTitle()} connected`, "phone", true, `${activeCallHistoryId || state.call?.id}:connected`);
           }
           startMeshWatch();
-        } else if (status === "failed" || status === "disconnected") {
-          callRemotes.delete(peerId);
-          if (!callRemotes.size && state.callStatus === "connected") {
-            setCallStatus("connecting", { force: true });
-            toast("Call connection lost. Press Connect to retry.");
-          }
+          renderCall();
+          updateOngoingCallPill();
+          return;
         }
-        renderCall();
-        updateOngoingCallPill();
+        if (status === "failed" || status === "disconnected") {
+          callRemotes.delete(peerId);
+          // 1:1: if the only peer dies, end the call for BOTH sides —
+          // do not leave anyone stuck on a "connecting" screen.
+          const isDm = state.call?.kind === "dm" || !(state.call?.extras || []).length;
+          if (!callRemotes.size && isDm && state.call) {
+            if (remoteLostT) clearTimeout(remoteLostT);
+            remoteLostT = setTimeout(() => {
+              remoteLostT = 0;
+              if (!state.call || callRemotes.size) return;
+              toast(status === "failed" ? "Call connection failed" : "Call connection lost");
+              teardownCall(true);
+            }, status === "failed" ? 2000 : 8000);
+          } else if (!callRemotes.size && state.callStatus === "connected") {
+            setCallStatus("connecting", { force: true });
+            toast("A partner dropped — reconnecting…");
+          }
+          renderCall();
+          updateOngoingCallPill();
+        }
       },
     });
     callPeers.set(peerId, handle);
@@ -756,17 +802,13 @@ function ensureIncomingCallSubscription() {
     if (backendConfigured && state.user) startRingPoll();
     return;
   }
-  // Idempotent: tear any prior channel before reopening so a double boot
-  // never leaves two rings racing for the same call row.
-  if (incomingCallSub) {
-    try { incomingCallSub.unsubscribe(); } catch { /* ignore */ }
-    incomingCallSub = null;
-  }
+  // Idempotent: one channel per signed-in user for the whole session.
   incomingCallSub = subscribeToIncomingCalls(state.user.id, {
     onRinging: async (row) => {
       if (!row?.id || pendingIncomingCall?.id === row.id) return;
       if (row.initiator_id && row.initiator_id === state.user.id) return;
-      if (state.call && state.callStatus !== "idle") return; // already in a call
+      // Already in a call — never stack a second ring window.
+      if (state.call && state.callStatus !== "idle") return;
       // Mid-call participant inserts only carry call_id — hydrate the full
       // history row so Accept has room_id / initiator / group.
       if (row._fromParticipant || !row.room_id) {
@@ -778,6 +820,7 @@ function ensureIncomingCallSubscription() {
         }
         if (!row?.room_id || !row?.initiator_id) return;
         if (row.initiator_id === state.user.id) return;
+        if (state.call && state.callStatus !== "idle") return;
       }
       showIncomingCall(row);
     },
@@ -785,17 +828,18 @@ function ensureIncomingCallSubscription() {
       if (!row?.id) return;
       if (activeCallHistoryId && row.id !== activeCallHistoryId) return;
       if (row.initiator_id !== state.user?.id || !state.call) return;
+      clearTimeout(outgoingCancelT);
+      outgoingCancelT = 0;
       // They accepted — we offer (or re-offer if our early timeout offer
       // went out before their signaling channel was up).
       callIsInitiator = true;
-      const peerName = state.call.name || "Your partner";
-      logCallEvent(callChatIdFor(state.call), `${peerName} answered`, "phone", false, `${row.id}:accepted`);
       setCallStatus("accepted", { force: true });
       if (state.callStatus === "connected" && activeCallStream) {
         meshMissingPeers().catch(() => {});
       } else {
         connectCall({ force: true }).catch(() => {});
       }
+      renderCall();
     },
     onCancelled: (row) => {
       if (!row?.id) return;
@@ -803,32 +847,41 @@ function ensureIncomingCallSubscription() {
         || cloudFriends.find((f) => f.id === row.recipient_id)
         || null;
       const who = friend?.name || friend?.handle || "Study partner";
-      const chatId = row.group_id || row.initiator_id || row.recipient_id;
       const callId = row.id;
-      const declined = row.status === "declined" || row.status === "cancelled";
-      if (pendingIncomingCall?.id === row.id) {
+      const status = row.status;
+      // 1) Callee still seeing the ring overlay for THIS call.
+      if (pendingIncomingCall?.id === callId) {
         pendingIncomingCall = null;
         dismissIncomingRing();
-        if (declined) {
+        if (status === "declined" || status === "cancelled") {
           notifyCall("Call cancelled", `${who} ended the ring before you answered`, "phone", `${callId}:cancelled`);
-          logCallEvent(chatId, "Call cancelled", "phone", false, `${callId}:cancelled`);
+          toast("Call cancelled");
         } else {
           notifyCall("Missed call", `${who} ended the ring before you answered`, "phone", `${callId}:missed`);
-          logCallEvent(chatId, "Missed call", "phone", false, `${callId}:missed`);
+          toast("Missed call");
         }
-        toast(declined ? "Call cancelled" : "Missed call");
-      } else if (row.initiator_id === state.user?.id) {
-        // Callee declined / timed out — we are the initiator still waiting.
-        const verb = row.status === "missed" ? "Missed call" : "Call declined";
-        notifyCall(verb, `${who} did not answer`, "phone", `${callId}:${row.status || "declined"}`);
-        if (state.call && activeCallHistoryId === row.id) teardownCall(false);
-        else {
-          logCallEvent(chatId, row.status === "missed" ? "Missed call — no answer" : "Call declined — no answer", "phone", true, `${callId}:${row.status || "declined"}`);
-          toast(row.status === "missed" ? "Missed call" : "Call declined");
+        return;
+      }
+      // 2) Either side already in this call (connected/connecting/ringing).
+      //    Far side hung up or declined → local call ends completely.
+      if (state.call && activeCallHistoryId === callId) {
+        if (status === "declined") {
+          notifyCall("Call declined", `${who} declined the call`, "phone", `${callId}:declined`);
+          toast("Call declined");
+        } else if (status === "missed" || status === "cancelled") {
+          notifyCall(status === "missed" ? "Missed call" : "Call cancelled", `${who} did not answer`, "phone", `${callId}:${status}`);
+          toast(status === "missed" ? "Missed call" : "Call cancelled");
+        } else {
+          toast("Call ended");
         }
-      } else if (activeCallHistoryId && row.id === activeCallHistoryId && state.call) {
-        // Far side hung up mid-call — still log the end on this side and
-        // return each user to their pre-call section.
+        teardownCall(false);
+        return;
+      }
+      // 3) Initiator still dialing, no local call object race — clean up.
+      if (row.initiator_id === state.user?.id && state.call) {
+        const verb = status === "missed" ? "Missed call" : status === "declined" ? "Call declined" : "Call ended";
+        notifyCall(verb, status === "ended" ? `${who} ended the call` : `${who} did not answer`, "phone", `${callId}:${status || "end"}`);
+        toast(verb);
         teardownCall(false);
       }
     },
@@ -837,10 +890,23 @@ function ensureIncomingCallSubscription() {
 }
 
 function teardownCall(notifyEnd = true) {
+  // Idempotent: a second hang-up (realtime echo + poll) must not double-notify.
+  if (!state.call && !activeCallHistoryId && !pendingIncomingCall) {
+    dismissIncomingRing();
+    return;
+  }
   clearTimeout(outgoingRingT);
+  clearTimeout(outgoingCancelT);
+  outgoingRingT = 0;
+  outgoingCancelT = 0;
+  if (remoteLostT) {
+    clearTimeout(remoteLostT);
+    remoteLostT = 0;
+  }
   stopMeshWatch();
   stopCallParticipantPoll();
   dismissIncomingRing();
+  pendingIncomingCall = null;
   const callMeta = state.call
     ? {
         name: state.call.name || "Study partner",
@@ -849,8 +915,10 @@ function teardownCall(notifyEnd = true) {
         startedAt: state.callStartedAt || 0,
         voice: Boolean(state.call.voice),
         callId: activeCallHistoryId,
+        kind: state.call.kind,
       }
     : null;
+  const keptInitiatorId = callInitiatorId;
   callPeers.forEach((p) => {
     try { p.close(); } catch { /* ignore */ }
   });
@@ -868,20 +936,30 @@ function teardownCall(notifyEnd = true) {
   state.callStatus = "idle";
   state.callStartedAt = 0;
   state.callMinimized = false;
+  state.callMuted = false;
+  state.callCameraOff = false;
+  callInitiatorId = null;
   stopCallClock();
   $("#call-window")?.remove();
   updateOngoingCallPill();
   if (activeCallHistoryId) {
-    const endedStatus = callMeta?.status === "ringing" || callMeta?.status === "calling"
-      ? (notifyEnd ? "cancelled" : "missed")
-      : "ended";
-    updateCall(activeCallHistoryId, {
-      status: endedStatus,
-      ended_at: new Date().toISOString(),
-    }).catch(() => {});
+    const callId = activeCallHistoryId;
+    // 1:1 always ends the shared row. In a group, only the host ends it
+    // for everyone — a guest leaving just marks their own seat left.
+    const isGroupCall = callMeta?.kind === "group";
+    const endWholeCall = !isGroupCall || !keptInitiatorId || keptInitiatorId === (state.user?.id || "");
+    if (endWholeCall) {
+      const endedStatus = callMeta?.status === "ringing" || callMeta?.status === "calling"
+        ? (notifyEnd ? "cancelled" : "missed")
+        : "ended";
+      updateCall(callId, {
+        status: endedStatus,
+        ended_at: new Date().toISOString(),
+      }).catch(() => {});
+    }
     if (state.user)
       upsertCallParticipant({
-        call_id: activeCallHistoryId,
+        call_id: callId,
         user_id: state.user.id,
         status: "left",
         left_at: new Date().toISOString(),
@@ -891,31 +969,20 @@ function teardownCall(notifyEnd = true) {
   if (callMeta) {
     const wasLive = callMeta.status === "connected";
     const dur = callMeta.startedAt ? callDurationLabel(Date.now() - callMeta.startedAt) : "";
-    const mine = Boolean(notifyEnd);
     const mode = callMeta.voice ? "Voice call" : "Video call";
-    const ek = (suffix) => (callMeta.callId ? `${callMeta.callId}:${suffix}` : undefined);
-    if (wasLive && dur) {
-      logCallEvent(callMeta.chatId, `${mode} ended · ${dur}`, "phone", mine, ek("ended"));
-      if (notifyEnd) {
-        notifyCall(`${mode} ended`, `with ${callMeta.name} · ${dur}`, "phone", ek("ended-note"));
-        toast("Call ended — great studying together");
-      }
-    } else if (callMeta.status === "connecting" || callMeta.status === "accepted" || callMeta.status === "ringing" || callMeta.status === "calling") {
-      logCallEvent(callMeta.chatId, "Call ended before connecting", "phone", mine, ek("pre-end"));
-      if (notifyEnd) {
-        notifyCall("Call ended", `with ${callMeta.name} — no connection`, "phone", ek("pre-end-note"));
+    if (notifyEnd) {
+      if (wasLive && dur) {
+        notifyCall(`${mode} ended`, `with ${callMeta.name} · ${dur}`, "phone", callMeta.callId ? `${callMeta.callId}:ended-note` : undefined);
+        toast("Call ended");
+      } else if (callMeta.status === "ringing" || callMeta.status === "calling") {
+        notifyCall("Call ended", `with ${callMeta.name}`, "phone", callMeta.callId ? `${callMeta.callId}:cancel-note` : undefined);
         toast("Call ended");
       } else {
-        toast("The other side ended the call");
-      }
-    } else {
-      logCallEvent(callMeta.chatId, `${mode} ended`, "phone", mine, ek("ended"));
-      if (notifyEnd) {
-        notifyCall(`${mode} ended`, `with ${callMeta.name}`, "phone", ek("ended-note"));
-        toast("Call ended — great studying together");
+        notifyCall(`${mode} ended`, `with ${callMeta.name}`, "phone", callMeta.callId ? `${callMeta.callId}:ended-note` : undefined);
+        toast("Call ended");
       }
     }
-    // Each side returns to the section they were in before the room opened.
+    // Each side returns to the section it was in before the room opened.
     restoreSectionAfterCall();
   }
 }
@@ -924,12 +991,18 @@ function teardownCall(notifyEnd = true) {
 // status viewer (400), focus view, books, tour, audio sheets and the old
 // modal stack (50) — the callee sees it in ANY section, not only beside chat.
 function showIncomingCall(row) {
-  if ($("#incoming-call-ring") || pendingIncomingCall?.id === row?.id) return;
+  if (!row?.id) return;
+  // Never stack rings: same call is already up, or we are already in one.
+  if (pendingIncomingCall?.id === row.id || $("#incoming-call-ring")) return;
+  if (state.call && state.callStatus !== "idle") return;
+  if (pendingIncomingCall && pendingIncomingCall.id !== row.id) {
+    dismissIncomingRing();
+    pendingIncomingCall = null;
+  }
   pendingIncomingCall = row;
   const friend = cloudFriends.find((f) => f.id === row.initiator_id) || null;
   const name = friend?.name || friend?.handle || "Someone";
   const handle = friend?.handle || "";
-  const chatId = row.group_id || row.initiator_id;
   const isVoice = row.call_type === "voice" || row.metadata?.callType === "voice";
   const modeTitle = isVoice ? "Incoming voice call" : "Incoming video call";
   const ring = document.createElement("div");
@@ -955,7 +1028,6 @@ function showIncomingCall(row) {
   document.body.append(ring);
   startRingChime();
   notifyCall(modeTitle, `${name} is calling you now`, "phone", `${row.id}:ring`);
-  logCallEvent(chatId, `${modeTitle} from ${name}`, "phone", false, `${row.id}:ring`);
   toast(`${name} is calling`);
   if (ringTimeoutT) clearTimeout(ringTimeoutT);
   ringTimeoutT = setTimeout(async () => {
@@ -970,9 +1042,9 @@ function showIncomingCall(row) {
       left_at: new Date().toISOString(),
     }).catch(() => {});
     notifyCall("Missed call", `${name} rang but nobody answered`, "phone", `${row.id}:missed`);
-    logCallEvent(chatId, "Missed call (timed out)", "phone", false, `${row.id}:missed`);
   }, 45000);
   ring.querySelector("[data-ic-decline]").onclick = async () => {
+    if (pendingIncomingCall?.id !== row.id) return;
     pendingIncomingCall = null;
     dismissIncomingRing();
     await updateCall(row.id, { status: "declined", ended_at: new Date().toISOString() }).catch(() => {});
@@ -983,12 +1055,12 @@ function showIncomingCall(row) {
       left_at: new Date().toISOString(),
     }).catch(() => {});
     notifyCall("Call declined", `You declined ${name}`, "phone", `${row.id}:declined`);
-    logCallEvent(chatId, `${isVoice ? "Voice" : "Video"} call declined`, "phone", true, `${row.id}:declined`);
+    toast("Call declined");
   };
   ring.querySelector("[data-ic-accept]").onclick = async () => {
+    if (pendingIncomingCall?.id !== row.id) return;
     pendingIncomingCall = null;
     dismissIncomingRing();
-    logCallEvent(chatId, `${isVoice ? "Voice" : "Video"} call accepted`, "phone", true, `${row.id}:accepted`);
     await acceptIncomingCall(row);
   };
 }
@@ -1004,6 +1076,7 @@ async function acceptIncomingCall(row) {
     peerId: row.initiator_id,
     kind: row.group_id ? "group" : "dm",
     name: friend?.name || friend?.handle || "Study partner",
+    photo: resolvePhoto(friend?.photo) || friendPhotoUrl(row.initiator_id) || "",
     emoji: "◉",
     color: "#47765a",
     extras: [],
@@ -1014,6 +1087,7 @@ async function acceptIncomingCall(row) {
   setCallStatus("accepted", { force: true });
   activeCallHistoryId = row.id;
   callIsInitiator = false; // callee waits for the offer
+  callInitiatorId = row.initiator_id || null;
   renderCall();
   updateOngoingCallPill();
   startCallParticipantPoll();
@@ -1044,30 +1118,19 @@ async function startOutgoingCall(chatId, opts = {}) {
   const roomId = isGroup ? chatId : dmCallRoomId(state.user.id, chatId);
   const peer = peerId ? (cloudFriends.find((f) => f.id === peerId) || null) : null;
   rememberSectionBeforeCall();
+  const peerPhoto = peerId ? (resolvePhoto(peer?.photo) || friendPhotoUrl(peerId) || "") : "";
   state.call = isGroup
     ? { id: roomId, kind: "group", name: group?.name || "Group call", emoji: group?.emoji || "◉", color: group?.color || "#47765a", extras: [], voice, callType: voice ? "voice" : "video" }
-    : { id: roomId, peerId, kind: "dm", name: peer?.name || peer?.handle || "Study partner", emoji: "◉", color: "#47765a", extras: [], voice, callType: voice ? "voice" : "video" };
+    : { id: roomId, peerId, kind: "dm", name: peer?.name || peer?.handle || "Study partner", photo: peerPhoto, emoji: "◉", color: "#47765a", extras: [], voice, callType: voice ? "voice" : "video" };
   state.callMinimized = false;
   setCallStatus("ringing", { force: true });
   callIsInitiator = true;
+  callInitiatorId = state.user?.id || null;
   activeCallHistoryId = null;
   callParticipantStates = new Map();
   renderCall();
   updateOngoingCallPill();
   startCallParticipantPoll();
-  const partnerLabel = isGroup
-    ? group?.name || "your group"
-    : peer?.name || peer?.handle || "your partner";
-  const mode = voice ? "Voice" : "Video";
-  logCallEvent(
-    chatId,
-    isGroup
-      ? `Calling the group “${partnerLabel}” (${mode.toLowerCase()})…`
-      : `Calling ${partnerLabel} (${mode.toLowerCase()})…`,
-    "phone",
-    true,
-    `out:${roomId}:${Date.now()}`,
-  );
   if (backendConfigured && state.user && navigator.onLine !== false) {
     try {
       const result = await recordCall({
@@ -1080,6 +1143,7 @@ async function startOutgoingCall(chatId, opts = {}) {
         started_at: new Date().toISOString(),
         metadata: { callType: voice ? "voice" : "video" },
       });
+      if (result.error) throw result.error;
       activeCallHistoryId = result.data?.id || null;
       if (activeCallHistoryId) {
         await upsertCallParticipant({
@@ -1112,6 +1176,14 @@ async function startOutgoingCall(chatId, opts = {}) {
         }
         refreshCallParticipantsUi().catch(() => {});
       }
+      // Auto-cancel if nobody answers (same as a phone giving up).
+      clearTimeout(outgoingCancelT);
+      outgoingCancelT = setTimeout(() => {
+        if (state.call && activeCallHistoryId && (state.callStatus === "ringing" || state.callStatus === "calling")) {
+          toast("No answer");
+          teardownCall(false);
+        }
+      }, 45000);
       // 1:1: wait for Accept before offering (grace retry covers a lost
       // early offer if their channel wasn't up yet).
       if (!isGroup) {
@@ -1123,11 +1195,15 @@ async function startOutgoingCall(chatId, opts = {}) {
         }, 2500);
         return;
       }
-    } catch {
-      /* offline/local fallback below */
+    } catch (err) {
+      console.warn("[call] recordCall failed", err);
+      toast("Couldn't reach your partner — check your connection");
+      // Fall through: mesh/local path may still dial if they are online.
     }
+  } else {
+    toast("Sign in with Supabase to ring another device");
   }
-  // Group or no backend: join immediately as mesh initiator for known peers.
+  // Group or degraded backend: join immediately as mesh initiator for known peers.
   setCallStatus("calling", { force: true });
   connectCall().catch(() => {});
   if (isGroup) startMeshWatch();
@@ -9199,6 +9275,13 @@ function renderCall() {
   if (callRemotes.size === 1) remoteStream = callRemotes.values().next().value;
   else if (callRemotes.size === 0) remoteStream = null;
   const isGroup = state.call.kind === "group" || callRemotes.size > 1;
+  // Partner avatar: real photo when we have one, else initial/emoji.
+  const peerPhoto = state.call.photo || (state.call.peerId ? friendPhotoUrl(state.call.peerId) : "") || "";
+  const peerInitial = esc(String(state.call.name || "P").replace(/^@/, "").charAt(0).toUpperCase() || "P");
+  const peerAvatarHtml = (cls = "") =>
+    `<div class="tile-avatar${cls ? " " + cls : ""}">${peerPhoto ? `<img src="${esc(peerPhoto)}" alt="" loading="lazy">` : esc(state.call.emoji || peerInitial)}</div>`;
+  const dialing = state.callStatus === "ringing" || state.callStatus === "calling";
+  const connecting = state.callStatus === "connecting" || state.callStatus === "accepted";
   const remoteTiles = [...callRemotes.entries()].map(([pid, stream], i) => {
     const label = state.call.kind === "group" ? `Guest ${i + 1}` : "Partner";
     const pStatus = callParticipantStates.get(pid);
@@ -9206,27 +9289,26 @@ function renderCall() {
     return `<div class="call-tile remote" data-remote-tile="${esc(pid)}">${
       stream && !isVoice
         ? `<video class="call-video" data-call-remote="${esc(pid)}" autoplay playsinline></video>`
-        : `<div class="tile-avatar">${state.call.emoji || "◉"}</div>${stream ? "" : `<div class="tile-hint"><span class="call-dots"><i></i><i></i><i></i></span> Connecting…</div>`}`
+        : `${peerAvatarHtml()}${stream ? "" : `<div class="tile-hint"><span class="call-dots"><i></i><i></i><i></i></span> Connecting…</div>`}`
     }<span class="tile-tag">${sicon(isVoice ? "mic" : "user")} ${label}${statusBit}</span></div>`;
   }).join("");
   const partnerTile = callRemotes.size
     ? (isGroup ? remoteTiles : `<div class="call-tile main">${
         remoteStream && !isVoice
           ? `<video class="call-video" data-call-remote autoplay playsinline></video><span class="tile-tag">${sicon("user")} Partner</span>`
-          : `<div class="tile-avatar">${state.call.emoji || "◉"}</div><span class="tile-tag">${sicon(isVoice ? "mic" : "user")} Partner</span>`
+          : `${peerAvatarHtml()}<span class="tile-tag">${sicon(isVoice ? "mic" : "user")} Partner</span>`
       }</div>`)
-    : `<div class="call-tile main"><div class="tile-avatar">${state.call.emoji || "◉"}</div><span class="tile-tag">${sicon(isVoice ? "mic" : "user")} ${isGroup ? "Room" : "Partner"}</span><div class="tile-hint">${
-        state.callStatus === "ringing" || state.callStatus === "calling"
-          ? `<span class="call-dots"><i></i><i></i><i></i></span> ${state.call.kind === "dm" && callIsInitiator ? (isVoice ? "Ringing your partner…" : "Ringing your partner…") : "Waiting for others to join…"}`
-          : state.callStatus === "connecting" || state.callStatus === "accepted"
+    : `<div class="call-tile main">${peerAvatarHtml()}<span class="tile-tag">${sicon(isVoice ? "mic" : "user")} ${esc(state.call.name || (isGroup ? "Room" : "Partner"))}</span><div class="tile-hint">${
+        dialing
+          ? `<span class="call-dots"><i></i><i></i><i></i></span> ${state.call.kind === "dm" && callIsInitiator ? `Calling ${esc(state.call.name || "partner")}…` : "Waiting for others to join…"}`
+          : connecting
             ? `<span class="call-dots"><i></i><i></i><i></i></span> Connecting…`
-            : "Press Connect to start the call"
+            : "Starting…"
       }</div></div>`;
+  const selfPhoto = resolvePhoto(state.profile.photo) || "";
   const selfTile = activeCallStream && !isVoice
     ? `<video class="call-video mirrored" data-call-self autoplay playsinline muted></video>`
-    : isVoice
-      ? `<div class="tile-avatar small">${resolvePhoto(state.profile.photo) ? `<img src="${esc(resolvePhoto(state.profile.photo))}" alt="">` : esc(state.profile.avatar || state.profile.name?.[0] || "SL")}</div>`
-      : `<div class="tile-avatar small">${state.profile.photo ? `<img src="${esc(state.profile.photo)}" alt="">` : esc(state.profile.avatar || "SL")}</div>`;
+    : `<div class="tile-avatar small">${selfPhoto ? `<img src="${esc(selfPhoto)}" alt="">` : esc(state.profile.avatar || state.profile.name?.[0] || "SL")}</div>`;
   const stageInner = isGroup && callRemotes.size
     ? `${selfTile ? `<div class="call-tile self-inline">${selfTile}<span class="tile-tag">${state.callMuted ? sicon("mute") + " Muted" : "You"}</span></div>` : ""}${remoteTiles}`
     : `<div class="call-tile main">${partnerTile.replace(/^<div class="call-tile main">|<\/div>$/g, "")}</div>
@@ -9260,12 +9342,16 @@ function renderCall() {
     <div class="call-stage ${isGroup ? "group" : ""}${isVoice ? " voice" : ""}" data-call-stage>
       ${stageInner}
       ${state.callCameraOff && activeCallStream && !isVoice ? '<div class="cam-off-note">Camera is off</div>' : ""}
-      ${state.callStatus === "connecting" || state.callStatus === "accepted" ? `<div class="call-connecting"><span class="call-dots"><i></i><i></i><i></i></span><p>${isVoice ? "Connecting audio…" : "Connecting to your study partner…"}</p><p class="sub">End-to-end peer connection · ${isVoice ? "audio only" : "audio + video"}</p></div>` : ""}
-      ${state.callStatus === "ringing" || state.callStatus === "calling" ? `<div class="call-connecting"><span class="call-dots"><i></i><i></i><i></i></span><p>Ringing…</p><p class="sub">Waiting for an answer</p></div>` : ""}
+      ${connecting ? `<div class="call-connecting"><span class="call-dots"><i></i><i></i><i></i></span><p>${isVoice ? "Connecting audio…" : "Connecting…"}</p><p class="sub">${isVoice ? "audio only" : "audio + video"}</p></div>` : ""}
+      ${dialing ? `<div class="call-connecting"><span class="call-dots"><i></i><i></i><i></i></span><p>${state.call.kind === "dm" && callIsInitiator ? `Calling ${esc(state.call.name || "partner")}…` : "Ringing…"}</p><p class="sub">Waiting for an answer</p></div>` : ""}
     </div>
     <div class="call-controls">
       <div class="call-ctrl-group">
-        ${state.callStatus === "connected" ? `<button type="button" class="call-btn" data-call-reaction="fire" title="Send a fire reaction" aria-label="Fire reaction">🔥</button><button type="button" class="call-btn" data-call-reaction="party" title="Send a celebration reaction" aria-label="Celebration reaction">🎉</button><button type="button" class="call-btn" data-call-reaction="strong" title="Send a encouragement reaction" aria-label="Encouragement reaction">💪</button>` : `<button type="button" class="call-btn primary tall" data-connect>${state.callStatus === "connecting" || state.callStatus === "calling" || state.callStatus === "ringing" || state.callStatus === "accepted" ? '<span class="call-dots light"><i></i><i></i><i></i></span> Connecting…' : sicon(isVoice ? "mic" : "phone") + (isVoice ? " Start voice call" : " Start call")}</button>`}
+        ${state.callStatus === "connected"
+          ? `<button type="button" class="call-btn" data-call-reaction="fire" title="Send a fire reaction" aria-label="Fire reaction">🔥</button><button type="button" class="call-btn" data-call-reaction="party" title="Send a celebration reaction" aria-label="Celebration reaction">🎉</button><button type="button" class="call-btn" data-call-reaction="strong" title="Send encouragement" aria-label="Encouragement reaction">💪</button>`
+          : dialing || connecting
+            ? ""
+            : `<button type="button" class="call-btn primary tall" data-connect>${sicon(isVoice ? "mic" : "phone")}${isVoice ? " Start voice call" : " Start call"}</button>`}
       </div>
       <div class="call-ctrl-group">
         <button type="button" class="call-btn round ${state.callMuted ? "off" : ""}" data-mute title="${state.callMuted ? "Unmute microphone" : "Mute microphone"}" aria-pressed="${Boolean(state.callMuted)}" aria-label="Microphone">${state.callMuted ? sicon("mute") : sicon("mic")}</button>
@@ -9327,10 +9413,10 @@ function renderCall() {
   $(`[data-flip-camera]`, call)?.addEventListener("click", async () => {
     try {
       const videoTrack = activeCallStream?.getVideoTracks()[0];
-      if (!videoTrack) return notify("No camera active to flip");
+      if (!videoTrack) return toast("No camera active to flip");
       const devices = await navigator.mediaDevices?.enumerateDevices();
       const cams = (devices || []).filter((d) => d.kind === "videoinput");
-      if (cams.length < 2) return notify("Only one camera found");
+      if (cams.length < 2) return toast("Only one camera found");
       const curId = videoTrack.getSettings().deviceId;
       const next = cams.find((d) => d.deviceId !== curId) || cams[0];
       const newStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: next.deviceId } } });
@@ -9343,14 +9429,14 @@ function renderCall() {
       activeCallStream.addTrack(newTrack);
       renderCall();
     } catch (err) {
-      notify("Could not flip camera: " + (err.message || "unknown error"));
+      toast("Could not flip camera: " + (err.message || "unknown error"));
     }
   });
   $(`[data-share]`, call)?.addEventListener("click", async () => {
     try {
       const display = await navigator.mediaDevices?.getDisplayMedia({ video: true });
       if (!display) return;
-      notify("Screen sharing started");
+      toast("Screen sharing started");
       display.getVideoTracks().forEach((track) =>
         eachPeer((peer) => peer.getSenders().forEach((s) => {
           if (s.track?.kind === "video") s.replaceTrack(track).catch(() => {});
@@ -9360,7 +9446,7 @@ function renderCall() {
         track.addEventListener(
           "ended",
           () => {
-            notify("Screen sharing stopped");
+              toast("Screen sharing stopped");
             activeCallStream?.getVideoTracks().forEach((cam) =>
               eachPeer((peer) => peer.getSenders().forEach((s) => {
                 if (s.track?.kind === "video") s.replaceTrack(cam).catch(() => {});
@@ -9371,7 +9457,7 @@ function renderCall() {
         ),
       );
     } catch {
-      notify("Screen sharing was cancelled");
+            toast("Screen sharing was cancelled");
     }
   });
 
@@ -9423,11 +9509,38 @@ window.addEventListener("sf-call-focus", () => {
   updateOngoingCallPill();
 });
 
+// Closing/refreshing the tab must never leave a hot camera or a ghost
+// "connected" row. Best-effort: stop tracks + mark the call ended.
+window.addEventListener("pagehide", () => {
+  try {
+    activeCallStream?.getTracks().forEach((t) => t.stop());
+    callPeers.forEach((p) => { try { p.close(); } catch { /* ignore */ } });
+    if (activeCallHistoryId && state.user && state.call) {
+      const isGroupCall = state.call.kind === "group";
+      const endWhole = !isGroupCall || !callInitiatorId || callInitiatorId === state.user.id;
+      if (endWhole) {
+        updateCall(activeCallHistoryId, {
+          status: "ended",
+          ended_at: new Date().toISOString(),
+        }).catch(() => {});
+      }
+      upsertCallParticipant({
+        call_id: activeCallHistoryId,
+        user_id: state.user.id,
+        status: "left",
+        left_at: new Date().toISOString(),
+      }).catch(() => {});
+    }
+  } catch {
+    /* page is going away */
+  }
+});
+
 // Mid-call invite: ring extra friends into the current room (group or 1:1
 // upgraded). Each invitee gets a ringing participant row + call_history echo
 // through the same subscription that powers Accept/Decline.
 async function inviteToActiveCall() {
-  if (!state.call || !activeCallHistoryId) return notify("Start the call first");
+  if (!state.call || !activeCallHistoryId) return toast("Start the call first");
   openFriendsPicker({
     title: "Add people to the call",
     eyebrow: "Mid-call invite",
@@ -9435,7 +9548,7 @@ async function inviteToActiveCall() {
     cta: "Send invites",
     onDone: async (ids) => {
       if (!ids.length) return;
-      if (callPeers.size + ids.length > 5) return notify("This call is full (max 6 people)");
+      if (callPeers.size + ids.length > 5) return toast("This call is full (max 6 people)");
       if (!Array.isArray(state.call.extras)) state.call.extras = [];
       for (const id of ids) {
         if (!state.call.extras.includes(id)) state.call.extras.push(id);
@@ -9448,7 +9561,7 @@ async function inviteToActiveCall() {
         await updateCall(activeCallHistoryId, { status: "ringing" }).catch(() => {});
       }
       startMeshWatch();
-      notify(`Ringing ${ids.length} friend${ids.length === 1 ? "" : "s"}…`);
+      toast(`Ringing ${ids.length} friend${ids.length === 1 ? "" : "s"}…`);
     },
   });
 }
@@ -9458,7 +9571,7 @@ async function inviteToActiveCall() {
 // additive: fill missing mesh slots without dropping live ones.
 async function connectCall({ force = false } = {}) {
   if (!backendConfigured)
-    return notify("Add Supabase keys to enable live WebRTC calls");
+    return toast("Add Supabase keys to enable live WebRTC calls");
   if (!state.call) return;
   if (connectInFlight) {
     // A second Accept/retry while the first connect is still opening media:
@@ -9479,14 +9592,14 @@ async function connectCall({ force = false } = {}) {
     const isVoice = Boolean(state.call?.voice || state.call?.callType === "voice");
     const permission = await navigator.permissions?.query?.({ name: "camera" });
     if (!isVoice && permission?.state === "denied")
-      return notify(
+      return toast(
         "Camera permission is blocked. Allow it in browser settings and try again.",
       );
     const micPermission = await navigator.permissions?.query?.({
       name: "microphone",
     });
     if (micPermission?.state === "denied")
-      return notify(
+      return toast(
         "Microphone permission is blocked. Allow it in browser settings and try again.",
       );
     if (state.callStatus !== "connected") setCallStatus("connecting", { force: true });
@@ -9502,11 +9615,7 @@ async function connectCall({ force = false } = {}) {
     // "connected" before a peer is up.
     if (!callPeers.size) setCallStatus(isVoice ? "calling" : "ringing", { force: true });
     renderCall();
-    notify(callPeers.size
-      ? (callIsInitiator || state.call.kind === "group"
-          ? "Outgoing call live — waiting for peers"
-          : "Joined — waiting for the offer")
-      : isVoice ? "Microphone connected" : "Camera and microphone connected");
+    if (callPeers.size) toast("Connected to signaling");
     ensureIncomingCallSubscription();
     startMeshWatch();
     startCallParticipantPoll();
@@ -9533,10 +9642,10 @@ async function connectCall({ force = false } = {}) {
     // the guidance short so the dialog stays readable on phones.
     const msg = String(error?.name || "") === "NotAllowedError"
       ? (isVoice
-        ? "Microphone access was blocked — allow the mic and press Connect again."
-        : "Camera/microphone access was blocked — allow them and press Connect again.")
+        ? "Microphone access was blocked — allow the mic and try again."
+        : "Camera/microphone access was blocked — allow them and try again.")
       : error?.message || "Could not start camera and microphone";
-    notify(msg);
+    toast(msg);
   } finally {
     connectInFlight = false;
     if (forceConnectPending && state.call) {
