@@ -1,12 +1,12 @@
-const VERSION = "studyflow-v1";
+const VERSION = "studyflow-v1"
 
 self.addEventListener("install", () => {
-  self.skipWaiting();
-});
+  self.skipWaiting()
+})
 
 self.addEventListener("message", (event) => {
-  if (event.data && event.data.type === "SKIP_WAITING") self.skipWaiting();
-});
+  if (event.data && event.data.type === "SKIP_WAITING") self.skipWaiting()
+})
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
@@ -22,38 +22,36 @@ self.addEventListener("activate", (event) => {
           ),
       )
       .catch(() => {}),
-  );
-});
+  )
+})
 
 self.addEventListener("fetch", (event) => {
-  const { request } = event;
-  if (request.method !== "GET") return;
-  let url;
+  const { request } = event
+  if (request.method !== "GET") return
+  let url
   try {
-    url = new URL(request.url);
+    url = new URL(request.url)
   } catch {
-    return;
+    return
   }
-  if (url.origin !== location.origin) return;
+  if (url.origin !== location.origin) return
   event.respondWith(
     fetch(request)
       .then((response) => {
-        const copy = response.clone();
+        const copy = response.clone()
         caches
           .open(VERSION)
           .then((cache) => cache.put(request, copy))
-          .catch(() => {});
-        return response;
+          .catch(() => {})
+        return response
       })
       .catch(() =>
-        caches.match(request).then(
-          (hit) =>
-            hit ||
-            caches.match("/index.html").then((fallback) => {
-              if (!fallback) throw new Error("offline");
-              return fallback;
-            }),
-        ),
+        caches
+          .match(request)
+          .then((hit) => hit || caches.match("/index.html").then((fallback) => {
+                if (!fallback) throw new Error("offline")
+                return fallback
+              })),
       ),
-  );
-});
+  )
+})

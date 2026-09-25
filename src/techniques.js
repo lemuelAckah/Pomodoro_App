@@ -1,17 +1,37 @@
 /* techniques.js — technique guides, pads, quizzes, favorites tab, technique check */
 import {
-  state, $, $$, uid, get, save, esc, sicon, persist, notify, confirmBox, viewHead,
-  iconStar, bindFavorites, fmtDur, celebrate, checkReminder, maybeWhatsNew, requireAuth,
+  state,
+  $,
+  $$,
+  uid,
+  get,
+  save,
+  esc,
+  sicon,
+  persist,
+  notify,
+  confirmBox,
+  viewHead,
+  iconStar,
+  bindFavorites,
+  fmtDur,
+  celebrate,
+  checkReminder,
+  maybeWhatsNew,
+  requireAuth,
   isDarkPaper,
-} from "./core.js";
+} from "./core.js"
 import {
-  mirrorNotes, deleteNoteEverywhere, mirrorAssessment, mirrorTechniqueUsage,
-} from "./services/productivity-sync.js";
-import { sounds, playChime } from "./audio.js";
-import { applyDurations, durations, sessionInProgress } from "./timer.js";
-import { shell } from "./app.js";
-import { startTour } from "./account.js";
-import { secureEarn, REWARD_EVENTS } from "./services/rewards-sync.js";
+  mirrorNotes,
+  deleteNoteEverywhere,
+  mirrorAssessment,
+  mirrorTechniqueUsage,
+} from "./services/productivity-sync.js"
+import { sounds, playChime } from "./audio.js"
+import { applyDurations, durations, sessionInProgress } from "./timer.js"
+import { shell } from "./app.js"
+import { startTour } from "./account.js"
+import { secureEarn, REWARD_EVENTS } from "./services/rewards-sync.js"
 const techniques = [
   [
     "pomodoro",
@@ -85,214 +105,330 @@ const techniques = [
     "5–15 min",
     "Explain the problem plainly until the missing connection appears.",
   ],
-];
+]
 
-const TECH_CHECK_IDS = ["pomodoro", "spaced", "active", "feynman", "mindmap", "cornell", "timeblock", "pareto", "duck"];
+const TECH_CHECK_IDS = [
+  "pomodoro",
+  "spaced",
+  "active",
+  "feynman",
+  "mindmap",
+  "cornell",
+  "timeblock",
+  "pareto",
+  "duck",
+]
 
 const TECH_CHECK_QUESTIONS = [
-  { q: "When you face a large amount of material, what do you usually do first?", short: "tackling big material", options: [
-    { t: "Break it into smaller pieces and start with the first one", w: { pomodoro: 3, timeblock: 2 } },
-    { t: "Get the big picture first, then zoom into the details", w: { mindmap: 2, pareto: 3 } },
-    { t: "Find the hardest part and wrestle with it directly", w: { active: 3, pareto: 1 } },
-    { t: "Rewrite it neatly so everything feels organized", w: { cornell: 3, feynman: 1 } },
-  ]},
-  { q: "What happens when you try to remember something from yesterday?", short: "remembering yesterday", options: [
-    { t: "I mostly need to reread it", w: { spaced: 1 } },
-    { t: "I cover the page and try to recall it first", w: { active: 3, spaced: 2 } },
-    { t: "I say it back in my own words", w: { feynman: 3, duck: 2 } },
-    { t: "I sketch how it connects to things I already know", w: { mindmap: 3 } },
-  ]},
-  { q: "How do you prefer to handle information you keep forgetting?", short: "handling forgettable facts", options: [
-    { t: "Quiz myself on it more often", w: { active: 3, spaced: 2 } },
-    { t: "Schedule extra reviews of just that part", w: { spaced: 3 } },
-    { t: "Explain it to someone, or out loud to myself", w: { feynman: 2, duck: 3 } },
-    { t: "Make a diagram or visual for it", w: { mindmap: 3, cornell: 1 } },
-  ]},
-  { q: "When a subject feels difficult, what usually helps you understand it?", short: "cracking hard subjects", options: [
-    { t: "Working through concrete examples", w: { feynman: 2, active: 2 } },
-    { t: "Studying in short bursts with real breaks", w: { pomodoro: 3 } },
-    { t: "Mapping the ideas and how they link together", w: { mindmap: 3 } },
-    { t: "Taking careful, structured notes", w: { cornell: 3, timeblock: 1 } },
-  ]},
-  { q: "How do you normally organize your study sessions?", short: "organizing sessions", options: [
-    { t: "I block exact times for each subject", w: { timeblock: 3 } },
-    { t: "I set a timer and sprint", w: { pomodoro: 3 } },
-    { t: "I start with whatever matters most", w: { pareto: 3, active: 1 } },
-    { t: "I mix topics so nothing gets stale", w: { spaced: 2, active: 2 } },
-  ]},
-  { q: "What makes you lose focus most easily?", short: "losing focus", options: [
-    { t: "Sessions that drag on too long", w: { pomodoro: 3 } },
-    { t: "Having no clear plan", w: { timeblock: 3, pareto: 1 } },
-    { t: "Rereading — it feels boring and passive", w: { active: 2, duck: 2 } },
-    { t: "Forgetting why the topic even matters", w: { pareto: 3, feynman: 1 } },
-  ]},
-  { q: "When you finish studying something, what do you usually do next?", short: "after finishing", options: [
-    { t: "Test myself on what I just covered", w: { active: 3 } },
-    { t: "Summarize it in my own words", w: { feynman: 3, cornell: 2 } },
-    { t: "Decide when I will review it again", w: { spaced: 3, timeblock: 1 } },
-    { t: "Take a real break, then start the next chunk", w: { pomodoro: 3 } },
-  ]},
-  { q: "How do you prefer to check whether you truly understand something?", short: "checking understanding", options: [
-    { t: "Explain it simply, as if teaching it", w: { feynman: 3, duck: 2 } },
-    { t: "Answer practice questions on it", w: { active: 3 } },
-    { t: "Redraw or rebuild it from memory", w: { mindmap: 3, active: 1 } },
-    { t: "Talk it through with another person", w: { duck: 3, feynman: 1 } },
-  ]},
-  { q: "With several subjects competing, how do you decide what to work on?", short: "juggling subjects", options: [
-    { t: "Rank them by impact and start at the top", w: { pareto: 3 } },
-    { t: "Rotate them on a fixed timetable", w: { timeblock: 3, spaced: 2 } },
-    { t: "Short sprints, one subject at a time", w: { pomodoro: 3, active: 1 } },
-    { t: "Look for links between the subjects", w: { mindmap: 2, feynman: 2 } },
-  ]},
-  { q: "What helps you remember information for a really long time?", short: "remembering long-term", options: [
-    { t: "Revisiting it at growing intervals", w: { spaced: 3 } },
-    { t: "Keep pulling it out of memory", w: { active: 3 } },
-    { t: "Tidy notes I can quiz myself from later", w: { cornell: 3 } },
-    { t: "Understanding it so deeply it just sticks", w: { feynman: 3, pareto: 1 } },
-  ]},
-  { q: "How do you react when you get a question wrong?", short: "handling mistakes", options: [
-    { t: "Retry similar ones until it clicks", w: { active: 3 } },
-    { t: "Hunt for the hole in my explanation", w: { feynman: 3 } },
-    { t: "Flag it for my next review session", w: { spaced: 2, cornell: 2 } },
-    { t: "Talk it out until it makes sense", w: { duck: 3 } },
-  ]},
-  { q: "What kind of study session feels most productive to you?", short: "feeling productive", options: [
-    { t: "A visible plan, all checked off", w: { timeblock: 3, pareto: 1 } },
-    { t: "Beats of deep focus with real breaks", w: { pomodoro: 3 } },
-    { t: "Cracking problems I could not do before", w: { active: 2, pareto: 2 } },
-    { t: "Scattered ideas clicking into place", w: { mindmap: 3, feynman: 1 } },
-  ]},
-];
+  {
+    q: "When you face a large amount of material, what do you usually do first?",
+    short: "tackling big material",
+    options: [
+      {
+        t: "Break it into smaller pieces and start with the first one",
+        w: { pomodoro: 3, timeblock: 2 },
+      },
+      {
+        t: "Get the big picture first, then zoom into the details",
+        w: { mindmap: 2, pareto: 3 },
+      },
+      {
+        t: "Find the hardest part and wrestle with it directly",
+        w: { active: 3, pareto: 1 },
+      },
+      {
+        t: "Rewrite it neatly so everything feels organized",
+        w: { cornell: 3, feynman: 1 },
+      },
+    ],
+  },
+  {
+    q: "What happens when you try to remember something from yesterday?",
+    short: "remembering yesterday",
+    options: [
+      { t: "I mostly need to reread it", w: { spaced: 1 } },
+      {
+        t: "I cover the page and try to recall it first",
+        w: { active: 3, spaced: 2 },
+      },
+      { t: "I say it back in my own words", w: { feynman: 3, duck: 2 } },
+      {
+        t: "I sketch how it connects to things I already know",
+        w: { mindmap: 3 },
+      },
+    ],
+  },
+  {
+    q: "How do you prefer to handle information you keep forgetting?",
+    short: "handling forgettable facts",
+    options: [
+      { t: "Quiz myself on it more often", w: { active: 3, spaced: 2 } },
+      { t: "Schedule extra reviews of just that part", w: { spaced: 3 } },
+      {
+        t: "Explain it to someone, or out loud to myself",
+        w: { feynman: 2, duck: 3 },
+      },
+      { t: "Make a diagram or visual for it", w: { mindmap: 3, cornell: 1 } },
+    ],
+  },
+  {
+    q: "When a subject feels difficult, what usually helps you understand it?",
+    short: "cracking hard subjects",
+    options: [
+      { t: "Working through concrete examples", w: { feynman: 2, active: 2 } },
+      { t: "Studying in short bursts with real breaks", w: { pomodoro: 3 } },
+      { t: "Mapping the ideas and how they link together", w: { mindmap: 3 } },
+      {
+        t: "Taking careful, structured notes",
+        w: { cornell: 3, timeblock: 1 },
+      },
+    ],
+  },
+  {
+    q: "How do you normally organize your study sessions?",
+    short: "organizing sessions",
+    options: [
+      { t: "I block exact times for each subject", w: { timeblock: 3 } },
+      { t: "I set a timer and sprint", w: { pomodoro: 3 } },
+      { t: "I start with whatever matters most", w: { pareto: 3, active: 1 } },
+      { t: "I mix topics so nothing gets stale", w: { spaced: 2, active: 2 } },
+    ],
+  },
+  {
+    q: "What makes you lose focus most easily?",
+    short: "losing focus",
+    options: [
+      { t: "Sessions that drag on too long", w: { pomodoro: 3 } },
+      { t: "Having no clear plan", w: { timeblock: 3, pareto: 1 } },
+      {
+        t: "Rereading — it feels boring and passive",
+        w: { active: 2, duck: 2 },
+      },
+      {
+        t: "Forgetting why the topic even matters",
+        w: { pareto: 3, feynman: 1 },
+      },
+    ],
+  },
+  {
+    q: "When you finish studying something, what do you usually do next?",
+    short: "after finishing",
+    options: [
+      { t: "Test myself on what I just covered", w: { active: 3 } },
+      { t: "Summarize it in my own words", w: { feynman: 3, cornell: 2 } },
+      {
+        t: "Decide when I will review it again",
+        w: { spaced: 3, timeblock: 1 },
+      },
+      { t: "Take a real break, then start the next chunk", w: { pomodoro: 3 } },
+    ],
+  },
+  {
+    q: "How do you prefer to check whether you truly understand something?",
+    short: "checking understanding",
+    options: [
+      { t: "Explain it simply, as if teaching it", w: { feynman: 3, duck: 2 } },
+      { t: "Answer practice questions on it", w: { active: 3 } },
+      { t: "Redraw or rebuild it from memory", w: { mindmap: 3, active: 1 } },
+      { t: "Talk it through with another person", w: { duck: 3, feynman: 1 } },
+    ],
+  },
+  {
+    q: "With several subjects competing, how do you decide what to work on?",
+    short: "juggling subjects",
+    options: [
+      { t: "Rank them by impact and start at the top", w: { pareto: 3 } },
+      { t: "Rotate them on a fixed timetable", w: { timeblock: 3, spaced: 2 } },
+      {
+        t: "Short sprints, one subject at a time",
+        w: { pomodoro: 3, active: 1 },
+      },
+      {
+        t: "Look for links between the subjects",
+        w: { mindmap: 2, feynman: 2 },
+      },
+    ],
+  },
+  {
+    q: "What helps you remember information for a really long time?",
+    short: "remembering long-term",
+    options: [
+      { t: "Revisiting it at growing intervals", w: { spaced: 3 } },
+      { t: "Keep pulling it out of memory", w: { active: 3 } },
+      { t: "Tidy notes I can quiz myself from later", w: { cornell: 3 } },
+      {
+        t: "Understanding it so deeply it just sticks",
+        w: { feynman: 3, pareto: 1 },
+      },
+    ],
+  },
+  {
+    q: "How do you react when you get a question wrong?",
+    short: "handling mistakes",
+    options: [
+      { t: "Retry similar ones until it clicks", w: { active: 3 } },
+      { t: "Hunt for the hole in my explanation", w: { feynman: 3 } },
+      { t: "Flag it for my next review session", w: { spaced: 2, cornell: 2 } },
+      { t: "Talk it out until it makes sense", w: { duck: 3 } },
+    ],
+  },
+  {
+    q: "What kind of study session feels most productive to you?",
+    short: "feeling productive",
+    options: [
+      { t: "A visible plan, all checked off", w: { timeblock: 3, pareto: 1 } },
+      { t: "Beats of deep focus with real breaks", w: { pomodoro: 3 } },
+      {
+        t: "Cracking problems I could not do before",
+        w: { active: 2, pareto: 2 },
+      },
+      {
+        t: "Scattered ideas clicking into place",
+        w: { mindmap: 3, feynman: 1 },
+      },
+    ],
+  },
+]
 
 const TECH_CHECK_WHY = {
-  pomodoro: "You focus best in short, intense beats with real breaks — sprints keep your energy high and procrastination low.",
-  spaced: "You remember longer when reviews return right before you would forget — spacing beats cramming for you.",
-  active: "You learn by pulling answers out of your head, not by rereading — retrieval is your strongest memory lever.",
-  feynman: "Ideas stick for you when you restate them simply — teaching reveals exactly what you do and do not get yet.",
-  mindmap: "You think in connections — big pictures, links, and visuals turn scattered facts into one click.",
-  cornell: "Organized pages serve you twice — capture now, then self-quiz later from cues and summaries.",
-  timeblock: "A visible plan calms you — giving every hour a job turns chaos into checked boxes.",
-  pareto: "You win by aiming at what matters — finding the vital few topics first multiplies every session.",
+  pomodoro:
+    "You focus best in short, intense beats with real breaks — sprints keep your energy high and procrastination low.",
+  spaced:
+    "You remember longer when reviews return right before you would forget — spacing beats cramming for you.",
+  active:
+    "You learn by pulling answers out of your head, not by rereading — retrieval is your strongest memory lever.",
+  feynman:
+    "Ideas stick for you when you restate them simply — teaching reveals exactly what you do and do not get yet.",
+  mindmap:
+    "You think in connections — big pictures, links, and visuals turn scattered facts into one click.",
+  cornell:
+    "Organized pages serve you twice — capture now, then self-quiz later from cues and summaries.",
+  timeblock:
+    "A visible plan calms you — giving every hour a job turns chaos into checked boxes.",
+  pareto:
+    "You win by aiming at what matters — finding the vital few topics first multiplies every session.",
   duck: "Saying it out loud untangles you — talking through problems surfaces the missing link fast.",
-};
-
-function scoreTechCheck(answers) {
-  const totals = {};
-  const ceilings = {};
-  const bestQ = {};
-  TECH_CHECK_IDS.forEach((id) => {
-    totals[id] = 0;
-    ceilings[id] = 0;
-    bestQ[id] = { pts: 0, q: -1 };
-  });
-  TECH_CHECK_QUESTIONS.forEach((item, qi) => {
-    const perTechMax = {};
-    item.options.forEach((opt) => {
-      Object.entries(opt.w || {}).forEach(([id, pts]) => {
-        if (!(id in totals)) return;
-        perTechMax[id] = Math.max(perTechMax[id] || 0, pts);
-      });
-    });
-    Object.entries(perTechMax).forEach(([id, m]) => {
-      ceilings[id] += m;
-    });
-    const pick = answers[qi];
-    const chosen = item.options[pick];
-    if (!chosen) return;
-    Object.entries(chosen.w || {}).forEach(([id, pts]) => {
-      if (!(id in totals)) return;
-      totals[id] += pts;
-      if (pts > bestQ[id].pts) bestQ[id] = { pts, q: qi };
-    });
-  });
-  const scores = {};
-  TECH_CHECK_IDS.forEach((id) => {
-    scores[id] = ceilings[id] ? Math.round((100 * totals[id]) / ceilings[id]) : 0;
-  });
-  const ranked = TECH_CHECK_IDS.slice().sort((a, b) => scores[b] - scores[a]);
-  return { scores, ranked, bestQ };
 }
 
-let techCheckReturn = "onboard";
+function scoreTechCheck(answers) {
+  const totals = {}
+  const ceilings = {}
+  const bestQ = {}
+  TECH_CHECK_IDS.forEach((id) => {
+    totals[id] = 0
+    ceilings[id] = 0
+    bestQ[id] = { pts: 0, q: -1 }
+  })
+  TECH_CHECK_QUESTIONS.forEach((item, qi) => {
+    const perTechMax = {}
+    item.options.forEach((opt) => {
+      Object.entries(opt.w || {}).forEach(([id, pts]) => {
+        if (!(id in totals)) return
+        perTechMax[id] = Math.max(perTechMax[id] || 0, pts)
+      })
+    })
+    Object.entries(perTechMax).forEach(([id, m]) => {
+      ceilings[id] += m
+    })
+    const pick = answers[qi]
+    const chosen = item.options[pick]
+    if (!chosen) return
+    Object.entries(chosen.w || {}).forEach(([id, pts]) => {
+      if (!(id in totals)) return
+      totals[id] += pts
+      if (pts > bestQ[id].pts) bestQ[id] = { pts, q: qi }
+    })
+  })
+  const scores = {}
+  TECH_CHECK_IDS.forEach((id) => {
+    scores[id] = ceilings[id]
+      ? Math.round((100 * totals[id]) / ceilings[id])
+      : 0
+  })
+  const ranked = TECH_CHECK_IDS.slice().sort((a, b) => scores[b] - scores[a])
+  return { scores, ranked, bestQ }
+}
 
-let tcSession = null;
+let techCheckReturn = "onboard"
+
+let tcSession = null
 
 function startTechCheck(mode) {
-  techCheckReturn = mode === "settings" ? "settings" : "onboard";
-  tcSession = { step: -1, answers: [] };
-  renderTechCheck();
+  techCheckReturn = mode === "settings" ? "settings" : "onboard"
+  tcSession = { step: -1, answers: [] }
+  renderTechCheck()
   try {
-    window.scrollTo(0, 0);
+    window.scrollTo(0, 0)
   } catch {
     /* ignore */
   }
 }
 
 function skipTechCheck() {
-  state.techCheck = { done: false, skipped: true, date: Date.now() };
-  persist();
-  mirrorAssessment();
-  tcSession = null;
+  state.techCheck = { done: false, skipped: true, date: Date.now() }
+  persist()
+  mirrorAssessment()
+  tcSession = null
   if (techCheckReturn === "settings") {
-    state.tab = "settings";
-    persist();
-    shell();
-    return;
+    state.tab = "settings"
+    persist()
+    shell()
+    return
   }
-  state.tab = "timer";
-  persist();
-  enterApp();
+  state.tab = "timer"
+  persist()
+  enterApp()
 }
 
 function enterApp() {
-  shell();
-  checkReminder();
-  maybeWhatsNew();
+  shell()
+  checkReminder()
+  maybeWhatsNew()
   if (!state.toured)
     setTimeout(() => {
-      if (!state.toured) startTour();
-    }, 900);
+      if (!state.toured) startTour()
+    }, 900)
 }
 
 function exitTechCheck(use) {
-  tcSession = null;
+  tcSession = null
   if (techCheckReturn === "settings") {
-    state.tab = use ? "techniques" : "settings";
-    persist();
-    shell();
-    return;
+    state.tab = use ? "techniques" : "settings"
+    persist()
+    shell()
+    return
   }
-  state.tab = use ? "techniques" : "timer";
-  persist();
-  enterApp();
+  state.tab = use ? "techniques" : "timer"
+  persist()
+  enterApp()
 }
 
 function answerTechCheck(optIdx) {
-  if (!tcSession) return;
-  const qi = tcSession.step;
-  if (qi < 0 || qi >= TECH_CHECK_QUESTIONS.length) return;
-  tcSession.answers[qi] = optIdx;
+  if (!tcSession) return
+  const qi = tcSession.step
+  if (qi < 0 || qi >= TECH_CHECK_QUESTIONS.length) return
+  tcSession.answers[qi] = optIdx
   $$("[data-tc-opt]").forEach((b) =>
     b.classList.toggle("selected", Number(b.dataset.tcOpt) === optIdx),
-  );
+  )
 }
 
 function techCheckAnswered() {
-  return tcSession.answers.filter((a) => a !== undefined).length;
+  return tcSession.answers.filter((a) => a !== undefined).length
 }
 
 function techCheckNext() {
-  if (!tcSession) return;
-  const qi = tcSession.step;
-  if (qi < 0 || qi >= TECH_CHECK_QUESTIONS.length) return;
+  if (!tcSession) return
+  const qi = tcSession.step
+  if (qi < 0 || qi >= TECH_CHECK_QUESTIONS.length) return
   if (tcSession.answers[qi] === undefined)
-    return notify("Choose an answer to continue");
-  tcSession.step += 1;
-  if (tcSession.step >= TECH_CHECK_QUESTIONS.length) finishTechCheck();
+    return notify("Choose an answer to continue")
+  tcSession.step += 1
+  if (tcSession.step >= TECH_CHECK_QUESTIONS.length) finishTechCheck()
   else {
-    renderTechCheck();
+    renderTechCheck()
     try {
-      window.scrollTo(0, 0);
+      window.scrollTo(0, 0)
     } catch {
       /* ignore */
     }
@@ -300,19 +436,19 @@ function techCheckNext() {
 }
 
 function techCheckBack() {
-  if (!tcSession) return;
-  tcSession.step = Math.max(-1, tcSession.step - 1);
-  renderTechCheck();
+  if (!tcSession) return
+  tcSession.step = Math.max(-1, tcSession.step - 1)
+  renderTechCheck()
   try {
-    window.scrollTo(0, 0);
+    window.scrollTo(0, 0)
   } catch {
     /* ignore */
   }
 }
 
 function finishTechCheck() {
-  if (!tcSession) return;
-  const { scores, ranked, bestQ } = scoreTechCheck(tcSession.answers);
+  if (!tcSession) return
+  const { scores, ranked, bestQ } = scoreTechCheck(tcSession.answers)
   state.techCheck = {
     done: true,
     answers: tcSession.answers.slice(),
@@ -322,129 +458,143 @@ function finishTechCheck() {
       ranked.slice(0, 3).map((id) => [id, bestQ[id].q]),
     ),
     date: Date.now(),
-  };
-  persist();
-  mirrorAssessment();
-  tcSession.step = TECH_CHECK_QUESTIONS.length;
-  renderTechCheck();
+  }
+  persist()
+  mirrorAssessment()
+  tcSession.step = TECH_CHECK_QUESTIONS.length
+  renderTechCheck()
   try {
-    window.scrollTo(0, 0);
+    window.scrollTo(0, 0)
   } catch {
     /* ignore */
   }
   try {
-    playChime("focus");
-    celebrate(false);
+    playChime("focus")
+    celebrate(false)
   } catch {
     /* ignore */
   }
 }
 
 function techInfo(id) {
-  return techniques.find((x) => x[0] === id) || null;
+  return techniques.find((x) => x[0] === id) || null
 }
 
-const DUSK_BG = `<div class="tc-dusk" aria-hidden="true"><span class="dusk-glow"></span><span class="dusk-dial"><i class="dusk-pie"></i><i class="dusk-ring"></i></span><span class="dusk-orbit"><b class="dusk-dot a"></b><b class="dusk-dot b"></b></span><span class="dusk-echo"></span></div>`;
+const DUSK_BG = `<div class="tc-dusk" aria-hidden="true"><span class="dusk-glow"></span><span class="dusk-dial"><i class="dusk-pie"></i><i class="dusk-ring"></i></span><span class="dusk-orbit"><b class="dusk-dot a"></b><b class="dusk-dot b"></b></span><span class="dusk-echo"></span></div>`
 
 function renderTechCheck() {
-  const root = $("#root");
-  if (!root || !tcSession) return;
-  const n = TECH_CHECK_QUESTIONS.length;
+  const root = $("#root")
+  if (!root || !tcSession) return
+  const n = TECH_CHECK_QUESTIONS.length
   if (tcSession.step < 0) {
-    root.innerHTML = `${DUSK_BG}<div class="tc-wrap"><div class="tc-brand"><div class="brand-mark">◷</div><strong>StudyFlow</strong></div><div class="card tc-card tc-anim"><div class="eyebrow">First-time setup · Study Technique Check</div><h1>Let's discover how you learn best.</h1><p class="lede">There is no right or wrong answer. Your responses will help us find the study techniques that may work best for you.</p><p class="muted">${n} quick questions · about a minute · you can go back anytime</p><div class="tc-actions"><button type="button" class="primary" data-tc-begin>Begin my check</button><button type="button" class="ghost" data-tc-skip>Skip for now</button></div></div></div>`;
+    root.innerHTML = `${DUSK_BG}<div class="tc-wrap"><div class="tc-brand"><div class="brand-mark">◷</div><strong>StudyFlow</strong></div><div class="card tc-card tc-anim"><div class="eyebrow">First-time setup · Study Technique Check</div><h1>Let's discover how you learn best.</h1><p class="lede">There is no right or wrong answer. Your responses will help us find the study techniques that may work best for you.</p><p class="muted">${n} quick questions · about a minute · you can go back anytime</p><div class="tc-actions"><button type="button" class="primary" data-tc-begin>Begin my check</button><button type="button" class="ghost" data-tc-skip>Skip for now</button></div></div></div>`
     $("[data-tc-begin]", root).onclick = () => {
-      tcSession.step = 0;
-      renderTechCheck();
-    };
-    $("[data-tc-skip]", root).onclick = skipTechCheck;
-    return;
+      tcSession.step = 0
+      renderTechCheck()
+    }
+    $("[data-tc-skip]", root).onclick = skipTechCheck
+    return
   }
   if (tcSession.step < n) {
-    const item = TECH_CHECK_QUESTIONS[tcSession.step];
-    const done = techCheckAnswered();
-    const pct = Math.round((100 * done) / n);
-    const picked = tcSession.answers[tcSession.step];
-    const last = tcSession.step === n - 1;
-    root.innerHTML = `${DUSK_BG}<div class="tc-wrap"><div class="tc-brand"><div class="brand-mark">◷</div><strong>StudyFlow</strong></div><div class="tc-top"><span class="muted">Question ${tcSession.step + 1} of ${n} · ${done} answered</span></div><div class="tc-progress" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" aria-label="Check progress"><i style="width:${pct}%"></i></div><div class="card tc-card tc-anim" data-tc-step="${tcSession.step}"><h2>${esc(item.q)}</h2><p class="muted">No right or wrong answers — go with your gut.</p><div class="tc-opts">${item.options.map((opt, i) => `<button type="button" class="tc-opt${picked === i ? " selected" : ""}" data-tc-opt="${i}" aria-pressed="${picked === i}"><span class="tc-radio"></span><span>${esc(opt.t)}</span><span class="tc-picked">${sicon("check")}</span></button>`).join("")}</div></div><div class="tc-nav"><button type="button" class="ghost" data-tc-back>← Back</button><button type="button" class="primary" data-tc-next>${last ? "See My Results →" : "Next →"}</button></div></div>`;
+    const item = TECH_CHECK_QUESTIONS[tcSession.step]
+    const done = techCheckAnswered()
+    const pct = Math.round((100 * done) / n)
+    const picked = tcSession.answers[tcSession.step]
+    const last = tcSession.step === n - 1
+    root.innerHTML = `${DUSK_BG}<div class="tc-wrap"><div class="tc-brand"><div class="brand-mark">◷</div><strong>StudyFlow</strong></div><div class="tc-top"><span class="muted">Question ${tcSession.step + 1} of ${n} · ${done} answered</span></div><div class="tc-progress" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" aria-label="Check progress"><i style="width:${pct}%"></i></div><div class="card tc-card tc-anim" data-tc-step="${tcSession.step}"><h2>${esc(item.q)}</h2><p class="muted">No right or wrong answers — go with your gut.</p><div class="tc-opts">${item.options.map((opt, i) => `<button type="button" class="tc-opt${picked === i ? " selected" : ""}" data-tc-opt="${i}" aria-pressed="${picked === i}"><span class="tc-radio"></span><span>${esc(opt.t)}</span><span class="tc-picked">${sicon("check")}</span></button>`).join("")}</div></div><div class="tc-nav"><button type="button" class="ghost" data-tc-back>← Back</button><button type="button" class="primary" data-tc-next>${
+      last ? "See My Results →" : "Next →"
+    }</button></div></div>`
     $$("[data-tc-opt]", root).forEach(
       (b) => (b.onclick = () => answerTechCheck(Number(b.dataset.tcOpt))),
-    );
-    $("[data-tc-back]", root).onclick = techCheckBack;
-    $("[data-tc-next]", root).onclick = techCheckNext;
-    return;
+    )
+    $("[data-tc-back]", root).onclick = techCheckBack
+    $("[data-tc-next]", root).onclick = techCheckNext
+    return
   }
-  const tc = state.techCheck;
+  const tc = state.techCheck
   if (!tc || !tc.done) {
-    skipTechCheck();
-    return;
+    skipTechCheck()
+    return
   }
   const ranked = (tc.top || [])
     .map((id) => ({ id, info: techInfo(id), pct: (tc.scores || {})[id] || 0 }))
-    .filter((r) => r.info);
+    .filter((r) => r.info)
   const rest = TECH_CHECK_IDS.map((id) => ({
     id,
     info: techInfo(id),
     pct: (tc.scores || {})[id] || 0,
   }))
     .filter((r) => r.info && !(tc.top || []).includes(r.id))
-    .sort((a, b) => b.pct - a.pct);
+    .sort((a, b) => b.pct - a.pct)
   const label = (i) =>
-    i === 0 ? "Best match" : i === 1 ? "Strong match" : "Also strong";
-  root.innerHTML = `${DUSK_BG}<div class="tc-wrap"><div class="tc-brand"><div class="brand-mark">◷</div><strong>StudyFlow</strong></div><div class="tc-results-head tc-anim"><div class="eyebrow">Your study profile is ready</div><h1>Your Study Technique Profile</h1><p class="lede">These techniques may work particularly well for you — nothing here is the only way to study.</p></div>${ranked.map((r, i) => {
-    const sig = (tc.signals || {})[r.id];
-    const qshort =
-      typeof sig === "number" && TECH_CHECK_QUESTIONS[sig]
-        ? TECH_CHECK_QUESTIONS[sig].short
-        : "";
-    return `<div class="card tc-card tc-rank tc-anim"><div class="section-row"><span class="tc-ranknum">0${i + 1}</span><span class="tag">${label(i)}</span></div><h2>${esc(r.info[1])}</h2><div class="tc-bar-row"><div class="tc-bar"><i style="width:${r.pct}%"></i></div><strong>${r.pct}% Match</strong></div><p>${esc(TECH_CHECK_WHY[r.id] || "")}</p>${qshort ? `<p class="muted">Strongest signal: your answer about “${esc(qshort)}”.</p>` : ""}<button type="button" class="ghost" data-tc-open="${r.id}">Open the guide</button></div>`;
-  }).join("")}${rest.length ? `<div class="card tc-card"><h2>Your full ranking</h2><p class="muted">Explore any of these whenever you like — nothing is locked.</p>${rest.map((r) => `<div class="tc-row"><span class="tc-row-icon">${r.info[2]}</span><span class="tc-row-name">${esc(r.info[1])}</span><span class="tc-bar small"><i style="width:${r.pct}%"></i></span><strong>${r.pct}%</strong><button type="button" class="ghost" data-tc-open="${r.id}">Open</button></div>`).join("")}</div>` : ""}<div class="tc-actions tc-anim"><button type="button" class="primary" data-tc-use>Start using these techniques</button><button type="button" class="ghost" data-tc-retake>Retake</button></div><p class="muted" style="text-align:center">Checked ${tc.date ? new Date(tc.date).toLocaleDateString() : "just now"} · saved to your account</p></div>`;
+    i === 0 ? "Best match" : i === 1 ? "Strong match" : "Also strong"
+  root.innerHTML = `${DUSK_BG}<div class="tc-wrap"><div class="tc-brand"><div class="brand-mark">◷</div><strong>StudyFlow</strong></div><div class="tc-results-head tc-anim"><div class="eyebrow">Your study profile is ready</div><h1>Your Study Technique Profile</h1><p class="lede">These techniques may work particularly well for you — nothing here is the only way to study.</p></div>${ranked
+    .map((r, i) => {
+      const sig = (tc.signals || {})[r.id]
+      const qshort =
+        typeof sig === "number" && TECH_CHECK_QUESTIONS[sig]
+          ? TECH_CHECK_QUESTIONS[sig].short
+          : ""
+      return `<div class="card tc-card tc-rank tc-anim"><div class="section-row"><span class="tc-ranknum">0${i + 1}</span><span class="tag">${label(i)}</span></div><h2>${esc(r.info[1])}</h2><div class="tc-bar-row"><div class="tc-bar"><i style="width:${r.pct}%"></i></div><strong>${r.pct}% Match</strong></div><p>${esc(TECH_CHECK_WHY[r.id] || "")}</p>${
+        qshort
+          ? `<p class="muted">Strongest signal: your answer about “${esc(qshort)}”.</p>`
+          : ""
+      }<button type="button" class="ghost" data-tc-open="${r.id}">Open the guide</button></div>`
+    })
+    .join("")}${
+    rest.length
+      ? `<div class="card tc-card"><h2>Your full ranking</h2><p class="muted">Explore any of these whenever you like — nothing is locked.</p>${rest.map((r) => `<div class="tc-row"><span class="tc-row-icon">${r.info[2]}</span><span class="tc-row-name">${esc(r.info[1])}</span><span class="tc-bar small"><i style="width:${r.pct}%"></i></span><strong>${r.pct}%</strong><button type="button" class="ghost" data-tc-open="${r.id}">Open</button></div>`).join("")}</div>`
+      : ""
+  }<div class="tc-actions tc-anim"><button type="button" class="primary" data-tc-use>Start using these techniques</button><button type="button" class="ghost" data-tc-retake>Retake</button></div><p class="muted" style="text-align:center">Checked ${
+    tc.date ? new Date(tc.date).toLocaleDateString() : "just now"
+  } · saved to your account</p></div>`
   $$("[data-tc-open]", root).forEach(
     (b) =>
       (b.onclick = () => {
-        const id = b.dataset.tcOpen;
-        if (!techInfo(id)) return;
-        tcSession = null;
-        state.tab = "techniques";
-        activeTechnique = id;
-        persist();
-        if (techCheckReturn === "settings") shell();
+        const id = b.dataset.tcOpen
+        if (!techInfo(id)) return
+        tcSession = null
+        state.tab = "techniques"
+        activeTechnique = id
+        persist()
+        if (techCheckReturn === "settings") shell()
         else {
-          state.tab = "techniques";
-          persist();
-          enterApp();
+          state.tab = "techniques"
+          persist()
+          enterApp()
         }
       }),
-  );
-  $("[data-tc-use]", root).onclick = () => exitTechCheck(true);
+  )
+  $("[data-tc-use]", root).onclick = () => exitTechCheck(true)
   $("[data-tc-retake]", root).onclick = () => {
-    tcSession = { step: 0, answers: [] };
-    renderTechCheck();
-  };
+    tcSession = { step: 0, answers: [] }
+    renderTechCheck()
+  }
 }
 
-let activeTechnique = null;
+let activeTechnique = null
 
-let flashView = null;
+let flashView = null
 
-let cornellView = null;
+let cornellView = null
 
-let reviewState = null;
+let reviewState = null
 
-let feynmanView = null;
+let feynmanView = null
 
-let duckView = false;
+let duckView = false
 
-let mindView = null;
+let mindView = null
 
-let quizView = false;
+let quizView = false
 
-let quizState = null;
+let quizState = null
 
-let duckIdx = 0;
+let duckIdx = 0
 // Generation token — bumped on every send/edit/delete/clear. A pending reply's
 // setTimeout checks it before writing, so a retracted answer can never
 // reappear after an edit (the old splice+append race that resurrected it).
-let duckGen = 0;
+let duckGen = 0
 
 const TECH_DETAILS = {
   pomodoro: {
@@ -468,7 +618,15 @@ const TECH_DETAILS = {
   feynman: {
     category: "Memory",
     preset: { focus: 25, short: 5, long: 15 },
-    bestFor: ["mathematics", "calculus", "science", "physics", "languages", "computer", "chemistry"],
+    bestFor: [
+      "mathematics",
+      "calculus",
+      "science",
+      "physics",
+      "languages",
+      "computer",
+      "chemistry",
+    ],
     steps: [
       "Pick one concept you only half-know.",
       "Explain it out loud as if teaching a smart 10-year-old — simple words only.",
@@ -486,7 +644,14 @@ const TECH_DETAILS = {
   spaced: {
     category: "Memory",
     preset: { focus: 20, short: 5, long: 15 },
-    bestFor: ["languages", "vocabulary", "medicine", "anatomy", "formulas", "exams"],
+    bestFor: [
+      "languages",
+      "vocabulary",
+      "medicine",
+      "anatomy",
+      "formulas",
+      "exams",
+    ],
     steps: [
       "Learn a small batch of items (words, formulas, diagrams).",
       "Review after 1 day — recall first, then check.",
@@ -522,7 +687,14 @@ const TECH_DETAILS = {
   mindmap: {
     category: "Planning",
     preset: { focus: 20, short: 5, long: 10 },
-    bestFor: ["writing", "essays", "design", "planning", "brainstorming", "literature"],
+    bestFor: [
+      "writing",
+      "essays",
+      "design",
+      "planning",
+      "brainstorming",
+      "literature",
+    ],
     steps: [
       "Write the central topic in the middle of the page.",
       "Branch out 4–7 main ideas, one keyword each.",
@@ -594,7 +766,14 @@ const TECH_DETAILS = {
   duck: {
     category: "Focus sprints",
     preset: { focus: 15, short: 5, long: 10 },
-    bestFor: ["computer", "web", "programming", "code", "debugging", "mathematics"],
+    bestFor: [
+      "computer",
+      "web",
+      "programming",
+      "code",
+      "debugging",
+      "mathematics",
+    ],
     steps: [
       "State the problem out loud in one plain sentence.",
       "Walk through your work step by step, explaining each one to the duck.",
@@ -609,37 +788,41 @@ const TECH_DETAILS = {
       "Having no duck: use a mug, a pet, a voice memo. Anything that listens.",
     ],
   },
-};
+}
 
 function matchTech(details) {
   const interests = (state.profile.subjects || [])
-    .map((s) => String(s || "").toLowerCase().trim())
-    .filter(Boolean);
-  if (!interests.length) return null;
-  if (details.universal) return ["general focus"];
-  const keys = (details.bestFor || []).join(" ").toLowerCase();
+    .map((s) =>
+      String(s || "")
+        .toLowerCase()
+        .trim(),
+    )
+    .filter(Boolean)
+  if (!interests.length) return null
+  if (details.universal) return ["general focus"]
+  const keys = (details.bestFor || []).join(" ").toLowerCase()
   const hits = interests.filter(
     (interest) =>
       keys.includes(interest) ||
       interest
         .split(/\s+/)
         .some((word) => word.length > 2 && keys.includes(word)),
-  );
-  return hits.length ? hits : null;
+  )
+  return hits.length ? hits : null
 }
 
 function renderTechniques() {
-  const t = $("#tab-techniques");
-  if (flashView) return renderFlash(t);
-  if (cornellView) return renderCornell(t);
-  if (feynmanView) return renderFeynman(t);
-  if (duckView) return renderDuck(t);
-  if (mindView) return renderMind(t);
-  if (quizView) return renderQuiz(t);
-  if (activeTechnique) return renderTechDetail(t, activeTechnique);
-  const filters = ["All", "Memory", "Planning", "Focus sprints"];
-  const activeFilter = state.techFilter || "All";
-  const favs = techniques.filter((x) => state.favorites.includes(x[0]));
+  const t = $("#tab-techniques")
+  if (flashView) return renderFlash(t)
+  if (cornellView) return renderCornell(t)
+  if (feynmanView) return renderFeynman(t)
+  if (duckView) return renderDuck(t)
+  if (mindView) return renderMind(t)
+  if (quizView) return renderQuiz(t)
+  if (activeTechnique) return renderTechDetail(t, activeTechnique)
+  const filters = ["All", "Memory", "Planning", "Focus sprints"]
+  const activeFilter = state.techFilter || "All"
+  const favs = techniques.filter((x) => state.favorites.includes(x[0]))
   const matchTop =
     state.techCheck && state.techCheck.done
       ? (state.techCheck.top || [])
@@ -648,183 +831,252 @@ function renderTechniques() {
             pct: (state.techCheck.scores || {})[id] || 0,
           }))
           .filter((m) => techniques.some((y) => y[0] === m.id))
-      : [];
+      : []
   const recs = techniques
     .map((x) => ({ id: x[0], hits: matchTech(TECH_DETAILS[x[0]] || {}) }))
     .filter((x) => x.hits)
-    .slice(0, 3);
-  t.innerHTML = `${viewHead("Study techniques", "Nine practical methods for understanding more, remembering longer, and studying with less friction. Tap any card for the full guide.")}${matchTop.length ? `<div class="card" id="tech-match" style="margin-bottom:18px"><div class="section-row"><h2>Recommended for you</h2><span class="tag">your check</span></div><div class="grid three">${matchTop.map((m) => techCard(techniques.find((y) => y[0] === m.id), `Matches you ${m.pct}% · retake anytime in Settings`)).join("")}</div></div>` : ""}${recs.length ? `<div class="card" id="tech-rec" style="margin-bottom:18px"><div class="section-row"><h2>Matched to your subjects</h2><span class="tag">for you</span></div><div class="grid three">${recs.map((r) => techCard(techniques.find((y) => y[0] === r.id), `Matches your interest in ${esc(r.hits.slice(0, 2).join(", "))}`)).join("")}</div></div>` : ""}${favs.length ? `<div class="card" id="tech-favs" style="margin-bottom:18px"><div class="section-row"><h2>My techniques</h2><span class="tag">${favs.length} saved</span></div><div class="grid three">${favs.map((x) => techCard(x)).join("")}</div></div>` : ""}<div class="input-row" style="margin-bottom:12px"><input class="input" id="tech-search" placeholder="Search techniques..." aria-label="Search techniques" value="${esc(state.techSearch || "")}"></div><div class="card quiz-entry" data-quiz-open style="cursor:pointer;margin-bottom:18px"><div class="section-row"><h2>Which technique fits me?</h2><span class="tag">quiz</span></div><p class="muted">3 playful questions → your perfect method plus its timer preset.</p></div><div class="filter-bar">${filters.map((f) => `<button type="button" class="filter ${activeFilter === f ? "active" : ""}" data-tech-filter="${f}">${f}</button>`).join("")}</div><div class="grid three" id="tech-grid"></div>`;
+    .slice(0, 3)
+  t.innerHTML = `${viewHead("Study techniques", "Nine practical methods for understanding more, remembering longer, and studying with less friction. Tap any card for the full guide.")}${
+    matchTop.length
+      ? `<div class="card" id="tech-match" style="margin-bottom:18px"><div class="section-row"><h2>Recommended for you</h2><span class="tag">your check</span></div><div class="grid three">${matchTop
+          .map((m) =>
+            techCard(
+              techniques.find((y) => y[0] === m.id),
+              `Matches you ${m.pct}% · retake anytime in Settings`,
+            ),
+          )
+          .join("")}</div></div>`
+      : ""
+  }${
+    recs.length
+      ? `<div class="card" id="tech-rec" style="margin-bottom:18px"><div class="section-row"><h2>Matched to your subjects</h2><span class="tag">for you</span></div><div class="grid three">${recs
+          .map((r) =>
+            techCard(
+              techniques.find((y) => y[0] === r.id),
+              `Matches your interest in ${esc(r.hits.slice(0, 2).join(", "))}`,
+            ),
+          )
+          .join("")}</div></div>`
+      : ""
+  }${
+    favs.length
+      ? `<div class="card" id="tech-favs" style="margin-bottom:18px"><div class="section-row"><h2>My techniques</h2><span class="tag">${favs.length} saved</span></div><div class="grid three">${favs.map((x) => techCard(x)).join("")}</div></div>`
+      : ""
+  }<div class="input-row" style="margin-bottom:12px"><input class="input" id="tech-search" placeholder="Search techniques..." aria-label="Search techniques" value="${esc(state.techSearch || "")}"></div><div class="card quiz-entry" data-quiz-open style="cursor:pointer;margin-bottom:18px"><div class="section-row"><h2>Which technique fits me?</h2><span class="tag">quiz</span></div><p class="muted">3 playful questions → your perfect method plus its timer preset.</p></div><div class="filter-bar">${filters.map((f) => `<button type="button" class="filter ${activeFilter === f ? "active" : ""}" data-tech-filter="${f}">${f}</button>`).join("")}</div><div class="grid three" id="tech-grid"></div>`
   $("#tech-search", t).oninput = (e) => {
-    state.techSearch = e.target.value;
-    renderTechGrid();
-  };
+    state.techSearch = e.target.value
+    renderTechGrid()
+  }
   $$("[data-tech-filter]", t).forEach(
     (b) =>
       (b.onclick = () => {
-        state.techFilter = b.dataset.techFilter;
+        state.techFilter = b.dataset.techFilter
         $$("[data-tech-filter]", t).forEach((x) =>
           x.classList.toggle("active", x === b),
-        );
-        renderTechGrid();
+        )
+        renderTechGrid()
       }),
-  );
-  const quizEntry = $("[data-quiz-open]", t);
+  )
+  const quizEntry = $("[data-quiz-open]", t)
   if (quizEntry)
     quizEntry.onclick = () => {
-      flashView = null;
-      cornellView = null;
-      feynmanView = null;
-      duckView = false;
-      mindView = null;
-      activeTechnique = null;
-      quizView = true;
-      quizState = null;
-      renderTechniques();
-    };
-  renderTechGrid();
-  ["#tech-rec", "#tech-favs", "#tech-match"].forEach((sel) => {
-    const section = $(sel, t);
-    if (section) bindTechRegion(section);
-  });
+      flashView = null
+      cornellView = null
+      feynmanView = null
+      duckView = false
+      mindView = null
+      activeTechnique = null
+      quizView = true
+      quizState = null
+      renderTechniques()
+    }
+  renderTechGrid()
+  ;["#tech-rec", "#tech-favs", "#tech-match"].forEach((sel) => {
+    const section = $(sel, t)
+    if (section) bindTechRegion(section)
+  })
 }
 
 function techCard(x, reason) {
-  const uses = (state.techUses || {})[x[0]] || 0;
-  return `<article class="card tech-card" data-tech="${x[0]}" style="cursor:pointer"><div class="emoji">${x[2]} ${iconStar(x[0])}</div><h3>${x[1]}</h3><span class="tag">${x[3]}</span>${reason ? `<div class="match-reason" style="margin:10px 0 0">${reason}</div>` : ""}<p class="muted" style="margin-top:14px">${x[5]}</p><div class="muted mono">${x[4]}${uses ? ` · Used ${uses}×` : ""}${x[0] === "spaced" && totalDue() ? ` · ${totalDue()} due` : ""}</div><div class="tech-open">Open guide →</div></article>`;
+  const uses = (state.techUses || {})[x[0]] || 0
+  return `<article class="card tech-card" data-tech="${x[0]}" style="cursor:pointer"><div class="emoji">${x[2]} ${iconStar(x[0])}</div><h3>${x[1]}</h3><span class="tag">${x[3]}</span>${
+    reason
+      ? `<div class="match-reason" style="margin:10px 0 0">${reason}</div>`
+      : ""
+  }<p class="muted" style="margin-top:14px">${x[5]}</p><div class="muted mono">${x[4]}${
+    uses ? ` · Used ${uses}×` : ""
+  }${
+    x[0] === "spaced" && totalDue() ? ` · ${totalDue()} due` : ""
+  }</div><div class="tech-open">Open guide →</div></article>`
 }
 
 function renderTechGrid() {
-  const grid = $("#tech-grid");
-  if (!grid) return;
-  const activeFilter = state.techFilter || "All";
-  const query = (state.techSearch || "").toLowerCase().trim();
+  const grid = $("#tech-grid")
+  if (!grid) return
+  const activeFilter = state.techFilter || "All"
+  const query = (state.techSearch || "").toLowerCase().trim()
   const list = techniques.filter((x) => {
-    const details = TECH_DETAILS[x[0]] || {};
-    if (activeFilter !== "All" && details.category !== activeFilter) return false;
-    if (!query) return true;
-    return `${x[1]} ${x[3]} ${x[5]}`.toLowerCase().includes(query);
-  });
+    const details = TECH_DETAILS[x[0]] || {}
+    if (activeFilter !== "All" && details.category !== activeFilter)
+      return false
+    if (!query) return true
+    return `${x[1]} ${x[3]} ${x[5]}`.toLowerCase().includes(query)
+  })
   grid.innerHTML =
     list.map((x) => techCard(x)).join("") ||
-    '<p class="muted">No techniques match. Try another search or filter.</p>';
-  bindTechRegion(grid);
+    '<p class="muted">No techniques match. Try another search or filter.</p>'
+  bindTechRegion(grid)
 }
 
 function openTechniqueGuide(id) {
-  if (!techInfo(id)) return;
-  flashView = null;
-  cornellView = null;
-  feynmanView = null;
-  duckView = false;
-  mindView = null;
-  quizView = false;
-  activeTechnique = id;
-  state.tab = "techniques";
-  persist();
-  shell();
+  if (!techInfo(id)) return
+  flashView = null
+  cornellView = null
+  feynmanView = null
+  duckView = false
+  mindView = null
+  quizView = false
+  activeTechnique = id
+  state.tab = "techniques"
+  persist()
+  shell()
   try {
-    window.scrollTo(0, 0);
+    window.scrollTo(0, 0)
   } catch {
     /* ignore */
   }
 }
-function bindTechRegion(root) {  $$("[data-tech]", root).forEach(
+function bindTechRegion(root) {
+  $$("[data-tech]", root).forEach(
     (card) =>
       (card.onclick = () => {
-        flashView = null;
-        cornellView = null;
-        feynmanView = null;
-        duckView = false;
-        mindView = null;
-        quizView = false;
-        activeTechnique = card.dataset.tech;
-        renderTechniques();
+        flashView = null
+        cornellView = null
+        feynmanView = null
+        duckView = false
+        mindView = null
+        quizView = false
+        activeTechnique = card.dataset.tech
+        renderTechniques()
       }),
-  );
-  bindFavorites(root);
+  )
+  bindFavorites(root)
 }
 
 function renderTechDetail(t, id) {
-  const x = techniques.find((y) => y[0] === id);
-  const details = TECH_DETAILS[id] || {};
+  const x = techniques.find((y) => y[0] === id)
+  const details = TECH_DETAILS[id] || {}
   if (!x) {
-    activeTechnique = null;
-    return renderTechniques();
+    activeTechnique = null
+    return renderTechniques()
   }
-  const preset = details.preset || { focus: 25, short: 5, long: 15 };
-  const uses = (state.techUses || {})[id] || 0;
-  const completed = (state.techStats || {})[id] || 0;
-  const fav = state.favorites.includes(id);
+  const preset = details.preset || { focus: 25, short: 5, long: 15 }
+  const uses = (state.techUses || {})[id] || 0
+  const completed = (state.techStats || {})[id] || 0
+  const fav = state.favorites.includes(id)
   // Highlight pulse for guides opened from elsewhere (e.g. "Read & try it" on
   // the Focus desk) — drawn once, purely cosmetic.
-  const highlight = !window.__sfTechDrawn ? " tech-arrive" : "";
-  window.__sfTechDrawn = true;
-  t.innerHTML = `<button type="button" class="ghost tech-back" data-tech-back>← All techniques</button><div class="page-head${highlight}"><div><div class="eyebrow">StudyFlow / Techniques / Guide</div><h1>${x[2]} ${x[1]}</h1><p class="lede">${x[3]} · ${x[4]}${uses ? ` · Used ${uses}×` : ""}${completed ? ` · Completed ${completed}×` : ""}${(state.techTime || {})[id] ? ` · ${fmtDur(state.techTime[id])} focused` : ""}</p></div><button type="button" class="favorite ${fav ? "on" : ""}" data-fav="${id}" title="Favorite" style="font-size:26px">${fav ? sicon("star") : sicon("starOutline")}</button></div><div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Best session</h2><span class="tag">Focus ${preset.focus} · Break ${preset.short} · Long ${preset.long}</span></div><p class="muted">Read through the guide below, then one tap configures your Focus desk for this technique. You can fine-tune it anytime in Settings.</p><button type="button" class="primary" data-tech-use style="margin-top:12px">Set up my timer</button></div>${id === "spaced" ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Flashcards</h2>${totalDue() ? `<span class="tag">${totalDue()} due</span>` : ""}</div><p class="muted">Decks with smart review timing live here — missed cards return soon, nailed cards wait longer.</p><button type="button" class="primary" data-studio-flash style="margin-top:12px">Open flashcards</button></div>` : ""}${id === "cornell" ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Cornell pad</h2></div><p class="muted">A real cues–notes–summary writing surface. Everything saves as you type.</p><button type="button" class="primary" data-studio-cornell style="margin-top:12px">Open Cornell pad</button></div>` : ""}${id === "feynman" ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Feynman pad</h2></div><p class="muted">Explain it simply, get a plainness score, and check off the simplicity list.</p><button type="button" class="primary" data-studio-feynman style="margin-top:12px">Open Feynman pad</button></div>` : ""}${id === "duck" ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Duck chat</h2></div><p class="muted">Talk your problem out with the duck. It asks; you discover.</p><button type="button" class="primary" data-studio-duck style="margin-top:12px">Open Duck chat</button></div>` : ""}${id === "mindmap" ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Mind-map canvas</h2></div><p class="muted">Branch your central idea outward on a living canvas.</p><button type="button" class="primary" data-studio-mind style="margin-top:12px">Open canvas</button></div>` : ""}<div class="card" style="margin-bottom:18px"><h2>How it works</h2><ol class="detail-steps">${(details.steps || []).map((s) => `<li>${esc(s)}</li>`).join("")}</ol></div><div class="grid two"><div class="card"><h2>When to use it</h2><p class="muted" style="margin-top:10px">${esc(details.when || "")}</p></div><div class="card"><h2>Common mistakes</h2><ul class="detail-mistakes">${(details.mistakes || []).map((m) => `<li>${esc(m)}</li>`).join("")}</ul></div></div>`;
+  const highlight = !window.__sfTechDrawn ? " tech-arrive" : ""
+  window.__sfTechDrawn = true
+  t.innerHTML = `<button type="button" class="ghost tech-back" data-tech-back>← All techniques</button><div class="page-head${highlight}"><div><div class="eyebrow">StudyFlow / Techniques / Guide</div><h1>${x[2]} ${x[1]}</h1><p class="lede">${x[3]} · ${x[4]}${
+    uses ? ` · Used ${uses}×` : ""
+  }${completed ? ` · Completed ${completed}×` : ""}${
+    (state.techTime || {})[id] ? ` · ${fmtDur(state.techTime[id])} focused` : ""
+  }</p></div><button type="button" class="favorite ${
+    fav ? "on" : ""
+  }" data-fav="${id}" title="Favorite" style="font-size:26px">${
+    fav ? sicon("star") : sicon("starOutline")
+  }</button></div><div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Best session</h2><span class="tag">Focus ${preset.focus} · Break ${preset.short} · Long ${preset.long}</span></div><p class="muted">Read through the guide below, then one tap configures your Focus desk for this technique. You can fine-tune it anytime in Settings.</p><button type="button" class="primary" data-tech-use style="margin-top:12px">Set up my timer</button></div>${
+    id === "spaced"
+      ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Flashcards</h2>${
+          totalDue() ? `<span class="tag">${totalDue()} due</span>` : ""
+        }</div><p class="muted">Decks with smart review timing live here — missed cards return soon, nailed cards wait longer.</p><button type="button" class="primary" data-studio-flash style="margin-top:12px">Open flashcards</button></div>`
+      : ""
+  }${
+    id === "cornell"
+      ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Cornell pad</h2></div><p class="muted">A real cues–notes–summary writing surface. Everything saves as you type.</p><button type="button" class="primary" data-studio-cornell style="margin-top:12px">Open Cornell pad</button></div>`
+      : ""
+  }${
+    id === "feynman"
+      ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Feynman pad</h2></div><p class="muted">Explain it simply, get a plainness score, and check off the simplicity list.</p><button type="button" class="primary" data-studio-feynman style="margin-top:12px">Open Feynman pad</button></div>`
+      : ""
+  }${
+    id === "duck"
+      ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Duck chat</h2></div><p class="muted">Talk your problem out with the duck. It asks; you discover.</p><button type="button" class="primary" data-studio-duck style="margin-top:12px">Open Duck chat</button></div>`
+      : ""
+  }${
+    id === "mindmap"
+      ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Mind-map canvas</h2></div><p class="muted">Branch your central idea outward on a living canvas.</p><button type="button" class="primary" data-studio-mind style="margin-top:12px">Open canvas</button></div>`
+      : ""
+  }<div class="card" style="margin-bottom:18px"><h2>How it works</h2><ol class="detail-steps">${(details.steps || []).map((s) => `<li>${esc(s)}</li>`).join("")}</ol></div><div class="grid two"><div class="card"><h2>When to use it</h2><p class="muted" style="margin-top:10px">${esc(details.when || "")}</p></div><div class="card"><h2>Common mistakes</h2><ul class="detail-mistakes">${(details.mistakes || []).map((m) => `<li>${esc(m)}</li>`).join("")}</ul></div></div>`
   $("[data-tech-back]", t).onclick = () => {
-    activeTechnique = null;
-    renderTechniques();
-  };
-  bindFavorites(t);
-  $("[data-tech-use]", t).onclick = () => applyTechPreset(id);
-  const openFlash = $("[data-studio-flash]", t);
+    activeTechnique = null
+    renderTechniques()
+  }
+  bindFavorites(t)
+  $("[data-tech-use]", t).onclick = () => applyTechPreset(id)
+  const openFlash = $("[data-studio-flash]", t)
   if (openFlash)
     openFlash.onclick = () => {
-      flashView = "list";
-      renderTechniques();
-    };
-  const openCornell = $("[data-studio-cornell]", t);
+      flashView = "list"
+      renderTechniques()
+    }
+  const openCornell = $("[data-studio-cornell]", t)
   if (openCornell)
     openCornell.onclick = () => {
-      cornellView = "list";
-      renderTechniques();
-    };
-  const openFeynman = $("[data-studio-feynman]", t);
+      cornellView = "list"
+      renderTechniques()
+    }
+  const openFeynman = $("[data-studio-feynman]", t)
   if (openFeynman)
     openFeynman.onclick = () => {
-      feynmanView = "list";
-      renderTechniques();
-    };
-  const openDuck = $("[data-studio-duck]", t);
+      feynmanView = "list"
+      renderTechniques()
+    }
+  const openDuck = $("[data-studio-duck]", t)
   if (openDuck)
     openDuck.onclick = () => {
-      duckView = true;
-      renderTechniques();
-    };
-  const openMind = $("[data-studio-mind]", t);
+      duckView = true
+      renderTechniques()
+    }
+  const openMind = $("[data-studio-mind]", t)
   if (openMind)
     openMind.onclick = () => {
-      mindView = "list";
-      renderTechniques();
-    };
+      mindView = "list"
+      renderTechniques()
+    }
 }
 
 function applyTechPreset(id) {
-  const details = TECH_DETAILS[id] || {};
-  const preset = details.preset || { focus: 25, short: 5, long: 15 };
+  const details = TECH_DETAILS[id] || {}
+  const preset = details.preset || { focus: 25, short: 5, long: 15 }
   if (sessionInProgress()) {
-    notify("A session is in progress — reset it before switching techniques.");
-    return;
+    notify("A session is in progress — reset it before switching techniques.")
+    return
   }
   const clamp = (v, fb) =>
-    Number.isFinite(+v) ? Math.min(180, Math.max(1, +v)) : fb;
+    Number.isFinite(+v) ? Math.min(180, Math.max(1, +v)) : fb
   state.timerMinutes = {
     focus: clamp(preset.focus, 25),
     short: clamp(preset.short, 5),
     long: clamp(preset.long, 15),
-  };
+  }
   // Technique presets are whole-minute durations.
-  state.timerSeconds = { focus: 0, short: 0, long: 0 };
-  applyDurations();
-  state.mode = "focus";
-  state.time = durations.focus;
-  state.sessionDuration = durations.focus;
-  state.running = false;
-  state.endsAt = null;
-  const firstUse = ((state.techUses || {})[id] || 0) === 0;
-  state.techUses = { ...(state.techUses || {}), [id]: ((state.techUses || {})[id] || 0) + 1 };
-  state.sessionTech = id;
-  persist();
-  mirrorTechniqueUsage();
+  state.timerSeconds = { focus: 0, short: 0, long: 0 }
+  applyDurations()
+  state.mode = "focus"
+  state.time = durations.focus
+  state.sessionDuration = durations.focus
+  state.running = false
+  state.endsAt = null
+  const firstUse = ((state.techUses || {})[id] || 0) === 0
+  state.techUses = {
+    ...(state.techUses || {}),
+    [id]: ((state.techUses || {})[id] || 0) + 1,
+  }
+  state.sessionTech = id
+  persist()
+  mirrorTechniqueUsage()
   // First try of a technique pays once (idempotent per technique).
   if (firstUse) {
     try {
@@ -833,26 +1085,26 @@ function applyTechPreset(id) {
         reason: "Technique explored",
         refKey: `technique:${id}`,
         metadata: { technique: id },
-      }).catch(() => {});
+      }).catch(() => {})
     } catch {
       /* reward is best-effort */
     }
   }
-  activeTechnique = null;
-  state.tab = "timer";
-  shell();
-  notify("Timer set — press Start when ready");
+  activeTechnique = null
+  state.tab = "timer"
+  shell()
+  notify("Timer set — press Start when ready")
 }
 
-const BOX_DAYS = [1, 3, 7, 14, 30];
+const BOX_DAYS = [1, 3, 7, 14, 30]
 
 function deckDue(deck) {
-  const now = Date.now();
-  return (deck.cards || []).filter((c) => !c.nextDue || c.nextDue <= now);
+  const now = Date.now()
+  return (deck.cards || []).filter((c) => !c.nextDue || c.nextDue <= now)
 }
 
 function totalDue() {
-  return (state.decks || []).reduce((n, d) => n + deckDue(d).length, 0);
+  return (state.decks || []).reduce((n, d) => n + deckDue(d).length, 0)
 }
 
 // Auto-fit long titles (the alternative to wrapping): shrink the type until it
@@ -860,147 +1112,188 @@ function totalDue() {
 // global word-wrap rules — card titles stay on one line, at any length.
 function fitTitles(root = document) {
   root.querySelectorAll("[data-fittitle]").forEach((el) => {
-    el.style.fontSize = "";
-    el.style.textOverflow = "";
-    el.removeAttribute("title");
-    if (!el.clientWidth) return; // hidden — natural wrapping applies
-    el.classList.add("fitted");
-    if (el.scrollWidth <= el.clientWidth + 1) return; // fits as-is
-    let size = parseFloat(getComputedStyle(el).fontSize) || 15;
-    const floor = Math.max(11, size * 0.7);
+    el.style.fontSize = ""
+    el.style.textOverflow = ""
+    el.removeAttribute("title")
+    if (!el.clientWidth) return // hidden — natural wrapping applies
+    el.classList.add("fitted")
+    if (el.scrollWidth <= el.clientWidth + 1) return // fits as-is
+    let size = parseFloat(getComputedStyle(el).fontSize) || 15
+    const floor = Math.max(11, size * 0.7)
     while (size > floor && el.scrollWidth > el.clientWidth + 1) {
-      size -= 1;
-      el.style.fontSize = size + "px";
+      size -= 1
+      el.style.fontSize = size + "px"
     }
     if (el.scrollWidth > el.clientWidth + 1) {
-      el.style.textOverflow = "ellipsis";
-      el.setAttribute("title", el.textContent);
+      el.style.textOverflow = "ellipsis"
+      el.setAttribute("title", el.textContent)
     }
-  });
+  })
 }
 
-let deckEditId = null;
-let cardEditId = null;
+let deckEditId = null
+let cardEditId = null
 
 function findDeck(deckId) {
-  return (state.decks || []).find((d) => d.id === deckId);
+  return (state.decks || []).find((d) => d.id === deckId)
 }
 
 function renderFlash(t) {
-  if (flashView === "list") return renderDeckList(t);
+  if (flashView === "list") return renderDeckList(t)
   if (flashView && flashView.startsWith("deck:"))
-    return renderDeckDetail(t, flashView.slice(5));
+    return renderDeckDetail(t, flashView.slice(5))
   if (flashView && flashView.startsWith("review:"))
-    return renderReview(t, flashView.slice(7));
-  flashView = "list";
-  return renderDeckList(t);
+    return renderReview(t, flashView.slice(7))
+  flashView = "list"
+  return renderDeckList(t)
 }
 
 function renderDeckList(t) {
-  const decks = state.decks || [];
-  t.innerHTML = `<button type="button" class="ghost tech-back" data-flash-back>← Spaced guide</button>${viewHead("Flashcards", "Small decks, reviewed at the perfect moment. Miss one and it comes back soon; nail one and it waits longer — and practice mode lets you review any deck as often as you like.")}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>New deck</h2></div><div class="grid two"><input class="input" id="deck-name" placeholder="Deck name, e.g. Biology terms"><input class="input" id="deck-subject" placeholder="Subject (optional)"></div><button type="button" class="primary" id="deck-create" style="margin-top:12px">Create deck</button></div><div class="grid three">${decks.map((d) => { const due = deckDue(d).length; const total = (d.cards || []).length; return `<article class="card" data-deck="${d.id}" style="cursor:pointer"><div class="section-row"><h3 data-fittitle>${esc(d.name)}</h3>${due ? `<span class="tag">${due} due</span>` : `<span class="tag">clear</span>`}</div><p class="muted" style="margin-top:8px">${esc(d.subject || "General")} · ${total} card${total === 1 ? "" : "s"}</p><div class="tech-open">Open deck →</div><button type="button" class="delete deck-list-del" data-deck-delete="${d.id}" title="Delete deck" aria-label="Delete ${esc(d.name)}">×</button></article>`; }).join("") || '<p class="muted">No decks yet — create your first one above.</p>'}</div>`;
-  fitTitles(t);
+  const decks = state.decks || []
+  t.innerHTML = `<button type="button" class="ghost tech-back" data-flash-back>← Spaced guide</button>${viewHead("Flashcards", "Small decks, reviewed at the perfect moment. Miss one and it comes back soon; nail one and it waits longer — and practice mode lets you review any deck as often as you like.")}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>New deck</h2></div><div class="grid two"><input class="input" id="deck-name" placeholder="Deck name, e.g. Biology terms"><input class="input" id="deck-subject" placeholder="Subject (optional)"></div><button type="button" class="primary" id="deck-create" style="margin-top:12px">Create deck</button></div><div class="grid three">${
+    decks
+      .map((d) => {
+        const due = deckDue(d).length
+        const total = (d.cards || []).length
+        return `<article class="card" data-deck="${d.id}" style="cursor:pointer"><div class="section-row"><h3 data-fittitle>${esc(d.name)}</h3>${
+          due
+            ? `<span class="tag">${due} due</span>`
+            : `<span class="tag">clear</span>`
+        }</div><p class="muted" style="margin-top:8px">${esc(d.subject || "General")} · ${total} card${
+          total === 1 ? "" : "s"
+        }</p><div class="tech-open">Open deck →</div><button type="button" class="delete deck-list-del" data-deck-delete="${d.id}" title="Delete deck" aria-label="Delete ${esc(d.name)}">×</button></article>`
+      })
+      .join("") ||
+    '<p class="muted">No decks yet — create your first one above.</p>'
+  }</div>`
+  fitTitles(t)
   $("[data-flash-back]", t).onclick = () => {
-    flashView = null;
-    renderTechniques();
-  };
+    flashView = null
+    renderTechniques()
+  }
   $("#deck-create", t).onclick = () => {
-    if (!requireAuth("save flashcard decks")) return;
-    const name = $("#deck-name", t).value.trim();
-    if (!name) return notify("Name your deck first");
+    if (!requireAuth("save flashcard decks")) return
+    const name = $("#deck-name", t).value.trim()
+    if (!name) return notify("Name your deck first")
     state.decks.push({
       id: uid(),
       name,
       subject: $("#deck-subject", t).value.trim(),
       created: Date.now(),
       cards: [],
-    });
-    persist();
-    renderDeckList(t);
-  };
+    })
+    persist()
+    renderDeckList(t)
+  }
   $$("[data-deck]", t).forEach(
     (card) =>
       (card.onclick = (e) => {
-        if (e.target.closest("[data-deck-delete]")) return;
-        flashView = "deck:" + card.dataset.deck;
-        renderFlash(t);
+        if (e.target.closest("[data-deck-delete]")) return
+        flashView = "deck:" + card.dataset.deck
+        renderFlash(t)
       }),
-  );
+  )
   $$("[data-deck-delete]", t).forEach(
     (b) =>
       (b.onclick = (e) => {
-        e.stopPropagation();
-        const deck = findDeck(b.dataset.deckDelete);
-        confirmBox(`Delete “${deck?.name || "deck"}”?`, "The deck and all its cards will be gone.", () => {
-          state.decks = state.decks.filter((d) => d.id !== b.dataset.deckDelete);
-          persist();
-          notify("Deck deleted");
-          renderDeckList(t);
-        });
+        e.stopPropagation()
+        const deck = findDeck(b.dataset.deckDelete)
+        confirmBox(
+          `Delete “${deck?.name || "deck"}”?`,
+          "The deck and all its cards will be gone.",
+          () => {
+            state.decks = state.decks.filter(
+              (d) => d.id !== b.dataset.deckDelete,
+            )
+            persist()
+            notify("Deck deleted")
+            renderDeckList(t)
+          },
+        )
       }),
-  );
+  )
 }
 
 function renderDeckDetail(t, deckId) {
-  const deck = findDeck(deckId);
+  const deck = findDeck(deckId)
   if (!deck) {
-    flashView = "list";
-    return renderFlash(t);
+    flashView = "list"
+    return renderFlash(t)
   }
-  const cards = deck.cards || [];
-  const due = deckDue(deck).length;
-  t.innerHTML = `<button type="button" class="ghost tech-back" data-deck-back>← All decks</button>${viewHead(deck.name, `${esc(deck.subject || "General")} · ${cards.length} cards · ${due} due for review. Review any card as often as you like — the schedule is a guide, not a lock.`)}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Review</h2>${due ? `<span class="tag">${due} due</span>` : ""}</div><p class="muted">Smart session covers what the schedule says is due. Practice mode runs the whole deck — as many times as you want.</p><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button type="button" class="primary" data-review-start${due ? "" : " disabled"}>Smart session${due ? ` (${due})` : ""}</button><button type="button" class="ghost" data-review-all${cards.length ? "" : " disabled"}>Practice all (${cards.length})</button><button type="button" class="ghost" data-deck-rename>Rename deck</button><button type="button" class="delete" data-deck-delete>Delete deck</button></div></div>${deckEditId === deckId ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Rename deck</h2></div><div class="input-row"><input class="input" id="deck-rename-name" value="${esc(deck.name)}" maxlength="120" aria-label="Deck name"><input class="input" id="deck-rename-subject" value="${esc(deck.subject || "")}" maxlength="120" placeholder="Subject (optional)"></div><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button type="button" class="primary" id="deck-rename-save">Save</button><button type="button" class="ghost" data-deck-rename-cancel>Cancel</button></div></div>` : ""}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Add a card</h2></div><div class="grid two"><input class="input" id="card-front" placeholder="Front — question or term"><input class="input" id="card-back" placeholder="Back — answer or definition"></div><button type="button" class="primary" id="card-add" style="margin-top:12px">Add card</button></div><div class="grid">${cards.map((c) => cardEditId === c.id ? `<div class="task"><span class="task-text" style="flex:1;min-width:0"><input class="input" id="card-edit-front" value="${esc(c.front)}" maxlength="500" aria-label="Card front" placeholder="Front"><input class="input" id="card-edit-back" value="${esc(c.back)}" maxlength="500" aria-label="Card back" placeholder="Back" style="margin-top:8px"></span><span style="display:flex;flex-direction:column;gap:6px"><button type="button" class="primary" data-card-save="${c.id}" title="Save card">Save</button><button type="button" class="ghost" data-card-cancel title="Cancel editing">Cancel</button></span></div>` : `<div class="task"><span class="task-text"><strong data-fittitle>${esc(c.front)}</strong><br><span class="muted card-back-preview">${esc(c.back)}</span></span><span class="task-meta">Box ${c.box || 1}${c.nextDue && c.nextDue > Date.now() ? " · rests" : " · due"}</span><span style="display:flex;gap:6px;flex:none"><button type="button" class="icon-btn" data-card-edit="${c.id}" title="Edit card" aria-label="Edit card">${sicon("memo")}</button><button type="button" class="delete" data-card-delete="${c.id}" title="Remove card">×</button></span></div>`).join("") || '<p class="muted">No cards yet — add your first one above.</p>'}</div>`;
-  fitTitles(t);
+  const cards = deck.cards || []
+  const due = deckDue(deck).length
+  t.innerHTML = `<button type="button" class="ghost tech-back" data-deck-back>← All decks</button>${viewHead(deck.name, `${esc(deck.subject || "General")} · ${cards.length} cards · ${due} due for review. Review any card as often as you like — the schedule is a guide, not a lock.`)}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Review</h2>${
+    due ? `<span class="tag">${due} due</span>` : ""
+  }</div><p class="muted">Smart session covers what the schedule says is due. Practice mode runs the whole deck — as many times as you want.</p><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button type="button" class="primary" data-review-start${
+    due ? "" : " disabled"
+  }>Smart session${
+    due ? ` (${due})` : ""
+  }</button><button type="button" class="ghost" data-review-all${
+    cards.length ? "" : " disabled"
+  }>Practice all (${cards.length})</button><button type="button" class="ghost" data-deck-rename>Rename deck</button><button type="button" class="delete" data-deck-delete>Delete deck</button></div></div>${
+    deckEditId === deckId
+      ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Rename deck</h2></div><div class="input-row"><input class="input" id="deck-rename-name" value="${esc(deck.name)}" maxlength="120" aria-label="Deck name"><input class="input" id="deck-rename-subject" value="${esc(deck.subject || "")}" maxlength="120" placeholder="Subject (optional)"></div><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button type="button" class="primary" id="deck-rename-save">Save</button><button type="button" class="ghost" data-deck-rename-cancel>Cancel</button></div></div>`
+      : ""
+  }<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Add a card</h2></div><div class="grid two"><input class="input" id="card-front" placeholder="Front — question or term"><input class="input" id="card-back" placeholder="Back — answer or definition"></div><button type="button" class="primary" id="card-add" style="margin-top:12px">Add card</button></div><div class="grid">${cards.map((c) => (cardEditId === c.id ? `<div class="task"><span class="task-text" style="flex:1;min-width:0"><input class="input" id="card-edit-front" value="${esc(c.front)}" maxlength="500" aria-label="Card front" placeholder="Front"><input class="input" id="card-edit-back" value="${esc(c.back)}" maxlength="500" aria-label="Card back" placeholder="Back" style="margin-top:8px"></span><span style="display:flex;flex-direction:column;gap:6px"><button type="button" class="primary" data-card-save="${c.id}" title="Save card">Save</button><button type="button" class="ghost" data-card-cancel title="Cancel editing">Cancel</button></span></div>` : `<div class="task"><span class="task-text"><strong data-fittitle>${esc(c.front)}</strong><br><span class="muted card-back-preview">${esc(c.back)}</span></span><span class="task-meta">Box ${c.box || 1}${c.nextDue && c.nextDue > Date.now() ? " · rests" : " · due"}</span><span style="display:flex;gap:6px;flex:none"><button type="button" class="icon-btn" data-card-edit="${c.id}" title="Edit card" aria-label="Edit card">${sicon("memo")}</button><button type="button" class="delete" data-card-delete="${c.id}" title="Remove card">×</button></span></div>`)).join("") || '<p class="muted">No cards yet — add your first one above.</p>'}</div>`
+  fitTitles(t)
   $("[data-deck-back]", t).onclick = () => {
-    deckEditId = null;
-    cardEditId = null;
-    flashView = "list";
-    renderFlash(t);
-  };
+    deckEditId = null
+    cardEditId = null
+    flashView = "list"
+    renderFlash(t)
+  }
   $("[data-review-start]", t).onclick = () => {
-    if (!deckDue(deck).length) return;
-    clearReview();
-    reviewState = freshReview(deck, "due");
-    flashView = "review:" + deckId;
-    renderFlash(t);
-  };
+    if (!deckDue(deck).length) return
+    clearReview()
+    reviewState = freshReview(deck, "due")
+    flashView = "review:" + deckId
+    renderFlash(t)
+  }
   $("[data-review-all]", t).onclick = () => {
-    if (!cards.length) return;
-    clearReview();
-    reviewState = freshReview(deck, "all");
-    flashView = "review:" + deckId;
-    renderFlash(t);
-  };
+    if (!cards.length) return
+    clearReview()
+    reviewState = freshReview(deck, "all")
+    flashView = "review:" + deckId
+    renderFlash(t)
+  }
   $("[data-deck-rename]", t).onclick = () => {
-    deckEditId = deckEditId === deckId ? null : deckId;
-    cardEditId = null;
-    renderDeckDetail(t, deckId);
-  };
-  const renameSave = $("#deck-rename-save", t);
+    deckEditId = deckEditId === deckId ? null : deckId
+    cardEditId = null
+    renderDeckDetail(t, deckId)
+  }
+  const renameSave = $("#deck-rename-save", t)
   if (renameSave)
     renameSave.onclick = () => {
-      const name = $("#deck-rename-name", t).value.trim();
-      if (!name) return notify("Deck needs a name");
-      deck.name = name;
-      deck.subject = $("#deck-rename-subject", t).value.trim();
-      deckEditId = null;
-      persist();
-      notify("Deck renamed");
-      renderDeckDetail(t, deckId);
-    };
-  const renameCancel = $("[data-deck-rename-cancel]", t);
-  if (renameCancel) renameCancel.onclick = () => { deckEditId = null; renderDeckDetail(t, deckId); };
+      const name = $("#deck-rename-name", t).value.trim()
+      if (!name) return notify("Deck needs a name")
+      deck.name = name
+      deck.subject = $("#deck-rename-subject", t).value.trim()
+      deckEditId = null
+      persist()
+      notify("Deck renamed")
+      renderDeckDetail(t, deckId)
+    }
+  const renameCancel = $("[data-deck-rename-cancel]", t)
+  if (renameCancel)
+    renameCancel.onclick = () => {
+      deckEditId = null
+      renderDeckDetail(t, deckId)
+    }
   $("[data-deck-delete]", t).onclick = () =>
-    confirmBox(`Delete “${deck.name}”?`, "The deck and all its cards will be gone.", () => {
-      state.decks = state.decks.filter((d) => d.id !== deckId);
-      persist();
-      flashView = "list";
-      renderFlash(t);
-    });
+    confirmBox(
+      `Delete “${deck.name}”?`,
+      "The deck and all its cards will be gone.",
+      () => {
+        state.decks = state.decks.filter((d) => d.id !== deckId)
+        persist()
+        flashView = "list"
+        renderFlash(t)
+      },
+    )
   $("#card-add", t).onclick = () => {
-    const front = $("#card-front", t).value.trim();
-    const back = $("#card-back", t).value.trim();
-    if (!front || !back) return notify("Give the card a front and a back");
+    const front = $("#card-front", t).value.trim()
+    const back = $("#card-back", t).value.trim()
+    if (!front || !back) return notify("Give the card a front and a back")
     deck.cards.push({
       id: uid(),
       front,
@@ -1008,52 +1301,59 @@ function renderDeckDetail(t, deckId) {
       box: 1,
       nextDue: null,
       created: Date.now(),
-    });
-    persist();
-    renderDeckDetail(t, deckId);
-  };
+    })
+    persist()
+    renderDeckDetail(t, deckId)
+  }
   $$("[data-card-edit]", t).forEach(
     (b) =>
       (b.onclick = () => {
-        cardEditId = cardEditId === b.dataset.cardEdit ? null : b.dataset.cardEdit;
-        deckEditId = null;
-        renderDeckDetail(t, deckId);
+        cardEditId =
+          cardEditId === b.dataset.cardEdit ? null : b.dataset.cardEdit
+        deckEditId = null
+        renderDeckDetail(t, deckId)
       }),
-  );
+  )
   $$("[data-card-save]", t).forEach(
     (b) =>
       (b.onclick = () => {
-        const card = deck.cards.find((c) => c.id === b.dataset.cardSave);
-        if (!card) return;
-        const front = $("#card-edit-front", t).value.trim();
-        const back = $("#card-edit-back", t).value.trim();
-        if (!front || !back) return notify("The card needs a front and a back");
-        card.front = front;
-        card.back = back;
-        cardEditId = null;
-        persist();
-        notify("Card updated");
-        renderDeckDetail(t, deckId);
+        const card = deck.cards.find((c) => c.id === b.dataset.cardSave)
+        if (!card) return
+        const front = $("#card-edit-front", t).value.trim()
+        const back = $("#card-edit-back", t).value.trim()
+        if (!front || !back) return notify("The card needs a front and a back")
+        card.front = front
+        card.back = back
+        cardEditId = null
+        persist()
+        notify("Card updated")
+        renderDeckDetail(t, deckId)
       }),
-  );
-  $$("[data-card-cancel]", t).forEach((b) => (b.onclick = () => { cardEditId = null; renderDeckDetail(t, deckId); }));
+  )
+  $$("[data-card-cancel]", t).forEach(
+    (b) =>
+      (b.onclick = () => {
+        cardEditId = null
+        renderDeckDetail(t, deckId)
+      }),
+  )
   $$("[data-card-delete]", t).forEach(
     (b) =>
       (b.onclick = () =>
         confirmBox("Remove this card?", "It will be gone for good.", () => {
-          deck.cards = deck.cards.filter((c) => c.id !== b.dataset.cardDelete);
-          cardEditId = null;
-          persist();
-          renderDeckDetail(t, deckId);
+          deck.cards = deck.cards.filter((c) => c.id !== b.dataset.cardDelete)
+          cardEditId = null
+          persist()
+          renderDeckDetail(t, deckId)
         })),
-  );
+  )
 }
 
 function freshReview(deck, mode = "due") {
   // "due" = the spaced schedule; "all" = practice every card any time,
   // review as often as you like until you delete the deck or card.
-  const source = mode === "all" ? deck.cards || [] : deckDue(deck);
-  const queue = source.map((c) => c.id);
+  const source = mode === "all" ? deck.cards || [] : deckDue(deck)
+  const queue = source.map((c) => c.id)
   return {
     deckId: deck.id,
     mode,
@@ -1063,12 +1363,12 @@ function freshReview(deck, mode = "due") {
     mastered: 0,
     attempts: {},
     reveal: false,
-  };
+  }
 }
 
 function loadReview(deckId) {
   try {
-    const saved = JSON.parse(localStorage.getItem("sf-review") || "null");
+    const saved = JSON.parse(localStorage.getItem("sf-review") || "null")
     if (
       saved &&
       saved.deckId === deckId &&
@@ -1082,143 +1382,152 @@ function loadReview(deckId) {
         mode: "due",
         ...saved,
         reveal: false,
-      };
+      }
     }
   } catch {
     /* ignore */
   }
-  return null;
+  return null
 }
 
 function saveReview() {
   try {
     if (reviewState && reviewState.queue.length)
-      localStorage.setItem("sf-review", JSON.stringify(reviewState));
-    else localStorage.removeItem("sf-review");
+      localStorage.setItem("sf-review", JSON.stringify(reviewState))
+    else localStorage.removeItem("sf-review")
   } catch {
     /* ignore */
   }
 }
 
 function clearReview() {
-  reviewState = null;
+  reviewState = null
   try {
-    localStorage.removeItem("sf-review");
+    localStorage.removeItem("sf-review")
   } catch {
     /* ignore */
   }
 }
 
 function renderReview(t, deckId) {
-  const deck = findDeck(deckId);
+  const deck = findDeck(deckId)
   if (!deck) {
-    flashView = "list";
-    return renderFlash(t);
+    flashView = "list"
+    return renderFlash(t)
   }
   if (!reviewState || reviewState.deckId !== deckId)
-    reviewState = loadReview(deckId) || freshReview(deck);
-  const rs = reviewState;
+    reviewState = loadReview(deckId) || freshReview(deck)
+  const rs = reviewState
   if (!rs.queue.length) {
-    const done = rs.done;
-    const mastered = rs.mastered;
-    const total = rs.total;
-    clearReview();
-    t.innerHTML = `<button type="button" class="ghost tech-back" data-review-back>← ${esc(deck.name)}</button>${viewHead("Review complete", `${mastered} of ${total} mastered${done > mastered ? ` · ${done - mastered} to revisit soon` : ""}. Nice work — consistency is the whole game.`)}<div class="card" style="text-align:center"><div class="complete-emoji">${sicon("medal")}</div><div class="modal-actions" style="justify-content:center;margin-top:14px;flex-wrap:wrap"><button type="button" class="primary" data-review-again>Review again</button><button type="button" class="ghost" data-review-due>Smart session (${deckDue(deck).length} due)</button><button type="button" class="ghost" data-review-back>Back to deck</button></div></div>`;
+    const done = rs.done
+    const mastered = rs.mastered
+    const total = rs.total
+    clearReview()
+    t.innerHTML = `<button type="button" class="ghost tech-back" data-review-back>← ${esc(deck.name)}</button>${viewHead("Review complete", `${mastered} of ${total} mastered${done > mastered ? ` · ${done - mastered} to revisit soon` : ""}. Nice work — consistency is the whole game.`)}<div class="card" style="text-align:center"><div class="complete-emoji">${sicon("medal")}</div><div class="modal-actions" style="justify-content:center;margin-top:14px;flex-wrap:wrap"><button type="button" class="primary" data-review-again>Review again</button><button type="button" class="ghost" data-review-due>Smart session (${deckDue(deck).length} due)</button><button type="button" class="ghost" data-review-back>Back to deck</button></div></div>`
     $$("[data-review-back]", t).forEach(
       (b) =>
         (b.onclick = () => {
-          flashView = "deck:" + deckId;
-          renderFlash(t);
+          flashView = "deck:" + deckId
+          renderFlash(t)
         }),
-    );
-    const again = $("[data-review-again]", t);
+    )
+    const again = $("[data-review-again]", t)
     if (again)
       again.onclick = () => {
-        reviewState = freshReview(deck, "all");
-        saveReview();
-        renderReview(t, deckId);
-      };
-    const dueBtn = $("[data-review-due]", t);
+        reviewState = freshReview(deck, "all")
+        saveReview()
+        renderReview(t, deckId)
+      }
+    const dueBtn = $("[data-review-due]", t)
     if (dueBtn)
       dueBtn.onclick = () => {
-        reviewState = freshReview(deck, "due");
-        saveReview();
-        renderReview(t, deckId);
-      };
-    return;
+        reviewState = freshReview(deck, "due")
+        saveReview()
+        renderReview(t, deckId)
+      }
+    return
   }
-  const card = (deck.cards || []).find((c) => c.id === rs.queue[0]);
+  const card = (deck.cards || []).find((c) => c.id === rs.queue[0])
   if (!card) {
-    rs.queue.shift();
-    return renderReview(t, deckId);
+    rs.queue.shift()
+    return renderReview(t, deckId)
   }
-  t.innerHTML = `<button type="button" class="ghost tech-back" data-review-back>← ${esc(deck.name)}</button>${viewHead("Review", `${esc(deck.subject || "General")} · ${rs.done + 1} of ${rs.total}${rs.mode === "all" ? " · practice mode" : ""}`)}<div class="card flash-card"><div class="eyebrow">Front</div><div class="flash-text">${esc(card.front)}</div>${rs.reveal ? `<hr class="flash-hr"><div class="eyebrow">Back</div><div class="flash-text">${esc(card.back)}</div>` : ""}</div>${rs.reveal ? `<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap"><button type="button" class="ghost" data-grade="0" style="flex:1">Still learning</button><button type="button" class="primary" data-grade="1" style="flex:1">I knew it</button></div>` : `<button type="button" class="primary" data-reveal style="margin-top:14px;width:100%">Show answer</button>`}`;
+  t.innerHTML = `<button type="button" class="ghost tech-back" data-review-back>← ${esc(deck.name)}</button>${viewHead("Review", `${esc(deck.subject || "General")} · ${rs.done + 1} of ${rs.total}${rs.mode === "all" ? " · practice mode" : ""}`)}<div class="card flash-card"><div class="eyebrow">Front</div><div class="flash-text">${esc(card.front)}</div>${
+    rs.reveal
+      ? `<hr class="flash-hr"><div class="eyebrow">Back</div><div class="flash-text">${esc(card.back)}</div>`
+      : ""
+  }</div>${
+    rs.reveal
+      ? `<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap"><button type="button" class="ghost" data-grade="0" style="flex:1">Still learning</button><button type="button" class="primary" data-grade="1" style="flex:1">I knew it</button></div>`
+      : `<button type="button" class="primary" data-reveal style="margin-top:14px;width:100%">Show answer</button>`
+  }`
   $$("[data-review-back]", t).forEach(
     (b) =>
       (b.onclick = () => {
-        clearReview();
-        flashView = "deck:" + deckId;
-        renderFlash(t);
+        clearReview()
+        flashView = "deck:" + deckId
+        renderFlash(t)
       }),
-  );
-  const reveal = $("[data-reveal]", t);
+  )
+  const reveal = $("[data-reveal]", t)
   if (reveal)
     reveal.onclick = () => {
-      rs.reveal = true;
-      renderReview(t, deckId);
-    };
+      rs.reveal = true
+      renderReview(t, deckId)
+    }
   $$("[data-grade]", t).forEach(
-    (b) => (b.onclick = () => gradeCard(deckId, card.id, b.dataset.grade === "1")),
-  );
+    (b) =>
+      (b.onclick = () => gradeCard(deckId, card.id, b.dataset.grade === "1")),
+  )
 }
 
 function gradeCard(deckId, cardId, known) {
-  const deck = findDeck(deckId);
-  const rs = reviewState;
-  if (!deck || !rs) return;
-  const card = (deck.cards || []).find((c) => c.id === cardId);
+  const deck = findDeck(deckId)
+  const rs = reviewState
+  if (!deck || !rs) return
+  const card = (deck.cards || []).find((c) => c.id === cardId)
   if (!card) {
-    rs.queue = rs.queue.filter((id) => id !== cardId);
-    return renderReview($("#tab-techniques"), deckId);
+    rs.queue = rs.queue.filter((id) => id !== cardId)
+    return renderReview($("#tab-techniques"), deckId)
   }
   if (known) {
-    card.box = Math.min(5, (card.box || 1) + 1);
-    card.nextDue = Date.now() + BOX_DAYS[card.box - 1] * 86400000;
-    rs.mastered++;
-    rs.queue.shift();
-    rs.done++;
+    card.box = Math.min(5, (card.box || 1) + 1)
+    card.nextDue = Date.now() + BOX_DAYS[card.box - 1] * 86400000
+    rs.mastered++
+    rs.queue.shift()
+    rs.done++
   } else {
-    const attempts = (rs.attempts[cardId] || 0) + 1;
-    rs.attempts[cardId] = attempts;
-    card.box = 1;
-    card.nextDue = Date.now() + 10 * 60 * 1000;
-    rs.queue.shift();
-    if (attempts < 3) rs.queue.push(cardId);
-    else rs.done++;
+    const attempts = (rs.attempts[cardId] || 0) + 1
+    rs.attempts[cardId] = attempts
+    card.box = 1
+    card.nextDue = Date.now() + 10 * 60 * 1000
+    rs.queue.shift()
+    if (attempts < 3) rs.queue.push(cardId)
+    else rs.done++
   }
-  rs.reveal = false;
-  persist();
-  saveReview();
-  renderReview($("#tab-techniques"), deckId);
+  rs.reveal = false
+  persist()
+  saveReview()
+  renderReview($("#tab-techniques"), deckId)
 }
 
 function renderCornell(t) {
   if (cornellView && cornellView !== "list")
-    return renderCornellEditor(t, cornellView);
-  return renderCornellList(t);
+    return renderCornellEditor(t, cornellView)
+  return renderCornellList(t)
 }
 
 function renderCornellList(t) {
-  const notes = state.cornellNotes || [];
-  t.innerHTML = `<button type="button" class="ghost tech-back" data-cornell-back>← Cornell guide</button>${viewHead("Cornell pad", "Cues on the left, notes on the right, summary at the bottom. Everything saves as you type — and every note can be renamed or deleted any time.")}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>New note</h2></div><div class="input-row"><input class="input" id="cornell-title" placeholder="Note title, e.g. Chapter 4 — Photosynthesis"><button type="button" class="primary" id="cornell-create">Create</button></div></div><div class="grid three">${notes.map((n) => `<article class="card" data-note="${n.id}" style="cursor:pointer"><div class="section-row"><h3 data-fittitle>${esc(n.title || "Untitled")}</h3></div><p class="muted" style="margin-top:8px">Updated ${new Date(n.updated || n.created || Date.now()).toLocaleDateString()}</p><div class="tech-open">Open note →</div><button type="button" class="delete deck-list-del" data-note-delete="${n.id}" title="Delete note" aria-label="Delete ${esc(n.title || "note")}">×</button></article>`).join("") || '<p class="muted">No notes yet — create your first one above.</p>'}</div>`;
-  fitTitles(t);
+  const notes = state.cornellNotes || []
+  t.innerHTML = `<button type="button" class="ghost tech-back" data-cornell-back>← Cornell guide</button>${viewHead("Cornell pad", "Cues on the left, notes on the right, summary at the bottom. Everything saves as you type — and every note can be renamed or deleted any time.")}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>New note</h2></div><div class="input-row"><input class="input" id="cornell-title" placeholder="Note title, e.g. Chapter 4 — Photosynthesis"><button type="button" class="primary" id="cornell-create">Create</button></div></div><div class="grid three">${notes.map((n) => `<article class="card" data-note="${n.id}" style="cursor:pointer"><div class="section-row"><h3 data-fittitle>${esc(n.title || "Untitled")}</h3></div><p class="muted" style="margin-top:8px">Updated ${new Date(n.updated || n.created || Date.now()).toLocaleDateString()}</p><div class="tech-open">Open note →</div><button type="button" class="delete deck-list-del" data-note-delete="${n.id}" title="Delete note" aria-label="Delete ${esc(n.title || "note")}">×</button></article>`).join("") || '<p class="muted">No notes yet — create your first one above.</p>'}</div>`
+  fitTitles(t)
   $("[data-cornell-back]", t).onclick = () => {
-    cornellView = null;
-    renderTechniques();
-  };
+    cornellView = null
+    renderTechniques()
+  }
   $("#cornell-create", t).onclick = () => {
-    if (!requireAuth("save Cornell notes")) return;
-    const title = $("#cornell-title", t).value.trim();
+    if (!requireAuth("save Cornell notes")) return
+    const title = $("#cornell-title", t).value.trim()
     const note = {
       id: uid(),
       title: title || "Untitled",
@@ -1227,131 +1536,158 @@ function renderCornellList(t) {
       summary: "",
       created: Date.now(),
       updated: Date.now(),
-    };
-    state.cornellNotes.unshift(note);
-    persist();
-    mirrorNotes("cornell", state.cornellNotes);
-    cornellView = note.id;
-    renderCornell(t);
-  };
+    }
+    state.cornellNotes.unshift(note)
+    persist()
+    mirrorNotes("cornell", state.cornellNotes)
+    cornellView = note.id
+    renderCornell(t)
+  }
   $$("[data-note]", t).forEach(
     (card) =>
       (card.onclick = (e) => {
-        if (e.target.closest("[data-note-delete]")) return;
-        cornellView = card.dataset.note;
-        renderCornell(t);
+        if (e.target.closest("[data-note-delete]")) return
+        cornellView = card.dataset.note
+        renderCornell(t)
       }),
-  );
+  )
   $$("[data-note-delete]", t).forEach(
     (b) =>
       (b.onclick = (e) => {
-        e.stopPropagation();
-        const note = (state.cornellNotes || []).find((n) => n.id === b.dataset.noteDelete);
-        confirmBox(`Delete “${note?.title || "Untitled"}”?`, "The note will be gone for good.", () => {
-          const id = b.dataset.noteDelete;
-          state.cornellNotes = state.cornellNotes.filter((n) => n.id !== id);
-          persist();
-          deleteNoteEverywhere("cornell", id);
-          notify("Note deleted");
-          renderCornellList(t);
-        });
+        e.stopPropagation()
+        const note = (state.cornellNotes || []).find(
+          (n) => n.id === b.dataset.noteDelete,
+        )
+        confirmBox(
+          `Delete “${note?.title || "Untitled"}”?`,
+          "The note will be gone for good.",
+          () => {
+            const id = b.dataset.noteDelete
+            state.cornellNotes = state.cornellNotes.filter((n) => n.id !== id)
+            persist()
+            deleteNoteEverywhere("cornell", id)
+            notify("Note deleted")
+            renderCornellList(t)
+          },
+        )
       }),
-  );
+  )
 }
 
 function renderCornellEditor(t, noteId) {
-  const note = (state.cornellNotes || []).find((n) => n.id === noteId);
+  const note = (state.cornellNotes || []).find((n) => n.id === noteId)
   if (!note) {
-    cornellView = "list";
-    return renderCornell(t);
+    cornellView = "list"
+    return renderCornell(t)
   }
-  t.innerHTML = `<button type="button" class="ghost tech-back" data-note-back>← All notes</button>${viewHead(note.title || "Untitled", 'Cues · Notes · Summary <span class="tag" id="cornell-saved">saved</span>')}<div class="card" style="margin-bottom:18px"><input class="input" id="note-title" value="${esc(note.title || "")}" placeholder="Note title" aria-label="Note title"></div><div class="cornell-grid"><div class="card"><h2>Cues</h2><p class="muted">Questions and keywords</p><textarea class="textarea autogrow cornell-area" id="note-cues" rows="12" placeholder="Key questions to quiz yourself...">${esc(note.cues || "")}</textarea></div><div class="card"><h2>Notes</h2><p class="muted">Capture ideas, not dictation</p><textarea class="textarea autogrow cornell-area" id="note-notes" rows="12" placeholder="Your notes...">${esc(note.notes || "")}</textarea></div></div><div class="card" style="margin-top:18px"><div class="section-row"><h2>Summary</h2><button type="button" class="ghost" data-note-delete>Delete note</button></div><p class="muted">In your own words — this is where the learning locks in.</p><textarea class="textarea autogrow cornell-area" id="note-summary" rows="4" placeholder="Summary...">${esc(note.summary || "")}</textarea></div>`;
+  t.innerHTML = `<button type="button" class="ghost tech-back" data-note-back>← All notes</button>${viewHead(note.title || "Untitled", 'Cues · Notes · Summary <span class="tag" id="cornell-saved">saved</span>')}<div class="card" style="margin-bottom:18px"><input class="input" id="note-title" value="${esc(note.title || "")}" placeholder="Note title" aria-label="Note title"></div><div class="cornell-grid"><div class="card"><h2>Cues</h2><p class="muted">Questions and keywords</p><textarea class="textarea autogrow cornell-area" id="note-cues" rows="12" placeholder="Key questions to quiz yourself...">${esc(note.cues || "")}</textarea></div><div class="card"><h2>Notes</h2><p class="muted">Capture ideas, not dictation</p><textarea class="textarea autogrow cornell-area" id="note-notes" rows="12" placeholder="Your notes...">${esc(note.notes || "")}</textarea></div></div><div class="card" style="margin-top:18px"><div class="section-row"><h2>Summary</h2><button type="button" class="ghost" data-note-delete>Delete note</button></div><p class="muted">In your own words — this is where the learning locks in.</p><textarea class="textarea autogrow cornell-area" id="note-summary" rows="4" placeholder="Summary...">${esc(note.summary || "")}</textarea></div>`
   $("[data-note-back]", t).onclick = () => {
-    cornellView = "list";
-    renderCornell(t);
-  };
+    cornellView = "list"
+    renderCornell(t)
+  }
   $("[data-note-delete]", t).onclick = () =>
-    confirmBox(`Delete “${note.title || "Untitled"}”?`, "The note will be gone for good.", () => {
-      state.cornellNotes = state.cornellNotes.filter((n) => n.id !== noteId);
-      persist();
-      deleteNoteEverywhere("cornell", noteId);
-      cornellView = "list";
-      renderCornell(t);
-    });
-  let saveTimer = null;
+    confirmBox(
+      `Delete “${note.title || "Untitled"}”?`,
+      "The note will be gone for good.",
+      () => {
+        state.cornellNotes = state.cornellNotes.filter((n) => n.id !== noteId)
+        persist()
+        deleteNoteEverywhere("cornell", noteId)
+        cornellView = "list"
+        renderCornell(t)
+      },
+    )
+  let saveTimer = null
   const edited = () => {
-    const tag = $("#cornell-saved", t);
-    if (tag) tag.textContent = "editing…";
-    note.title = $("#note-title", t).value;
-    note.cues = $("#note-cues", t).value;
-    note.notes = $("#note-notes", t).value;
-    note.summary = $("#note-summary", t).value;
-    note.updated = Date.now();
-    clearTimeout(saveTimer);
+    const tag = $("#cornell-saved", t)
+    if (tag) tag.textContent = "editing…"
+    note.title = $("#note-title", t).value
+    note.cues = $("#note-cues", t).value
+    note.notes = $("#note-notes", t).value
+    note.summary = $("#note-summary", t).value
+    note.updated = Date.now()
+    clearTimeout(saveTimer)
     saveTimer = setTimeout(() => {
-      persist();
-      mirrorNotes("cornell", state.cornellNotes); // same debounce window = one cloud write
-      const done = $("#cornell-saved", t);
-      if (done) done.innerHTML = "saved " + sicon("check");
-    }, 700);
-  };
-  ["note-title", "note-cues", "note-notes", "note-summary"].forEach((id) => {
-    const field = document.getElementById(id);
-    if (field) field.oninput = edited;
-  });
+      persist()
+      mirrorNotes("cornell", state.cornellNotes) // same debounce window = one cloud write
+      const done = $("#cornell-saved", t)
+      if (done) done.innerHTML = "saved " + sicon("check")
+    }, 700)
+  }
+  ;["note-title", "note-cues", "note-notes", "note-summary"].forEach((id) => {
+    const field = document.getElementById(id)
+    if (field) field.oninput = edited
+  })
 }
 
 function countSyllables(w) {
   w = String(w || "")
     .toLowerCase()
-    .replace(/[^a-z]/g, "");
-  if (!w) return 0;
-  if (w.length <= 3) return 1;
-  const m = w
-    .replace(/(?:[^laeiouy]e|ed|es)$/, "")
-    .match(/[aeiouy]{1,2}/g);
-  return Math.max(1, (m || []).length);
+    .replace(/[^a-z]/g, "")
+  if (!w) return 0
+  if (w.length <= 3) return 1
+  const m = w.replace(/(?:[^laeiouy]e|ed|es)$/, "").match(/[aeiouy]{1,2}/g)
+  return Math.max(1, (m || []).length)
 }
 
 function readability(text) {
-  const words = (String(text || "").toLowerCase().match(/[a-z']+/g) || []);
-  if (!words.length) return null;
+  const words =
+    String(text || "")
+      .toLowerCase()
+      .match(/[a-z']+/g) || []
+  if (!words.length) return null
   const sentences =
-    (String(text || "").match(/[^.!?]+[.!?]+/g) || []).length || 1;
-  const syllables = words.reduce((n, w) => n + countSyllables(w), 0);
+    (String(text || "").match(/[^.!?]+[.!?]+/g) || []).length || 1
+  const syllables = words.reduce((n, w) => n + countSyllables(w), 0)
   const score = Math.round(
-    206.835 - 1.015 * (words.length / sentences) - 84.6 * (syllables / words.length),
-  );
+    206.835 -
+      1.015 * (words.length / sentences) -
+      84.6 * (syllables / words.length),
+  )
   return {
     score: Math.max(0, Math.min(100, score)),
     words: words.length,
-  };
+  }
 }
 
 function readLevel(score) {
-  if (score >= 85) return "Duckling-approved — beautifully plain";
-  if (score >= 60) return "Plain enough — a child could follow";
-  if (score >= 30) return "Getting jargony — simplify a pass";
-  return "Too dense — explain it simpler";
+  if (score >= 85) return "Duckling-approved — beautifully plain"
+  if (score >= 60) return "Plain enough — a child could follow"
+  if (score >= 30) return "Getting jargony — simplify a pass"
+  return "Too dense — explain it simpler"
 }
 
 function renderFeynman(t) {
   if (feynmanView && feynmanView !== "list")
-    return renderFeynmanEditor(t, feynmanView);
-  return renderFeynmanList(t);
+    return renderFeynmanEditor(t, feynmanView)
+  return renderFeynmanList(t)
 }
 
 function renderFeynmanList(t) {
-  const notes = state.feynmanNotes || [];
-  t.innerHTML = `<button type="button" class="ghost tech-back" data-feynman-back>← Feynman guide</button>${viewHead("Feynman pad", "Explain it simply, spot your gaps, re-learn, repeat. Aim for a high plainness score — every explanation can be renamed or deleted any time.")}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>New explanation</h2></div><div class="input-row"><input class="input" id="feynman-topic" placeholder="What are you explaining? e.g. Mitosis"><button type="button" class="primary" id="feynman-create">Start</button></div></div><div class="grid three">${notes.map((n) => { const r = readability(n.text); return `<article class="card" data-feynman="${n.id}" style="cursor:pointer"><div class="section-row"><h3 data-fittitle>${esc(n.topic || "Untitled")}</h3>${r ? `<span class="tag">${r.score}</span>` : ""}</div><p class="muted" style="margin-top:8px">${r ? `${r.words} words · ${esc(readLevel(r.score))}` : "Not written yet"}</p><div class="tech-open">Open →</div><button type="button" class="delete deck-list-del" data-feynman-delete="${n.id}" title="Delete explanation" aria-label="Delete ${esc(n.topic || "explanation")}">×</button></article>`; }).join("") || '<p class="muted">No explanations yet — pick a topic above.</p>'}</div>`;
-  fitTitles(t);
+  const notes = state.feynmanNotes || []
+  t.innerHTML = `<button type="button" class="ghost tech-back" data-feynman-back>← Feynman guide</button>${viewHead("Feynman pad", "Explain it simply, spot your gaps, re-learn, repeat. Aim for a high plainness score — every explanation can be renamed or deleted any time.")}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>New explanation</h2></div><div class="input-row"><input class="input" id="feynman-topic" placeholder="What are you explaining? e.g. Mitosis"><button type="button" class="primary" id="feynman-create">Start</button></div></div><div class="grid three">${
+    notes
+      .map((n) => {
+        const r = readability(n.text)
+        return `<article class="card" data-feynman="${n.id}" style="cursor:pointer"><div class="section-row"><h3 data-fittitle>${esc(n.topic || "Untitled")}</h3>${
+          r ? `<span class="tag">${r.score}</span>` : ""
+        }</div><p class="muted" style="margin-top:8px">${
+          r
+            ? `${r.words} words · ${esc(readLevel(r.score))}`
+            : "Not written yet"
+        }</p><div class="tech-open">Open →</div><button type="button" class="delete deck-list-del" data-feynman-delete="${n.id}" title="Delete explanation" aria-label="Delete ${esc(n.topic || "explanation")}">×</button></article>`
+      })
+      .join("") ||
+    '<p class="muted">No explanations yet — pick a topic above.</p>'
+  }</div>`
+  fitTitles(t)
   $("[data-feynman-back]", t).onclick = () => {
-    feynmanView = null;
-    renderTechniques();
-  };
+    feynmanView = null
+    renderTechniques()
+  }
   $("#feynman-create", t).onclick = () => {
-    if (!requireAuth("save Feynman explanations")) return;
-    const topic = $("#feynman-topic", t).value.trim() || "Untitled";
+    if (!requireAuth("save Feynman explanations")) return
+    const topic = $("#feynman-topic", t).value.trim() || "Untitled"
     const note = {
       id: uid(),
       topic,
@@ -1359,100 +1695,132 @@ function renderFeynmanList(t) {
       checks: {},
       created: Date.now(),
       updated: Date.now(),
-    };
-    state.feynmanNotes.unshift(note);
-    persist();
-    mirrorNotes("feynman", state.feynmanNotes);
-    feynmanView = note.id;
-    renderFeynman(t);
-  };
+    }
+    state.feynmanNotes.unshift(note)
+    persist()
+    mirrorNotes("feynman", state.feynmanNotes)
+    feynmanView = note.id
+    renderFeynman(t)
+  }
   $$("[data-feynman]", t).forEach(
     (card) =>
       (card.onclick = (e) => {
-        if (e.target.closest("[data-feynman-delete]")) return;
-        feynmanView = card.dataset.feynman;
-        renderFeynman(t);
+        if (e.target.closest("[data-feynman-delete]")) return
+        feynmanView = card.dataset.feynman
+        renderFeynman(t)
       }),
-  );
+  )
   $$("[data-feynman-delete]", t).forEach(
     (b) =>
       (b.onclick = (e) => {
-        e.stopPropagation();
-        const note = (state.feynmanNotes || []).find((n) => n.id === b.dataset.feynmanDelete);
-        confirmBox(`Delete “${note?.topic || "Untitled"}”?`, "It will be gone for good.", () => {
-          const id = b.dataset.feynmanDelete;
-          state.feynmanNotes = state.feynmanNotes.filter((n) => n.id !== id);
-          persist();
-          deleteNoteEverywhere("feynman", id);
-          notify("Explanation deleted");
-          renderFeynmanList(t);
-        });
+        e.stopPropagation()
+        const note = (state.feynmanNotes || []).find(
+          (n) => n.id === b.dataset.feynmanDelete,
+        )
+        confirmBox(
+          `Delete “${note?.topic || "Untitled"}”?`,
+          "It will be gone for good.",
+          () => {
+            const id = b.dataset.feynmanDelete
+            state.feynmanNotes = state.feynmanNotes.filter((n) => n.id !== id)
+            persist()
+            deleteNoteEverywhere("feynman", id)
+            notify("Explanation deleted")
+            renderFeynmanList(t)
+          },
+        )
       }),
-  );
+  )
 }
 
 function renderFeynmanEditor(t, noteId) {
-  const note = (state.feynmanNotes || []).find((n) => n.id === noteId);
+  const note = (state.feynmanNotes || []).find((n) => n.id === noteId)
   if (!note) {
-    feynmanView = "list";
-    return renderFeynman(t);
+    feynmanView = "list"
+    return renderFeynman(t)
   }
-  const r = readability(note.text);
-  const checks = note.checks || {};
-  t.innerHTML = `<button type="button" class="ghost tech-back" data-feynman-back-list>← All explanations</button>${viewHead(note.topic || "Untitled", 'Teach it to a 10-year-old <span class="tag" id="feynman-saved">saved</span>')}<div class="card" style="margin-bottom:18px"><input class="input" id="feynman-title" value="${esc(note.topic || "")}" placeholder="Topic" aria-label="Topic"></div><div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Your explanation</h2><span class="tag" data-fey-score${r ? "" : " hidden"}>${r ? `${r.score} · plain` : ""}</span></div><textarea class="textarea autogrow cornell-area" id="feynman-text" rows="10" placeholder="Explain it in the simplest words you know...">${esc(note.text || "")}</textarea><div data-fey-meter${r ? "" : " hidden"}><div class="complete-track" style="margin-top:12px"><span class="complete-fill" data-fey-fill style="width:${r ? r.score : 0}%"></span></div><p class="muted" style="margin-top:8px" data-fey-cap>${r ? `${r.words} words · ${esc(readLevel(r.score))}` : ""}</p></div><p class="muted" style="margin-top:8px" data-fey-empty${r ? " hidden" : ""}>Start writing to get your plainness score.</p></div><div class="card"><div class="section-row"><h2>Simplicity checklist</h2><button type="button" class="ghost" data-feynman-delete>Delete</button></div>${[["nojargon", "No jargon — a child knows every word"], ["analogy", "Has an everyday analogy"], ["short", "Short sentences, one idea each"]].map(([k, label]) => `<label class="toggle-row"><span><strong>${label}</strong></span><input type="checkbox" data-feynman-check="${k}"${checks[k] ? " checked" : ""}></label>`).join("")}</div>`;
+  const r = readability(note.text)
+  const checks = note.checks || {}
+  t.innerHTML = `<button type="button" class="ghost tech-back" data-feynman-back-list>← All explanations</button>${viewHead(note.topic || "Untitled", 'Teach it to a 10-year-old <span class="tag" id="feynman-saved">saved</span>')}<div class="card" style="margin-bottom:18px"><input class="input" id="feynman-title" value="${esc(note.topic || "")}" placeholder="Topic" aria-label="Topic"></div><div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Your explanation</h2><span class="tag" data-fey-score${
+    r ? "" : " hidden"
+  }>${
+    r ? `${r.score} · plain` : ""
+  }</span></div><textarea class="textarea autogrow cornell-area" id="feynman-text" rows="10" placeholder="Explain it in the simplest words you know...">${esc(note.text || "")}</textarea><div data-fey-meter${
+    r ? "" : " hidden"
+  }><div class="complete-track" style="margin-top:12px"><span class="complete-fill" data-fey-fill style="width:${
+    r ? r.score : 0
+  }%"></span></div><p class="muted" style="margin-top:8px" data-fey-cap>${
+    r ? `${r.words} words · ${esc(readLevel(r.score))}` : ""
+  }</p></div><p class="muted" style="margin-top:8px" data-fey-empty${
+    r ? " hidden" : ""
+  }>Start writing to get your plainness score.</p></div><div class="card"><div class="section-row"><h2>Simplicity checklist</h2><button type="button" class="ghost" data-feynman-delete>Delete</button></div>${[
+    ["nojargon", "No jargon — a child knows every word"],
+    ["analogy", "Has an everyday analogy"],
+    ["short", "Short sentences, one idea each"],
+  ]
+    .map(
+      ([k, label]) =>
+        `<label class="toggle-row"><span><strong>${label}</strong></span><input type="checkbox" data-feynman-check="${k}"${
+          checks[k] ? " checked" : ""
+        }></label>`,
+    )
+    .join("")}</div>`
   $("[data-feynman-back-list]", t).onclick = () => {
-    feynmanView = "list";
-    renderFeynman(t);
-  };
+    feynmanView = "list"
+    renderFeynman(t)
+  }
   $("[data-feynman-delete]", t).onclick = () =>
     confirmBox("Delete this explanation?", "It will be gone for good.", () => {
-      state.feynmanNotes = state.feynmanNotes.filter((n) => n.id !== noteId);
-      persist();
-      deleteNoteEverywhere("feynman", noteId);
-      feynmanView = "list";
-      renderFeynman(t);
-    });
-  let saveTimer = null;
+      state.feynmanNotes = state.feynmanNotes.filter((n) => n.id !== noteId)
+      persist()
+      deleteNoteEverywhere("feynman", noteId)
+      feynmanView = "list"
+      renderFeynman(t)
+    })
+  let saveTimer = null
   const edited = () => {
-    note.topic = $("#feynman-title", t).value;
-    note.text = $("#feynman-text", t).value;
-    note.updated = Date.now();
-    const tag = $("#feynman-saved", t);
-    if (tag) tag.textContent = "editing…";
-    const live = readability(note.text);
-    const score = $("[data-fey-score]", t);
+    note.topic = $("#feynman-title", t).value
+    note.text = $("#feynman-text", t).value
+    note.updated = Date.now()
+    const tag = $("#feynman-saved", t)
+    if (tag) tag.textContent = "editing…"
+    const live = readability(note.text)
+    const score = $("[data-fey-score]", t)
     if (score) {
-      score.hidden = !live;
-      if (live) score.textContent = `${live.score} · plain`;
+      score.hidden = !live
+      if (live) score.textContent = `${live.score} · plain`
     }
-    const meter = $("[data-fey-meter]", t);
-    if (meter) meter.hidden = !live;
-    const fill = $("[data-fey-fill]", t);
-    if (fill && live) fill.style.width = `${live.score}%`;
-    const cap = $("[data-fey-cap]", t);
+    const meter = $("[data-fey-meter]", t)
+    if (meter) meter.hidden = !live
+    const fill = $("[data-fey-fill]", t)
+    if (fill && live) fill.style.width = `${live.score}%`
+    const cap = $("[data-fey-cap]", t)
     if (cap && live)
-      cap.textContent = `${live.words} words · ${readLevel(live.score)}`;
-    const empty = $("[data-fey-empty]", t);
-    if (empty) empty.hidden = Boolean(live);
-    clearTimeout(saveTimer);
+      cap.textContent = `${live.words} words · ${readLevel(live.score)}`
+    const empty = $("[data-fey-empty]", t)
+    if (empty) empty.hidden = Boolean(live)
+    clearTimeout(saveTimer)
     saveTimer = setTimeout(() => {
-      persist();
-      mirrorNotes("feynman", state.feynmanNotes);
-      const done = $("#feynman-saved", t);
-      if (done) done.innerHTML = "saved " + sicon("check");
-    }, 900);
-  };
-  $("#feynman-title", t).oninput = edited;
-  $("#feynman-text", t).oninput = edited;
+      persist()
+      mirrorNotes("feynman", state.feynmanNotes)
+      const done = $("#feynman-saved", t)
+      if (done) done.innerHTML = "saved " + sicon("check")
+    }, 900)
+  }
+  $("#feynman-title", t).oninput = edited
+  $("#feynman-text", t).oninput = edited
   $$("[data-feynman-check]", t).forEach(
     (box) =>
       (box.onchange = () => {
-        note.checks = { ...(note.checks || {}), [box.dataset.feynmanCheck]: box.checked };
-        note.updated = Date.now();
-        persist();
-        mirrorNotes("feynman", state.feynmanNotes);
+        note.checks = {
+          ...(note.checks || {}),
+          [box.dataset.feynmanCheck]: box.checked,
+        }
+        note.updated = Date.now()
+        persist()
+        mirrorNotes("feynman", state.feynmanNotes)
       }),
-  );
+  )
 }
 
 const DUCK_LINES = [
@@ -1466,7 +1834,7 @@ const DUCK_LINES = [
   "Explain the obvious part you skipped — slowly.",
   "What does the error actually say, word by word?",
   "Say your best theory out loud. Hearing it is the test.",
-];
+]
 
 // --- On-device analysis engine -----------------------------------------------
 // The duck reads the message, pulls real facts from a curated knowledge base,
@@ -1485,26 +1853,47 @@ const DUCK_FACTS = [
   {
     keys: ["derivative", "differentiate", "tangent line"],
     fact: "A derivative is an instantaneous rate of change — geometrically, the slope of the tangent line at a single point.",
-    probe: "Is your function a product, a quotient, or a composition? Each one has its own rule.",
+    probe:
+      "Is your function a product, a quotient, or a composition? Each one has its own rule.",
     terms: ["rate", "change", "slope", "tangent", "point"],
   },
   {
     keys: ["integral", "antiderivative", "integration"],
     fact: "A definite integral accumulates a quantity over an interval — geometrically, the signed area between the curve and the axis.",
-    probe: "What are your bounds, and does the curve cross the axis between them?",
+    probe:
+      "What are your bounds, and does the curve cross the axis between them?",
     terms: ["area", "interval", "accumulat", "bounds", "curve"],
   },
   {
     keys: ["photosynthesis"],
     fact: "Photosynthesis is 6CO₂ + 6H₂O + light → C₆H₁₂O₆ + 6O₂ — the light reactions capture energy, the Calvin cycle fixes that energy into sugar.",
-    probe: "Which stage are you asked about — the light reactions or the Calvin cycle?",
-    terms: ["light", "energy", "glucose", "co2", "oxygen", "chlorophyll", "calvin"],
+    probe:
+      "Which stage are you asked about — the light reactions or the Calvin cycle?",
+    terms: [
+      "light",
+      "energy",
+      "glucose",
+      "co2",
+      "oxygen",
+      "chlorophyll",
+      "calvin",
+    ],
   },
   {
     keys: ["mitosis", "meiosis"],
     fact: "Mitosis makes two genetically identical diploid cells; meiosis makes four genetically unique haploid gametes.",
-    probe: "Does your question care about identical copies (mitosis) or diversity (meiosis)?",
-    terms: ["cell", "division", "chromosome", "daughter", "haploid", "diploid", "identical", "gamete"],
+    probe:
+      "Does your question care about identical copies (mitosis) or diversity (meiosis)?",
+    terms: [
+      "cell",
+      "division",
+      "chromosome",
+      "daughter",
+      "haploid",
+      "diploid",
+      "identical",
+      "gamete",
+    ],
   },
   {
     keys: ["newton", "action and reaction", "third law", "force pair"],
@@ -1521,31 +1910,36 @@ const DUCK_FACTS = [
   {
     keys: ["recursion", "recursive", "base case"],
     fact: "Every recursive function needs a base case, and every recursive call must make progress toward it — otherwise the call stack overflows.",
-    probe: "What exactly is your base case, and does every call get closer to it?",
+    probe:
+      "What exactly is your base case, and does every call get closer to it?",
     terms: ["base case", "progress", "call", "itself", "stack"],
   },
   {
     keys: ["infinite loop", "loops forever", "never terminates"],
     fact: "A loop that never exits means its controlling variable isn't changing inside the body — or the exit condition can never be true.",
-    probe: "Print the loop variable on each pass — is it moving toward the exit?",
+    probe:
+      "Print the loop variable on each pass — is it moving toward the exit?",
     terms: ["condition", "variable", "exit", "change", "body"],
   },
   {
     keys: ["null", "undefined", "cannot read", "nan"],
     fact: "In JavaScript, null means 'intentionally empty' while undefined means 'never assigned' — and 'Cannot read properties of null' means code read a property off that emptiness.",
-    probe: "Which line was supposed to create the value you're reading — and did it run before that line?",
+    probe:
+      "Which line was supposed to create the value you're reading — and did it run before that line?",
     terms: ["null", "undefined", "empty", "assigned", "value"],
   },
   {
     keys: ["async", "await", "promise"],
     fact: "await schedules the rest of the function to run only after the promise settles — and it only works inside an async function.",
-    probe: "Are you awaiting the call, or just calling it and reading the result too early?",
+    probe:
+      "Are you awaiting the call, or just calling it and reading the result too early?",
     terms: ["async", "await", "promise", "settle", "later", "order"],
   },
   {
     keys: ["closure"],
     fact: "A closure is a function bundled with the variables it captured at definition — those variables stay alive between calls.",
-    probe: "Which variables is your inner function capturing, and when do they get their value?",
+    probe:
+      "Which variables is your inner function capturing, and when do they get their value?",
     terms: ["function", "variable", "captured", "definition", "alive", "scope"],
   },
   {
@@ -1569,86 +1963,152 @@ const DUCK_FACTS = [
   {
     keys: ["css", "selector", "specificity", "flexbox", "grid"],
     fact: "In CSS, higher specificity beats later order — only EQUAL specificity falls back to source order.",
-    probe: "Which two rules are fighting, and which one has more classes or IDs?",
-    terms: ["specificity", "selector", "rule", "order", "priority", "class", "id"],
+    probe:
+      "Which two rules are fighting, and which one has more classes or IDs?",
+    terms: [
+      "specificity",
+      "selector",
+      "rule",
+      "order",
+      "priority",
+      "class",
+      "id",
+    ],
   },
   {
     keys: ["rest api", "endpoint", "http request", "fetch("],
     fact: "REST is stateless: every request must carry everything the server needs — including your authentication — because the server remembers nothing between calls.",
     probe: "Does your request carry its token and full context every time?",
-    terms: ["stateless", "request", "server", "authentication", "client", "resource"],
+    terms: [
+      "stateless",
+      "request",
+      "server",
+      "authentication",
+      "client",
+      "resource",
+    ],
   },
   {
     keys: ["cors"],
     fact: "CORS is enforced by the browser, not the server — the server must send Access-Control-Allow-Origin for the browser to hand you the response; curl and Postman never hit it.",
-    probe: "Does it also fail in curl, or only in the browser? That tells you if it's really CORS.",
+    probe:
+      "Does it also fail in curl, or only in the browser? That tells you if it's really CORS.",
     terms: ["browser", "header", "allow", "origin", "client", "enforced"],
   },
   {
     keys: ["sql", "join", "query", "database"],
     fact: "A JOIN duplicates rows when the key repeats on either side — a count that suddenly explodes almost always means a one-to-many fan-out.",
-    probe: "Run the count on each table separately — where does the number first grow?",
+    probe:
+      "Run the count on each table separately — where does the number first grow?",
     terms: ["table", "row", "key", "match", "combine", "duplicate"],
   },
   {
     keys: ["thesis", "essay", "introduction paragraph"],
     fact: "A thesis is a debatable claim — if nobody could reasonably disagree with it, it's a summary, not a thesis.",
-    probe: "Say your thesis, then add 'but…' — can you complete that sentence? If yes, you have an argument.",
+    probe:
+      "Say your thesis, then add 'but…' — can you complete that sentence? If yes, you have an argument.",
     terms: ["claim", "arguable", "main", "position", "essay", "debatable"],
   },
   {
     keys: ["active recall", "re-reading", "rereading", "highlighting"],
     fact: "The testing effect is one of the best-replicated findings in memory research: retrieving from memory beats re-reading for long-term retention.",
-    probe: "Could you close the book right now and state the three main points aloud?",
+    probe:
+      "Could you close the book right now and state the three main points aloud?",
     terms: ["retriev", "memory", "practice", "test", "forget", "retention"],
   },
   {
     keys: ["forgetting curve", "ebbinghaus", "spaced repetition", "spaced"],
     fact: "Ebbinghaus showed retention falls steeply within the first day; a same-day review flattens the curve, and each spaced review pushes the next forgetting point further out.",
-    probe: "When did you last review this — and did you review it from memory or from the page?",
+    probe:
+      "When did you last review this — and did you review it from memory or from the page?",
     terms: ["retention", "time", "review", "forget", "spacing", "curve"],
   },
   {
     keys: ["natural selection", "darwin", "evolution"],
     fact: "Natural selection: organisms with heritable traits that improve survival and reproduction leave more offspring — allele frequencies shift across generations, not within one lifetime.",
     probe: "Which specific trait is being selected in your example?",
-    terms: ["variation", "inherit", "survival", "reproduction", "trait", "generation", "environment"],
+    terms: [
+      "variation",
+      "inherit",
+      "survival",
+      "reproduction",
+      "trait",
+      "generation",
+      "environment",
+    ],
   },
   {
     keys: ["dna", "gene", "chromosome", "rna"],
     fact: "DNA stores information as base pairs (A-T, G-C); genes are transcribed to mRNA and translated into proteins — the central dogma: DNA → RNA → protein.",
-    probe: "Is your question about storage (DNA), transmission (RNA), or the product (protein)?",
-    terms: ["base", "sequence", "gene", "protein", "transcri", "translat", "遗传", "heredity"],
+    probe:
+      "Is your question about storage (DNA), transmission (RNA), or the product (protein)?",
+    terms: [
+      "base",
+      "sequence",
+      "gene",
+      "protein",
+      "transcri",
+      "translat",
+      "遗传",
+      "heredity",
+    ],
   },
   {
     keys: ["atom", "molecule", "element", "compound"],
     fact: "An atom is the smallest unit of an element; molecules are two or more atoms bonded; a compound is a molecule with two or more different elements.",
     probe: "Are the bonded atoms the same element or different ones?",
-    terms: ["nucleus", "proton", "neutron", "electron", "bond", "element", "smallest"],
+    terms: [
+      "nucleus",
+      "proton",
+      "neutron",
+      "electron",
+      "bond",
+      "element",
+      "smallest",
+    ],
   },
   {
     keys: ["ph ", "acid", "base ", "alkaline"],
     fact: "pH = −log₁₀[H⁺]; below 7 is acidic, above 7 is basic, and the scale is logarithmic — each step is a tenfold change in hydrogen-ion concentration.",
-    probe: "Is your problem asking about concentration (log scale) or just comparing two samples?",
+    probe:
+      "Is your problem asking about concentration (log scale) or just comparing two samples?",
     terms: ["hydrogen", "log", "acid", "base", "concentration", "7", "scale"],
   },
   {
     keys: ["entropy", "thermodynamic", "second law"],
     fact: "The second law: the entropy of an isolated system never decreases — heat flows spontaneously from hot to cold, never the reverse without external work.",
     probe: "Is your system isolated, or is energy being added/removed?",
-    terms: ["disorder", "entropy", "increase", "heat", "isolated", "spontaneous", "second law"],
+    terms: [
+      "disorder",
+      "entropy",
+      "increase",
+      "heat",
+      "isolated",
+      "spontaneous",
+      "second law",
+    ],
   },
   {
     keys: ["gravity", "gravitational"],
     fact: "Gravity attracts every pair of masses: F = G·m₁m₂/r² — it weakens with the SQUARE of the distance, so doubling the distance quarters the force.",
-    probe: "Is distance changing in your problem? The square is usually where the numbers go wrong.",
+    probe:
+      "Is distance changing in your problem? The square is usually where the numbers go wrong.",
     terms: ["mass", "attract", "distance", "square", "force", "newton"],
   },
   {
     keys: ["velocity", "acceleration", "speed "],
     fact: "Speed is distance per time (scalar); velocity adds direction; acceleration is the rate of CHANGE of velocity — not of speed alone.",
-    probe: "Is your object turning? Turning means velocity changed even if the speed didn't.",
-    terms: ["rate", "change", "direction", "vector", "time", "distance", "speed"],
+    probe:
+      "Is your object turning? Turning means velocity changed even if the speed didn't.",
+    terms: [
+      "rate",
+      "change",
+      "direction",
+      "vector",
+      "time",
+      "distance",
+      "speed",
+    ],
   },
   {
     keys: ["pythagoras", "pythagorean", "right triangle", "hypotenuse"],
@@ -1660,37 +2120,79 @@ const DUCK_FACTS = [
     keys: ["quadratic", "parabola", "discriminant"],
     fact: "A quadratic ax²+bx+c=0 has roots x = (−b ± √(b²−4ac)) / 2a; the discriminant b²−4ac tells you: positive = two real roots, zero = one, negative = none real.",
     probe: "What's your discriminant — do you even expect real roots?",
-    terms: ["root", "parabola", "discriminant", "coefficient", "plus", "minus", "real"],
+    terms: [
+      "root",
+      "parabola",
+      "discriminant",
+      "coefficient",
+      "plus",
+      "minus",
+      "real",
+    ],
   },
   {
     keys: ["probability", "independent", "chance"],
     fact: "Independent events: P(A and B) = P(A)×P(B). Mutually exclusive events: P(A or B) = P(A)+P(B) — mixing these two rules is the classic mistake.",
     probe: "Can both events happen together? That decides which rule you use.",
-    terms: ["independent", "multiply", "exclusive", "outcome", "event", "fraction"],
+    terms: [
+      "independent",
+      "multiply",
+      "exclusive",
+      "outcome",
+      "event",
+      "fraction",
+    ],
   },
   {
     keys: ["mean", "median", "mode", "average"],
     fact: "Mean uses every value (sensitive to outliers); the median is the middle value (outlier-proof); the mode is the most frequent.",
-    probe: "Are there extreme values pulling the mean? If so, the median is your honest number.",
+    probe:
+      "Are there extreme values pulling the mean? If so, the median is your honest number.",
     terms: ["middle", "most", "sum", "outlier", "typical", "divide"],
   },
   {
     keys: ["ohm", "voltage", "current ", "resistance"],
     fact: "Ohm's law: V = I·R — voltage across a resistor equals current times resistance; raise resistance at fixed voltage and the current falls.",
     probe: "Which quantity is held fixed in your circuit?",
-    terms: ["voltage", "current", "resistance", "volt", "ampere", "ohm", "proportional"],
+    terms: [
+      "voltage",
+      "current",
+      "resistance",
+      "volt",
+      "ampere",
+      "ohm",
+      "proportional",
+    ],
   },
   {
     keys: ["http ", "status code", "404", "500", "api response"],
     fact: "HTTP codes are three-digit class signals: 2xx success, 3xx redirection, 4xx the request is wrong (client), 5xx the server broke while handling a valid request.",
-    probe: "Is the code 4xx or 5xx? That tells you who needs to change something.",
-    terms: ["2xx", "4xx", "5xx", "client", "server", "request", "response", "class"],
+    probe:
+      "Is the code 4xx or 5xx? That tells you who needs to change something.",
+    terms: [
+      "2xx",
+      "4xx",
+      "5xx",
+      "client",
+      "server",
+      "request",
+      "response",
+      "class",
+    ],
   },
   {
     keys: ["sql injection", "prepared statement", "parameterized"],
     fact: "SQL injection works by mixing CODE and DATA in one string; parameterized queries keep them separate so user input can never become executable SQL.",
     probe: "Is any user input concatenated directly into the query string?",
-    terms: ["code", "data", "parameter", "query", "input", "separate", "escape"],
+    terms: [
+      "code",
+      "data",
+      "parameter",
+      "query",
+      "input",
+      "separate",
+      "escape",
+    ],
   },
   {
     keys: ["hash table", "hashmap", "dictionary ", "o(1)"],
@@ -1708,166 +2210,282 @@ const DUCK_FACTS = [
     keys: ["compiler", "interpreter"],
     fact: "A compiler translates the whole program before running it; an interpreter executes statement by statement. JIT compilers sit between: translate at runtime, then optimize hot paths.",
     probe: "When does the translation happen in your toolchain?",
-    terms: ["translate", "whole", "runtime", "machine", "code", "before", "execute"],
+    terms: [
+      "translate",
+      "whole",
+      "runtime",
+      "machine",
+      "code",
+      "before",
+      "execute",
+    ],
   },
   {
     keys: ["osmosis", "cell membrane", "diffusion", "hypertonic"],
     fact: "Diffusion moves particles from high to low concentration; osmosis is water doing the same THROUGH a semipermeable membrane — from hypotonic to hypertonic side.",
-    probe: "Is water the thing moving, and is there a membrane? That's osmosis specifically.",
-    terms: ["water", "membrane", "concentration", "high", "low", "semipermeable", "gradient"],
+    probe:
+      "Is water the thing moving, and is there a membrane? That's osmosis specifically.",
+    terms: [
+      "water",
+      "membrane",
+      "concentration",
+      "high",
+      "low",
+      "semipermeable",
+      "gradient",
+    ],
   },
   {
     keys: ["supply and demand", "equilibrium price"],
     fact: "Demand slopes down (higher price → less quantity demanded), supply slopes up; the market price settles where the two curves cross — a shortage or surplus pushes it back.",
-    probe: "Which curve shifted — supply or demand? A shift moves price differently than a movement along the curve.",
-    terms: ["price", "quantity", "curve", "equilibrium", "shortage", "surplus", "shift"],
+    probe:
+      "Which curve shifted — supply or demand? A shift moves price differently than a movement along the curve.",
+    terms: [
+      "price",
+      "quantity",
+      "curve",
+      "equilibrium",
+      "shortage",
+      "surplus",
+      "shift",
+    ],
   },
   {
     keys: ["opportunity cost"],
     fact: "Opportunity cost is the value of the BEST alternative given up — it exists even when no money changes hands, because time and attention are scarce.",
     probe: "What is the next-best option you're trading away here?",
-    terms: ["alternative", "given up", "best", "choice", "value", "scarc", "trade"],
+    terms: [
+      "alternative",
+      "given up",
+      "best",
+      "choice",
+      "value",
+      "scarc",
+      "trade",
+    ],
   },
-];
+]
 
 function duckMatchFact(s) {
   for (const entry of DUCK_FACTS) {
-    if (entry.keys.some((k) => s.includes(k))) return entry;
+    if (entry.keys.some((k) => s.includes(k))) return entry
   }
-  return null;
+  return null
 }
 
 // Score the user's OWN definition against a fact's `terms` — a deterministic,
 // fully offline verdict. Professional, specific, and grounded in the KB:
 // it says exactly which key ideas landed and which are still missing.
 function duckJudge(raw, fact) {
-  if (!fact || !Array.isArray(fact.terms) || !fact.terms.length) return null;
-  const s = raw.toLowerCase();
-  const hits = fact.terms.filter((t) => s.includes(String(t).toLowerCase()));
-  const misses = fact.terms.filter((t) => !s.includes(String(t).toLowerCase()));
-  const ratio = hits.length / fact.terms.length;
-  const verdict = ratio >= 0.8 ? "solid" : ratio >= 0.45 ? "partially correct" : "off the mark";
-  const list = (xs) => xs.map((x) => `"${x}"`).join(", ");
-  let out = `Judging that against the facts — verdict: ${verdict} `
-    + `(${hits.length}/${fact.terms.length} key ideas present).`;
-  if (hits.length) out += ` Correctly covered: ${list(hits)}.`;
-  if (misses.length) out += ` Still missing: ${list(misses)}.`;
-  out += ` Ground truth: ${fact.fact}`;
-  if (misses.length) out += ` Give me one clean sentence now that folds in "${misses[0]}".`;
-  return out;
+  if (!fact || !Array.isArray(fact.terms) || !fact.terms.length) return null
+  const s = raw.toLowerCase()
+  const hits = fact.terms.filter((t) => s.includes(String(t).toLowerCase()))
+  const misses = fact.terms.filter((t) => !s.includes(String(t).toLowerCase()))
+  const ratio = hits.length / fact.terms.length
+  const verdict =
+    ratio >= 0.8
+      ? "solid"
+      : ratio >= 0.45
+        ? "partially correct"
+        : "off the mark"
+  const list = (xs) => xs.map((x) => `"${x}"`).join(", ")
+  let out =
+    `Judging that against the facts — verdict: ${verdict} ` +
+    `(${hits.length}/${fact.terms.length} key ideas present).`
+  if (hits.length) out += ` Correctly covered: ${list(hits)}.`
+  if (misses.length) out += ` Still missing: ${list(misses)}.`
+  out += ` Ground truth: ${fact.fact}`
+  if (misses.length)
+    out += ` Give me one clean sentence now that folds in "${misses[0]}".`
+  return out
 }
 
 function duckAnalyze(text, ctx = {}) {
-  const raw = String(text || "").trim();
-  const s = raw.toLowerCase();
-  const wordCount = s.split(/\s+/).filter(Boolean).length;
-  const turn = ctx.turn || 1;
+  const raw = String(text || "").trim()
+  const s = raw.toLowerCase()
+  const wordCount = s.split(/\s+/).filter(Boolean).length
+  const turn = ctx.turn || 1
   // --- signals ---------------------------------------------------------
-  const isQuestion = /\?\s*$/.test(raw) || /^(how|why|what|when|where|which|who|should|can|could|does|do|is|are)\b/.test(s);
-  const asksDefinition = /(what (is|are)|define|definition of|meaning of|explain( to me)?( what| how)?)/.test(s);
+  const isQuestion =
+    /\?\s*$/.test(raw) ||
+    /^(how|why|what|when|where|which|who|should|can|could|does|do|is|are)\b/.test(
+      s,
+    )
+  const asksDefinition =
+    /(what (is|are)|define|definition of|meaning of|explain( to me)?( what| how)?)/.test(
+      s,
+    )
   // A statement-form definition ("X is…", "X refers to…") that lands on a
   // known topic gets judged against the knowledge base instead of ignored.
-  const statesDefinition = /\b(is|are|means?|refers to|consists of|described as|defined as|used to|involves|depends on)\b/.test(s)
-    && wordCount >= 6
-    && !isQuestion;
-  const compare = /difference between\s+(.+?)\s+(?:and|vs\.?|versus)\s+([a-z0-9\- ]{2,40})/.exec(s);
-  const hasCode = /(function\s+\w+|=>|console\.|def\s+\w+|class\s+\w+|```|[{};]\s*$)/.test(raw)
-    || (/[=(){};]/.test(raw) && /\b(const|let|var|if|for|while|return|import|print)\b/.test(s));
-  const errorSignal = /(typeerror|referenceerror|syntaxerror|rangeerror|cannot read|is not a function|is not defined|unhandled|segmentation|nullpointer|stack overflow|traceback|exception|\b404\b|\b500\b|cors)/.test(s);
-  const fixFound = /\b(fixed|solved|it works|working now|figured (it|out)|got it|found it|thank)/.test(s);
-  const stuckLong = /(hours|days|all day|all night|a week).*(stuck|still|no luck|same error|not working)|(stuck|banging my head)/.test(s);
-  const certainty = /\b(always|never|obviously|definitely|must be|should just work|impossible|100%)\b/.test(s);
-  const numbers = /\b\d+(?:\.\d+)?\s*(min(?:ute)?s?|hours?|days?|pages?|%|percent|marks?|questions?|chapters?|words?)\b/.test(s);
-  const fact = duckMatchFact(s);
+  const statesDefinition =
+    /\b(is|are|means?|refers to|consists of|described as|defined as|used to|involves|depends on)\b/.test(
+      s,
+    ) &&
+    wordCount >= 6 &&
+    !isQuestion
+  const compare =
+    /difference between\s+(.+?)\s+(?:and|vs\.?|versus)\s+([a-z0-9\- ]{2,40})/.exec(
+      s,
+    )
+  const hasCode =
+    /(function\s+\w+|=>|console\.|def\s+\w+|class\s+\w+|```|[{};]\s*$)/.test(
+      raw,
+    ) ||
+    (/[=(){};]/.test(raw) &&
+      /\b(const|let|var|if|for|while|return|import|print)\b/.test(s))
+  const errorSignal =
+    /(typeerror|referenceerror|syntaxerror|rangeerror|cannot read|is not a function|is not defined|unhandled|segmentation|nullpointer|stack overflow|traceback|exception|\b404\b|\b500\b|cors)/.test(
+      s,
+    )
+  const fixFound =
+    /\b(fixed|solved|it works|working now|figured (it|out)|got it|found it|thank)/.test(
+      s,
+    )
+  const stuckLong =
+    /(hours|days|all day|all night|a week).*(stuck|still|no luck|same error|not working)|(stuck|banging my head)/.test(
+      s,
+    )
+  const certainty =
+    /\b(always|never|obviously|definitely|must be|should just work|impossible|100%)\b/.test(
+      s,
+    )
+  const numbers =
+    /\b\d+(?:\.\d+)?\s*(min(?:ute)?s?|hours?|days?|pages?|%|percent|marks?|questions?|chapters?|words?)\b/.test(
+      s,
+    )
+  const fact = duckMatchFact(s)
   // --- assembly ---------------------------------------------------------
   // Each branch returns opening + optional fact + ONE pointed probe.
   if (fixFound)
-    return "Excellent — that closes it. "
-      + "Before it evaporates: write the fix down in one sentence — what was broken, and what changed? "
-      + "Future-you rereads that note, not this chat.";
+    return (
+      "Excellent — that closes it. " +
+      "Before it evaporates: write the fix down in one sentence — what was broken, and what changed? " +
+      "Future-you rereads that note, not this chat."
+    )
   // Judge a user's own definition FIRST (when it lands on a known topic) —
   // before the question branch, so statements never fall through to generic
   // prompts. Falls through to the question/fact branches when no fact matches.
   if (statesDefinition && fact) {
-    const judged = duckJudge(raw, fact);
-    if (judged) return judged;
+    const judged = duckJudge(raw, fact)
+    if (judged) return judged
   }
   if (errorSignal)
-    return "You pasted an error — good, errors are confessions. "
-      + "Fact: a stack trace reads top-down — the first line names where it broke, the lines beneath show the path that led there. "
-      + "So: what does the very FIRST line say, word by word?";
+    return (
+      "You pasted an error — good, errors are confessions. " +
+      "Fact: a stack trace reads top-down — the first line names where it broke, the lines beneath show the path that led there. " +
+      "So: what does the very FIRST line say, word by word?"
+    )
   if (asksDefinition) {
     if (fact)
-      return `Here is the accurate answer from my knowledge base. ${fact.fact} ${fact.probe}`;
-    const topic = (/(?:what (?:is|are)|define|definition of|meaning of)\s+(?:a |an |the )?([a-z0-9\- ]{2,50})/.exec(s)?.[1] || "that").trim();
-    return `You're asking for a definition of “${topic}” — my facts are curated offline, so I won't invent one and present it as knowledge. `
-      + "Give me the definition in your own words instead. I will check every part of it against what I actually know and mark what's missing.";
+      return `Here is the accurate answer from my knowledge base. ${fact.fact} ${fact.probe}`
+    const topic = (
+      /(?:what (?:is|are)|define|definition of|meaning of)\s+(?:a |an |the )?([a-z0-9\- ]{2,50})/.exec(
+        s,
+      )?.[1] || "that"
+    ).trim()
+    return (
+      `You're asking for a definition of “${topic}” — my facts are curated offline, so I won't invent one and present it as knowledge. ` +
+      "Give me the definition in your own words instead. I will check every part of it against what I actually know and mark what's missing."
+    )
   }
   if (compare)
-    return `Comparing “${compare[1].trim()}” with “${compare[2].trim()}” — good instinct, differences clarify. `
-      + "Define each side in ONE sentence, then say what only one of them can do. "
-      + "The difference usually falls out on its own before you finish.";
+    return (
+      `Comparing “${compare[1].trim()}” with “${compare[2].trim()}” — good instinct, differences clarify. ` +
+      "Define each side in ONE sentence, then say what only one of them can do. " +
+      "The difference usually falls out on its own before you finish."
+    )
   if (fact)
-    return `You mentioned ${fact.keys[0].trim()} — here is the fact that matters: ${fact.fact} ${fact.probe}`;
+    return `You mentioned ${fact.keys[0].trim()} — here is the fact that matters: ${fact.fact} ${fact.probe}`
   if (hasCode)
-    return "I can see code in there. Walk me through it line by line — what is each part SUPPOSED to do? "
-      + "The line you explain fastest is usually the one hiding the bug.";
+    return (
+      "I can see code in there. Walk me through it line by line — what is each part SUPPOSED to do? " +
+      "The line you explain fastest is usually the one hiding the bug."
+    )
   if (certainty)
-    return "Careful — you used strong words like 'always' or 'never'. Absolute claims are exactly where bugs and wrong answers hide. "
-      + "Which part are you MOST sure about? Try to doubt that one out loud for me.";
+    return (
+      "Careful — you used strong words like 'always' or 'never'. Absolute claims are exactly where bugs and wrong answers hide. " +
+      "Which part are you MOST sure about? Try to doubt that one out loud for me."
+    )
   if (stuckLong)
-    return "You've been at this a while — that's almost never ability, it's an unverified assumption wearing a disguise. "
-      + "Name the one thing you've believed since the start but never actually tested. Test THAT next.";
+    return (
+      "You've been at this a while — that's almost never ability, it's an unverified assumption wearing a disguise. " +
+      "Name the one thing you've believed since the start but never actually tested. Test THAT next."
+    )
   if (isQuestion)
-    return "That's a real question, so let's aim it. "
-      + (numbers
+    return (
+      "That's a real question, so let's aim it. " +
+      (numbers
         ? "You mentioned a number in there — is that a requirement or an observation? The answer changes the problem. "
-        : "")
-      + "What would the answer let you DO that you can't do right now?";
+        : "") +
+      "What would the answer let you DO that you can't do right now?"
+    )
   if (wordCount < 12)
-    return "That's too brief for me to work with. Give me the whole picture: what you did, what you expected, and what happened instead.";
+    return "That's too brief for me to work with. Give me the whole picture: what you did, what you expected, and what happened instead."
   if (wordCount > 120)
-    return "Large message — I caught maybe a third of it. Compress it: what is the ONE-sentence version of the problem? Detail the rest only if I ask.";
+    return "Large message — I caught maybe a third of it. Compress it: what is the ONE-sentence version of the problem? Detail the rest only if I ask."
   if (turn >= 4)
-    return "We're several rounds deep now — that's how the good discoveries happen. "
-      + "Summarize where you are in one sentence: what do you know now that you didn't when we started?";
-  duckIdx++;
-  return DUCK_LINES[duckIdx % DUCK_LINES.length];
+    return (
+      "We're several rounds deep now — that's how the good discoveries happen. " +
+      "Summarize where you are in one sentence: what do you know now that you didn't when we started?"
+    )
+  duckIdx++
+  return DUCK_LINES[duckIdx % DUCK_LINES.length]
 }
 
 // Legacy shim — older callers and tests still import duckReply.
 function duckReply(text, ctx) {
-  return duckAnalyze(text, ctx);
+  return duckAnalyze(text, ctx)
 }
 
 function renderDuck(t) {
-  const thread = state.duckChat || [];
-  t.innerHTML = `<button type="button" class="ghost tech-back" data-duck-back>← Duck guide</button>${viewHead("Rubber Duck", "Explain your problem out loud. The duck asks; you discover you knew it all along.")}<div class="card"><div id="duck-thread" class="duck-thread">${thread.length ? thread.map((m, i) => `<div class="bubble ${m.from === "you" ? "me" : ""}">${m.from === "duck" ? sicon("bird") + " " : ""}${esc(m.text)}<small class="message-meta">${new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}${m.edited ? " · edited" : ""}</small><span class="duck-msg-tools"><button type="button" class="duck-msg-edit" data-duck-edit="${i}" title="Edit message" aria-label="Edit message">${sicon("memo")}</button><button type="button" class="duck-msg-del" data-duck-del="${i}" title="Delete message" aria-label="Delete message">×</button></span></div>`).join("") : '<p class="muted">' + sicon("bird") + ' …listening. Tell me what is stuck.</p>'}</div><div class="input-row" style="margin-top:12px;margin-bottom:0"><textarea class="input autogrow" id="duck-input" rows="1" placeholder="Explain it to the duck… (Shift + Enter for a new line)" aria-label="Explain it to the duck"></textarea><button type="button" class="primary" id="duck-send">Quack</button></div><div style="margin-top:10px"><button type="button" class="ghost" data-duck-clear>Clear chat</button></div></div>`;
+  const thread = state.duckChat || []
+  t.innerHTML = `<button type="button" class="ghost tech-back" data-duck-back>← Duck guide</button>${viewHead("Rubber Duck", "Explain your problem out loud. The duck asks; you discover you knew it all along.")}<div class="card"><div id="duck-thread" class="duck-thread">${
+    thread.length
+      ? thread
+          .map(
+            (m, i) =>
+              `<div class="bubble ${m.from === "you" ? "me" : ""}">${
+                m.from === "duck" ? sicon("bird") + " " : ""
+              }${esc(m.text)}<small class="message-meta">${new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}${
+                m.edited ? " · edited" : ""
+              }</small><span class="duck-msg-tools"><button type="button" class="duck-msg-edit" data-duck-edit="${i}" title="Edit message" aria-label="Edit message">${sicon("memo")}</button><button type="button" class="duck-msg-del" data-duck-del="${i}" title="Delete message" aria-label="Delete message">×</button></span></div>`,
+          )
+          .join("")
+      : '<p class="muted">' +
+        sicon("bird") +
+        " …listening. Tell me what is stuck.</p>"
+  }</div><div class="input-row" style="margin-top:12px;margin-bottom:0"><textarea class="input autogrow" id="duck-input" rows="1" placeholder="Explain it to the duck… (Shift + Enter for a new line)" aria-label="Explain it to the duck"></textarea><button type="button" class="primary" id="duck-send">Quack</button></div><div style="margin-top:10px"><button type="button" class="ghost" data-duck-clear>Clear chat</button></div></div>`
   const scrollDuck = () => {
-    const box = $("#duck-thread", t);
-    if (box) box.scrollTop = box.scrollHeight;
-  };
-  scrollDuck();
+    const box = $("#duck-thread", t)
+    if (box) box.scrollTop = box.scrollHeight
+  }
+  scrollDuck()
   $("[data-duck-back]", t).onclick = () => {
-    duckView = false;
-    renderTechniques();
-  };
+    duckView = false
+    renderTechniques()
+  }
   $("[data-duck-clear]", t).onclick = () =>
-    confirmBox("Clear the duck chat?", "Your conversation will be gone.", () => {
-      duckGen++; // kill any pending reply timer — its chat no longer exists
-      state.duckChat = [];
-      persist();
-      renderDuck(t);
-    });
+    confirmBox(
+      "Clear the duck chat?",
+      "Your conversation will be gone.",
+      () => {
+        duckGen++ // kill any pending reply timer — its chat no longer exists
+        state.duckChat = []
+        persist()
+        renderDuck(t)
+      },
+    )
   $$("[data-duck-del]", t).forEach(
     (b) =>
       (b.onclick = () => {
-        duckGen++;
-        state.duckChat = state.duckChat.filter((_, i) => i !== Number(b.dataset.duckDel));
-        persist();
-        renderDuck(t);
+        duckGen++
+        state.duckChat = state.duckChat.filter(
+          (_, i) => i !== Number(b.dataset.duckDel),
+        )
+        persist()
+        renderDuck(t)
       }),
-  );
+  )
   // Edit a message you sent: the duck RETRACTS its old reply (the answer was
   // built for a message that no longer exists) and re-answers the new text.
   // The fresh reply replaces the old one IN PLACE (same slot after the
@@ -1878,96 +2496,129 @@ function renderDuck(t) {
   $$("[data-duck-edit]", t).forEach(
     (b) =>
       (b.onclick = () => {
-        const idx = Number(b.dataset.duckEdit);
-        const thread = state.duckChat || [];
-        const msg = thread[idx];
-        if (!msg || msg.from !== "you") return;
-        const bubble = b.closest(".bubble");
-        if (!bubble || bubble.querySelector("[data-duck-edit-input]")) return;
-        const original = msg.text;
-        bubble.innerHTML = `<div class="duck-edit-box"><textarea class="input autogrow" data-duck-edit-input rows="2" maxlength="2000" aria-label="Edit your message">${esc(original)}</textarea><div class="duck-edit-actions"><button type="button" class="ghost" data-duck-edit-cancel>Cancel</button><button type="button" class="primary" data-duck-edit-save>Save & re-ask</button></div></div>`;
-        const box = bubble.querySelector("[data-duck-edit-input]");
-        box?.focus();
-        try { box?.setSelectionRange(box.value.length, box.value.length); } catch { /* ignore */ }
+        const idx = Number(b.dataset.duckEdit)
+        const thread = state.duckChat || []
+        const msg = thread[idx]
+        if (!msg || msg.from !== "you") return
+        const bubble = b.closest(".bubble")
+        if (!bubble || bubble.querySelector("[data-duck-edit-input]")) return
+        const original = msg.text
+        bubble.innerHTML = `<div class="duck-edit-box"><textarea class="input autogrow" data-duck-edit-input rows="2" maxlength="2000" aria-label="Edit your message">${esc(original)}</textarea><div class="duck-edit-actions"><button type="button" class="ghost" data-duck-edit-cancel>Cancel</button><button type="button" class="primary" data-duck-edit-save>Save & re-ask</button></div></div>`
+        const box = bubble.querySelector("[data-duck-edit-input]")
+        box?.focus()
+        try {
+          box?.setSelectionRange(box.value.length, box.value.length)
+        } catch {
+          /* ignore */
+        }
         box?.addEventListener("keydown", (ev) => {
-          if (ev.key === "Escape") { ev.preventDefault(); renderDuck(t); }
-          else if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); bubble.querySelector("[data-duck-edit-save]")?.click(); }
-        });
-        bubble.querySelector("[data-duck-edit-cancel]").onclick = () => renderDuck(t);
+          if (ev.key === "Escape") {
+            ev.preventDefault()
+            renderDuck(t)
+          } else if (ev.key === "Enter" && !ev.shiftKey) {
+            ev.preventDefault()
+            bubble.querySelector("[data-duck-edit-save]")?.click()
+          }
+        })
+        bubble.querySelector("[data-duck-edit-cancel]").onclick = () =>
+          renderDuck(t)
         bubble.querySelector("[data-duck-edit-save]").onclick = () => {
-          const next = String(box?.value || "").trim();
-          if (!next) return notify("Message can't be empty");
-          if (next === original) return renderDuck(t);
-          duckGen++;
-          const gen = duckGen;
-          const src = [...(state.duckChat || [])];
-          src[idx] = { ...src[idx], text: next, ts: Date.now(), edited: true };
+          const next = String(box?.value || "").trim()
+          if (!next) return notify("Message can't be empty")
+          if (next === original) return renderDuck(t)
+          duckGen++
+          const gen = duckGen
+          const src = [...(state.duckChat || [])]
+          src[idx] = { ...src[idx], text: next, ts: Date.now(), edited: true }
           // Retract: drop stale thinking placeholders after idx, and the FIRST
           // real duck reply after idx (the answer to the OLD wording). Stop at
           // the next user message — later turns are untouched.
-          const out = src.slice(0, idx + 1);
-          let j = idx + 1;
-          let retracted = false;
+          const out = src.slice(0, idx + 1)
+          let j = idx + 1
+          let retracted = false
           while (j < src.length) {
-            const m = src[j];
-            if (m?.from === "duck" && m.thinking) { j++; continue; }
-            if (!retracted && m?.from === "duck") { retracted = true; j++; continue; }
-            break;
+            const m = src[j]
+            if (m?.from === "duck" && m.thinking) {
+              j++
+              continue
+            }
+            if (!retracted && m?.from === "duck") {
+              retracted = true
+              j++
+              continue
+            }
+            break
           }
-          out.push(...src.slice(j));
-          const turn = out.filter((m) => m.from === "duck").length + 1;
-          out.push({ from: "duck", text: "…re-thinking…", ts: Date.now(), thinking: true });
-          state.duckChat = out;
-          persist();
-          renderDuck(t);
+          out.push(...src.slice(j))
+          const turn = out.filter((m) => m.from === "duck").length + 1
+          out.push({
+            from: "duck",
+            text: "…re-thinking…",
+            ts: Date.now(),
+            thinking: true,
+          })
+          state.duckChat = out
+          persist()
+          renderDuck(t)
           setTimeout(() => {
-            if (gen !== duckGen) return; // superseded — never resurrect stale text
-            const base = (state.duckChat || []).filter((m) => !(m.from === "duck" && m.thinking));
-            const at = Math.min(idx + 1, base.length);
+            if (gen !== duckGen) return // superseded — never resurrect stale text
+            const base = (state.duckChat || []).filter(
+              (m) => !(m.from === "duck" && m.thinking),
+            )
+            const at = Math.min(idx + 1, base.length)
             state.duckChat = [
               ...base.slice(0, at),
-              { from: "duck", text: duckAnalyze(next, { turn }), ts: Date.now() },
+              {
+                from: "duck",
+                text: duckAnalyze(next, { turn }),
+                ts: Date.now(),
+              },
               ...base.slice(at),
-            ];
-            persist();
-            if (duckView && $("#tab-techniques")) renderDuck($("#tab-techniques"));
-          }, 800);
-        };
+            ]
+            persist()
+            if (duckView && $("#tab-techniques"))
+              renderDuck($("#tab-techniques"))
+          }, 800)
+        }
       }),
-  );
+  )
   const send = () => {
-    const input = $("#duck-input", t);
-    const text = input.value.trim();
-    if (!text) return;
-    duckGen++;
-    const gen = duckGen;
-    const base = (state.duckChat || []).filter((m) => !(m.from === "duck" && m.thinking));
-    const turn = base.filter((m) => m.from === "duck").length + 1;
+    const input = $("#duck-input", t)
+    const text = input.value.trim()
+    if (!text) return
+    duckGen++
+    const gen = duckGen
+    const base = (state.duckChat || []).filter(
+      (m) => !(m.from === "duck" && m.thinking),
+    )
+    const turn = base.filter((m) => m.from === "duck").length + 1
     state.duckChat = [
       ...base,
       { from: "you", text, ts: Date.now() },
       { from: "duck", text: "…thinking…", ts: Date.now(), thinking: true },
-    ];
-    persist();
-    renderDuck(t);
+    ]
+    persist()
+    renderDuck(t)
     setTimeout(() => {
-      if (gen !== duckGen) return;
+      if (gen !== duckGen) return
       state.duckChat = [
-        ...(state.duckChat || []).filter((m) => !(m.from === "duck" && m.thinking)),
+        ...(state.duckChat || []).filter(
+          (m) => !(m.from === "duck" && m.thinking),
+        ),
         { from: "duck", text: duckReply(text, { turn }), ts: Date.now() },
-      ];
-      persist();
-      if (duckView && $("#tab-techniques")) renderDuck($("#tab-techniques"));
-    }, 800);
-  };
-  $("#duck-send", t).onclick = send;
+      ]
+      persist()
+      if (duckView && $("#tab-techniques")) renderDuck($("#tab-techniques"))
+    }, 800)
+  }
+  $("#duck-send", t).onclick = send
   $("#duck-input", t).onkeydown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      send();
+      e.preventDefault()
+      send()
     }
-  };
-  setTimeout(() => $("#duck-input", t)?.focus(), 0);
+  }
+  setTimeout(() => $("#duck-input", t)?.focus(), 0)
 }
 
 const MIND_COLORS = [
@@ -1975,144 +2626,166 @@ const MIND_COLORS = [
   { fill: "#ffffff", text: "#17221d", ring: "#47765a" },
   { fill: "#fdf3d8", text: "#5c4a12", ring: "#e9ae3f" },
   { fill: "#fdeceb", text: "#8f2f23", ring: "#e8795b" },
-];
+]
 
 function mindLayout(nodes) {
-  const kids = {};
+  const kids = {}
   nodes.forEach((n) => {
-    const p = n.parent || "";
-    (kids[p] = kids[p] || []).push(n);
-  });
-  const pos = {};
-  (kids[""] || []).forEach((root, ri) => {
-    const cx = ri * 680;
-    pos[root.id] = { x: cx, y: 0, depth: 0 };
-    (kids[root.id] || []).forEach((c, i, arr) => {
-      const a = (i / arr.length) * Math.PI * 2 - Math.PI / 2;
-      const x = cx + Math.cos(a) * 260;
-      const y = Math.sin(a) * 260;
-      pos[c.id] = { x, y, depth: 1 };
-      (kids[c.id] || []).forEach((g, j, garr) => {
-        const spread = 0.55;
+    const p = n.parent || ""
+    ;(kids[p] = kids[p] || []).push(n)
+  })
+  const pos = {}
+  ;(kids[""] || []).forEach((root, ri) => {
+    const cx = ri * 680
+    pos[root.id] = { x: cx, y: 0, depth: 0 }
+    ;(kids[root.id] || []).forEach((c, i, arr) => {
+      const a = (i / arr.length) * Math.PI * 2 - Math.PI / 2
+      const x = cx + Math.cos(a) * 260
+      const y = Math.sin(a) * 260
+      pos[c.id] = { x, y, depth: 1 }
+      ;(kids[c.id] || []).forEach((g, j, garr) => {
+        const spread = 0.55
         const ga =
-          garr.length === 1 ? a : a - spread + ((2 * spread * j) / (garr.length - 1));
-        const gx = x + Math.cos(ga) * 210;
-        const gy = y + Math.sin(ga) * 210;
-        pos[g.id] = { x: gx, y: gy, depth: 2 };
-        (kids[g.id] || []).forEach((h, k) => {
-          const d = 165 + k * 52;
+          garr.length === 1
+            ? a
+            : a - spread + (2 * spread * j) / (garr.length - 1)
+        const gx = x + Math.cos(ga) * 210
+        const gy = y + Math.sin(ga) * 210
+        pos[g.id] = { x: gx, y: gy, depth: 2 }
+        ;(kids[g.id] || []).forEach((h, k) => {
+          const d = 165 + k * 52
           pos[h.id] = {
             x: gx + Math.cos(ga) * d,
             y: gy + Math.sin(ga) * d,
             depth: 3,
-          };
-        });
-      });
-    });
-  });
+          }
+        })
+      })
+    })
+  })
   nodes.forEach((n) => {
-    if (!pos[n.id]) pos[n.id] = { x: 0, y: 0, depth: 3 };
-  });
-  return { pos, kids };
+    if (!pos[n.id]) pos[n.id] = { x: 0, y: 0, depth: 3 }
+  })
+  return { pos, kids }
 }
 
 function mindSvg(map, selectedId) {
-  const nodes = map.nodes || [];
-  const { pos, kids } = mindLayout(nodes);
-  let minX = 1e9;
-  let maxX = -1e9;
-  let minY = 1e9;
-  let maxY = -1e9;
+  const nodes = map.nodes || []
+  const { pos, kids } = mindLayout(nodes)
+  let minX = 1e9
+  let maxX = -1e9
+  let minY = 1e9
+  let maxY = -1e9
   Object.values(pos).forEach((p) => {
-    minX = Math.min(minX, p.x);
-    maxX = Math.max(maxX, p.x);
-    minY = Math.min(minY, p.y);
-    maxY = Math.max(maxY, p.y);
-  });
-  const pad = 130;
-  const vb = `${minX - pad} ${minY - pad} ${maxX - minX + pad * 2} ${maxY - minY + pad * 2}`;
-  const byId = {};
-  nodes.forEach((n) => (byId[n.id] = n));
+    minX = Math.min(minX, p.x)
+    maxX = Math.max(maxX, p.x)
+    minY = Math.min(minY, p.y)
+    maxY = Math.max(maxY, p.y)
+  })
+  const pad = 130
+  const vb = `${minX - pad} ${minY - pad} ${maxX - minX + pad * 2} ${maxY - minY + pad * 2}`
+  const byId = {}
+  nodes.forEach((n) => (byId[n.id] = n))
   const edges = nodes
     .filter((n) => n.parent && pos[n.parent])
     .map((n) => {
-      const pp = pos[n.parent];
-      const cp = pos[n.id];
-      const pr = nodeRadius(n.parent, byId, pos, kids);
-      const cr = nodeRadius(n.id, byId, pos, kids);
-      const dx = cp.x - pp.x;
-      const dy = cp.y - pp.y;
-      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-      const sx = pp.x + (dx / dist) * pr;
-      const sy = pp.y + (dy / dist) * pr;
-      const ex = cp.x - (dx / dist) * cr;
-      const ey = cp.y - (dy / dist) * cr;
-      let edgePaper = "";
-      try { edgePaper = getComputedStyle(document.documentElement).getPropertyValue("--paper").trim(); } catch { /* ignore */ }
-      const edgeDark = Boolean(state.night)
-        || document.documentElement.dataset?.night === "1"
-        || (edgePaper && isDarkPaper(edgePaper));
-      const edgeStroke = edgeDark ? "#3f4f46" : "#c3d4c8";
-      return `<line x1="${sx}" y1="${sy}" x2="${ex}" y2="${ey}" stroke="${edgeStroke}" stroke-width="2" stroke-linecap="round"/>`;
+      const pp = pos[n.parent]
+      const cp = pos[n.id]
+      const pr = nodeRadius(n.parent, byId, pos, kids)
+      const cr = nodeRadius(n.id, byId, pos, kids)
+      const dx = cp.x - pp.x
+      const dy = cp.y - pp.y
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1
+      const sx = pp.x + (dx / dist) * pr
+      const sy = pp.y + (dy / dist) * pr
+      const ex = cp.x - (dx / dist) * cr
+      const ey = cp.y - (dy / dist) * cr
+      let edgePaper = ""
+      try {
+        edgePaper = getComputedStyle(document.documentElement)
+          .getPropertyValue("--paper")
+          .trim()
+      } catch {
+        /* ignore */
+      }
+      const edgeDark =
+        Boolean(state.night) ||
+        document.documentElement.dataset?.night === "1" ||
+        (edgePaper && isDarkPaper(edgePaper))
+      const edgeStroke = edgeDark ? "#3f4f46" : "#c3d4c8"
+      return `<line x1="${sx}" y1="${sy}" x2="${ex}" y2="${ey}" stroke="${edgeStroke}" stroke-width="2" stroke-linecap="round"/>`
     })
-    .join("");
+    .join("")
   const dots = nodes
     .map((n) => {
-      const p = pos[n.id];
-      const c = MIND_COLORS[Math.min(p.depth, 3)];
-      const label = n.label;
-      const fontSize = p.depth === 0 ? 14 : 12;
-      const charW = p.depth === 0 ? 8 : 7;
-      const textW = label.length * charW;
-      const boxW = Math.max(textW + 28, p.depth === 0 ? 120 : 80);
-      const boxH = p.depth === 0 ? 42 : 34;
-      const rx = p.depth === 0 ? 14 : 10;
-      const sel = selectedId === n.id;
-      const selPad = sel ? 5 : 0;
+      const p = pos[n.id]
+      const c = MIND_COLORS[Math.min(p.depth, 3)]
+      const label = n.label
+      const fontSize = p.depth === 0 ? 14 : 12
+      const charW = p.depth === 0 ? 8 : 7
+      const textW = label.length * charW
+      const boxW = Math.max(textW + 28, p.depth === 0 ? 120 : 80)
+      const boxH = p.depth === 0 ? 42 : 34
+      const rx = p.depth === 0 ? 14 : 10
+      const sel = selectedId === n.id
+      const selPad = sel ? 5 : 0
       // Selection dashes must survive EVERY dark variant — night mode AND
       // dark equipped skins (midnight/neon set --paper dark WITHOUT the
       // night flag, so the old state.night check alone left a dark stroke
       // on dark paper). Judge from the effective paper color.
-      const root = document.documentElement;
-      let paper = "";
-      try { paper = getComputedStyle(root).getPropertyValue("--paper").trim(); } catch { /* ignore */ }
-      const darkUi = Boolean(state.night)
-        || root.dataset?.night === "1"
-        || (paper && isDarkPaper(paper));
-      const selStroke = darkUi ? "#f2f0e4" : "#17221d";
-      return `<g data-mind-node="${n.id}" style="cursor:pointer">${sel ? `<rect x="${p.x - boxW / 2 - selPad}" y="${p.y - boxH / 2 - selPad}" width="${boxW + selPad * 2}" height="${boxH + selPad * 2}" rx="${rx + 3}" fill="none" stroke="${selStroke}" stroke-width="2.5" stroke-dasharray="7 4" opacity="0.95"/>${sel ? `<rect x="${p.x - boxW / 2 - selPad - 2}" y="${p.y - boxH / 2 - selPad - 2}" width="${boxW + selPad * 2 + 4}" height="${boxH + selPad * 2 + 4}" rx="${rx + 4}" fill="none" stroke="${selStroke}" stroke-width="1" stroke-dasharray="2 5" opacity="0.45"/>` : ""}` : ""}<rect x="${p.x - boxW / 2}" y="${p.y - boxH / 2}" width="${boxW}" height="${boxH}" rx="${rx}" fill="${c.fill}" stroke="${c.ring}" stroke-width="2"/><text x="${p.x}" y="${p.y}" text-anchor="middle" dominant-baseline="central" font-size="${fontSize}" font-weight="700" fill="${c.text}" font-family="DM Sans, sans-serif">${esc(label)}</text></g>`;
+      const root = document.documentElement
+      let paper = ""
+      try {
+        paper = getComputedStyle(root).getPropertyValue("--paper").trim()
+      } catch {
+        /* ignore */
+      }
+      const darkUi =
+        Boolean(state.night) ||
+        root.dataset?.night === "1" ||
+        (paper && isDarkPaper(paper))
+      const selStroke = darkUi ? "#f2f0e4" : "#17221d"
+      return `<g data-mind-node="${n.id}" style="cursor:pointer">${
+        sel
+          ? `<rect x="${p.x - boxW / 2 - selPad}" y="${p.y - boxH / 2 - selPad}" width="${boxW + selPad * 2}" height="${boxH + selPad * 2}" rx="${rx + 3}" fill="none" stroke="${selStroke}" stroke-width="2.5" stroke-dasharray="7 4" opacity="0.95"/>${
+              sel
+                ? `<rect x="${p.x - boxW / 2 - selPad - 2}" y="${p.y - boxH / 2 - selPad - 2}" width="${boxW + selPad * 2 + 4}" height="${boxH + selPad * 2 + 4}" rx="${rx + 4}" fill="none" stroke="${selStroke}" stroke-width="1" stroke-dasharray="2 5" opacity="0.45"/>`
+                : ""
+            }`
+          : ""
+      }<rect x="${p.x - boxW / 2}" y="${p.y - boxH / 2}" width="${boxW}" height="${boxH}" rx="${rx}" fill="${c.fill}" stroke="${c.ring}" stroke-width="2"/><text x="${p.x}" y="${p.y}" text-anchor="middle" dominant-baseline="central" font-size="${fontSize}" font-weight="700" fill="${c.text}" font-family="DM Sans, sans-serif">${esc(label)}</text></g>`
     })
-    .join("");
-  return `<svg viewBox="${vb}" class="mind-svg" role="img" aria-label="Mind map">${edges}${dots}</svg>`;
+    .join("")
+  return `<svg viewBox="${vb}" class="mind-svg" role="img" aria-label="Mind map">${edges}${dots}</svg>`
 }
 
 function nodeRadius(id, byId, pos, kids) {
-  const n = byId[id];
-  if (!n) return 30;
-  const p = pos[id];
-  const label = n.label;
-  const charW = p.depth === 0 ? 8 : 7;
-  const textW = label.length * charW;
-  const boxW = Math.max(textW + 28, p.depth === 0 ? 120 : 80);
-  return boxW / 2 + 6;
+  const n = byId[id]
+  if (!n) return 30
+  const p = pos[id]
+  const label = n.label
+  const charW = p.depth === 0 ? 8 : 7
+  const textW = label.length * charW
+  const boxW = Math.max(textW + 28, p.depth === 0 ? 120 : 80)
+  return boxW / 2 + 6
 }
 
 function renderMind(t) {
-  if (mindView && mindView !== "list") return renderMindEditor(t, mindView);
-  return renderMindList(t);
+  if (mindView && mindView !== "list") return renderMindEditor(t, mindView)
+  return renderMindList(t)
 }
 
 function renderMindList(t) {
-  const maps = state.mindmaps || [];
-  t.innerHTML = `<button type="button" class="ghost tech-back" data-mind-back>← Mind-map guide</button>${viewHead("Mind maps", "One central idea, branching outward. Click any node to select it, then grow or rename.")}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>New map</h2></div><div class="input-row"><input class="input" id="mind-title" placeholder="Central topic, e.g. Photosynthesis"><button type="button" class="primary" id="mind-create">Create</button></div></div><div class="grid three">${maps.map((m) => `<article class="card" data-mind="${m.id}" style="cursor:pointer"><div class="section-row"><h3 data-fittitle>${esc(m.title || "Untitled")}</h3><span class="tag">${(m.nodes || []).length} nodes</span></div><div class="tech-open">Open map →</div><button type="button" class="delete deck-list-del" data-mind-delete="${m.id}" title="Delete map" aria-label="Delete ${esc(m.title || "map")}">×</button></article>`).join("") || '<p class="muted">No maps yet — plant your first central idea above.</p>'}</div>`;
-  fitTitles(t);
+  const maps = state.mindmaps || []
+  t.innerHTML = `<button type="button" class="ghost tech-back" data-mind-back>← Mind-map guide</button>${viewHead("Mind maps", "One central idea, branching outward. Click any node to select it, then grow or rename.")}<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>New map</h2></div><div class="input-row"><input class="input" id="mind-title" placeholder="Central topic, e.g. Photosynthesis"><button type="button" class="primary" id="mind-create">Create</button></div></div><div class="grid three">${maps.map((m) => `<article class="card" data-mind="${m.id}" style="cursor:pointer"><div class="section-row"><h3 data-fittitle>${esc(m.title || "Untitled")}</h3><span class="tag">${(m.nodes || []).length} nodes</span></div><div class="tech-open">Open map →</div><button type="button" class="delete deck-list-del" data-mind-delete="${m.id}" title="Delete map" aria-label="Delete ${esc(m.title || "map")}">×</button></article>`).join("") || '<p class="muted">No maps yet — plant your first central idea above.</p>'}</div>`
+  fitTitles(t)
   $("[data-mind-back]", t).onclick = () => {
-    mindView = null;
-    renderTechniques();
-  };
+    mindView = null
+    renderTechniques()
+  }
   $("#mind-create", t).onclick = () => {
-    if (!requireAuth("save mind maps")) return;
-    const title = $("#mind-title", t).value.trim() || "Untitled";
+    if (!requireAuth("save mind maps")) return
+    const title = $("#mind-title", t).value.trim() || "Untitled"
     const map = {
       id: uid(),
       title,
@@ -2120,103 +2793,121 @@ function renderMindList(t) {
       updated: Date.now(),
       nodes: [{ id: uid(), label: title, parent: "" }],
       selected: null,
-    };
-    state.mindmaps.unshift(map);
-    persist();
-    mirrorNotes("mindmap", state.mindmaps);
-    mindView = map.id;
-    renderMind(t);
-  };
+    }
+    state.mindmaps.unshift(map)
+    persist()
+    mirrorNotes("mindmap", state.mindmaps)
+    mindView = map.id
+    renderMind(t)
+  }
   $$("[data-mind]", t).forEach(
     (card) =>
       (card.onclick = (e) => {
-        if (e.target.closest("[data-mind-delete]")) return;
-        mindView = card.dataset.mind;
-        renderMind(t);
+        if (e.target.closest("[data-mind-delete]")) return
+        mindView = card.dataset.mind
+        renderMind(t)
       }),
-  );
+  )
   $$("[data-mind-delete]", t).forEach(
     (b) =>
       (b.onclick = (e) => {
-        e.stopPropagation();
-        const map = (state.mindmaps || []).find((m) => m.id === b.dataset.mindDelete);
-        confirmBox(`Delete “${map?.title || "Untitled"}”?`, "The map and all its branches will be gone.", () => {
-          const mid = b.dataset.mindDelete;
-          state.mindmaps = state.mindmaps.filter((m) => m.id !== mid);
-          persist();
-          deleteNoteEverywhere("mindmap", mid);
-          notify("Map deleted");
-          renderMindList(t);
-        });
+        e.stopPropagation()
+        const map = (state.mindmaps || []).find(
+          (m) => m.id === b.dataset.mindDelete,
+        )
+        confirmBox(
+          `Delete “${map?.title || "Untitled"}”?`,
+          "The map and all its branches will be gone.",
+          () => {
+            const mid = b.dataset.mindDelete
+            state.mindmaps = state.mindmaps.filter((m) => m.id !== mid)
+            persist()
+            deleteNoteEverywhere("mindmap", mid)
+            notify("Map deleted")
+            renderMindList(t)
+          },
+        )
       }),
-  );
+  )
 }
 
 function renderMindEditor(t, mapId) {
-  const map = (state.mindmaps || []).find((m) => m.id === mapId);
+  const map = (state.mindmaps || []).find((m) => m.id === mapId)
   if (!map) {
-    mindView = "list";
-    return renderMind(t);
+    mindView = "list"
+    return renderMind(t)
   }
-  const sel = (map.nodes || []).find((n) => n.id === map.selected) || null;
-  t.innerHTML = `<button type="button" class="ghost tech-back" data-mind-back-list>← All maps</button>${viewHead(map.title || "Untitled", 'Click a node to select it <span class="tag" id="mind-saved">saved</span>')}<div class="card" style="margin-bottom:18px">${mindSvg(map, sel?.id)}</div><div class="grid two"><div class="card"><div class="section-row"><h2>Grow</h2></div><div class="input-row"><input class="input" id="mind-new" placeholder="New branch label…"><button type="button" class="primary" id="mind-add">Add</button></div><p class="muted">Adds under: <strong>${esc(sel?.label || map.title || "central topic")}</strong></p></div><div class="card"><div class="section-row"><h2>Edit</h2><span style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="ghost" data-mind-delete ${!sel || !sel.parent ? "disabled" : ""}>Delete node</button><button type="button" class="delete" data-map-delete>Delete map</button></span></div><div class="input-row"><input class="input" id="mind-rename" placeholder="Rename selected…" value="${esc(sel?.label || "")}" ${sel ? "" : "disabled"}><button type="button" class="primary" id="mind-apply" ${sel ? "" : "disabled"}>Apply</button></div>${!sel ? '<p class="muted">Select a node on the canvas first.</p>' : ""}</div></div>`;
+  const sel = (map.nodes || []).find((n) => n.id === map.selected) || null
+  t.innerHTML = `<button type="button" class="ghost tech-back" data-mind-back-list>← All maps</button>${viewHead(map.title || "Untitled", 'Click a node to select it <span class="tag" id="mind-saved">saved</span>')}<div class="card" style="margin-bottom:18px">${mindSvg(map, sel?.id)}</div><div class="grid two"><div class="card"><div class="section-row"><h2>Grow</h2></div><div class="input-row"><input class="input" id="mind-new" placeholder="New branch label…"><button type="button" class="primary" id="mind-add">Add</button></div><p class="muted">Adds under: <strong>${esc(sel?.label || map.title || "central topic")}</strong></p></div><div class="card"><div class="section-row"><h2>Edit</h2><span style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="ghost" data-mind-delete ${
+    !sel || !sel.parent ? "disabled" : ""
+  }>Delete node</button><button type="button" class="delete" data-map-delete>Delete map</button></span></div><div class="input-row"><input class="input" id="mind-rename" placeholder="Rename selected…" value="${esc(sel?.label || "")}" ${
+    sel ? "" : "disabled"
+  }><button type="button" class="primary" id="mind-apply" ${
+    sel ? "" : "disabled"
+  }>Apply</button></div>${
+    !sel ? '<p class="muted">Select a node on the canvas first.</p>' : ""
+  }</div></div>`
   const touch = () => {
-    map.updated = Date.now();
-    const tag = $("#mind-saved", t);
-    if (tag) tag.innerHTML = "saved " + sicon("check");
-    persist();
-    mirrorNotes("mindmap", state.mindmaps);
-  };
+    map.updated = Date.now()
+    const tag = $("#mind-saved", t)
+    if (tag) tag.innerHTML = "saved " + sicon("check")
+    persist()
+    mirrorNotes("mindmap", state.mindmaps)
+  }
   $("[data-mind-back-list]", t).onclick = () => {
-    mindView = "list";
-    renderMind(t);
-  };
+    mindView = "list"
+    renderMind(t)
+  }
   $("#mind-add", t).onclick = () => {
-    const label = $("#mind-new", t).value.trim();
-    if (!label) return notify("Label the new branch first");
-    const parent = sel?.id || (map.nodes.find((n) => !n.parent) || {}).id;
-    map.nodes.push({ id: uid(), label, parent: parent || "" });
-    map.selected = map.nodes[map.nodes.length - 1].id;
-    touch();
-    renderMindEditor(t, mapId);
-  };
+    const label = $("#mind-new", t).value.trim()
+    if (!label) return notify("Label the new branch first")
+    const parent = sel?.id || (map.nodes.find((n) => !n.parent) || {}).id
+    map.nodes.push({ id: uid(), label, parent: parent || "" })
+    map.selected = map.nodes[map.nodes.length - 1].id
+    touch()
+    renderMindEditor(t, mapId)
+  }
   $("#mind-apply", t).onclick = () => {
-    if (!sel) return;
-    const label = $("#mind-rename", t).value.trim();
-    if (!label) return notify("Give the node a label");
-    sel.label = label;
-    if (!sel.parent) map.title = label;
-    touch();
-    renderMindEditor(t, mapId);
-  };
+    if (!sel) return
+    const label = $("#mind-rename", t).value.trim()
+    if (!label) return notify("Give the node a label")
+    sel.label = label
+    if (!sel.parent) map.title = label
+    touch()
+    renderMindEditor(t, mapId)
+  }
   $("[data-mind-delete]", t)?.addEventListener("click", () => {
-    if (!sel || !sel.parent) return;
+    if (!sel || !sel.parent) return
     map.nodes
       .filter((n) => n.parent === sel.id)
-      .forEach((n) => (n.parent = sel.parent));
-    map.nodes = map.nodes.filter((n) => n.id !== sel.id);
-    map.selected = sel.parent;
-    touch();
-    renderMindEditor(t, mapId);
-  });
+      .forEach((n) => (n.parent = sel.parent))
+    map.nodes = map.nodes.filter((n) => n.id !== sel.id)
+    map.selected = sel.parent
+    touch()
+    renderMindEditor(t, mapId)
+  })
   $("[data-map-delete]", t)?.addEventListener("click", () =>
-    confirmBox(`Delete “${map.title || "Untitled"}”?`, "The map and all its branches will be gone.", () => {
-      state.mindmaps = state.mindmaps.filter((m) => m.id !== mapId);
-      persist();
-      deleteNoteEverywhere("mindmap", mapId);
-      mindView = "list";
-      notify("Map deleted");
-      renderMind(t);
-    }),
-  );
+    confirmBox(
+      `Delete “${map.title || "Untitled"}”?`,
+      "The map and all its branches will be gone.",
+      () => {
+        state.mindmaps = state.mindmaps.filter((m) => m.id !== mapId)
+        persist()
+        deleteNoteEverywhere("mindmap", mapId)
+        mindView = "list"
+        notify("Map deleted")
+        renderMind(t)
+      },
+    ),
+  )
   $$("[data-mind-node]", t).forEach(
     (g) =>
       (g.onclick = () => {
-        map.selected = g.dataset.mindNode;
-        touch();
-        renderMindEditor(t, mapId);
+        map.selected = g.dataset.mindNode
+        touch()
+        renderMindEditor(t, mapId)
       }),
-  );
+  )
 }
 
 const QUIZ = [
@@ -2249,136 +2940,225 @@ const QUIZ = [
       ["I'm stuck on a problem", { duck: 2, pareto: 1 }],
     ],
   },
-];
+]
 
 function quizWhy(answers) {
-  const s = (qi) => QUIZ[qi].options[answers[qi]][0].toLowerCase();
-  return `Because you're tackling ${s(0)} and struggling with ${s(2)}.`;
+  const s = (qi) => QUIZ[qi].options[answers[qi]][0].toLowerCase()
+  return `Because you're tackling ${s(0)} and struggling with ${s(2)}.`
 }
 
 function renderQuiz(t) {
-  if (!quizState) quizState = { step: 0, answers: [] };
-  const qs = quizState;
+  if (!quizState) quizState = { step: 0, answers: [] }
+  const qs = quizState
   if (qs.step >= QUIZ.length) {
-    const scores = {};
+    const scores = {}
     qs.answers.forEach((optIdx, qi) => {
-      const pts = QUIZ[qi].options[optIdx][1];
+      const pts = QUIZ[qi].options[optIdx][1]
       Object.entries(pts).forEach(
         ([id, p]) => (scores[id] = (scores[id] || 0) + p),
-      );
-    });
+      )
+    })
     const winner =
-      Object.entries(scores).sort((a, b) => b[1] - a[1])[0]?.[0] ||
-      "pomodoro";
-    const x = techniques.find((y) => y[0] === winner) || techniques[0];
+      Object.entries(scores).sort((a, b) => b[1] - a[1])[0]?.[0] || "pomodoro"
+    const x = techniques.find((y) => y[0] === winner) || techniques[0]
     const preset = (TECH_DETAILS[winner] || {}).preset || {
       focus: 25,
       short: 5,
       long: 15,
-    };
-    t.innerHTML = `<button type="button" class="ghost tech-back" data-quiz-back>← Techniques</button>${viewHead("Your match", "The method that fits right now.")}<div class="card" style="text-align:center"><div class="complete-emoji">${x[2]}</div><div class="eyebrow">We recommend</div><h2>${x[1]}</h2><p class="muted" style="margin-top:8px">${esc(quizWhy(qs.answers))} Best session: focus ${preset.focus} · break ${preset.short}.</p><div style="display:flex;gap:8px;justify-content:center;margin-top:16px;flex-wrap:wrap"><button type="button" class="ghost" data-quiz-retake>Retake</button><button type="button" class="ghost" data-quiz-guide>Read the guide</button><button type="button" class="primary" data-quiz-use>Set up my timer</button></div></div>`;
+    }
+    t.innerHTML = `<button type="button" class="ghost tech-back" data-quiz-back>← Techniques</button>${viewHead("Your match", "The method that fits right now.")}<div class="card" style="text-align:center"><div class="complete-emoji">${x[2]}</div><div class="eyebrow">We recommend</div><h2>${x[1]}</h2><p class="muted" style="margin-top:8px">${esc(quizWhy(qs.answers))} Best session: focus ${preset.focus} · break ${preset.short}.</p><div style="display:flex;gap:8px;justify-content:center;margin-top:16px;flex-wrap:wrap"><button type="button" class="ghost" data-quiz-retake>Retake</button><button type="button" class="ghost" data-quiz-guide>Read the guide</button><button type="button" class="primary" data-quiz-use>Set up my timer</button></div></div>`
     $("[data-quiz-back]", t).onclick = () => {
-      quizView = false;
-      quizState = null;
-      renderTechniques();
-    };
+      quizView = false
+      quizState = null
+      renderTechniques()
+    }
     $("[data-quiz-retake]", t).onclick = () => {
-      quizState = { step: 0, answers: [] };
-      renderQuiz(t);
-    };
+      quizState = { step: 0, answers: [] }
+      renderQuiz(t)
+    }
     $("[data-quiz-guide]", t).onclick = () => {
-      quizView = false;
-      quizState = null;
-      activeTechnique = winner;
-      renderTechniques();
-    };
+      quizView = false
+      quizState = null
+      activeTechnique = winner
+      renderTechniques()
+    }
     $("[data-quiz-use]", t).onclick = () => {
-      quizView = false;
-      quizState = null;
-      applyTechPreset(winner);
-    };
-    return;
+      quizView = false
+      quizState = null
+      applyTechPreset(winner)
+    }
+    return
   }
-  const step = QUIZ[qs.step];
-  t.innerHTML = `<button type="button" class="ghost tech-back" data-quiz-back>← Techniques</button>${viewHead("Find your technique", `Question ${qs.step + 1} of ${QUIZ.length}`)}<div class="card"><h2>${esc(step.q)}</h2><div class="quiz-opts">${step.options.map(([label], i) => `<button type="button" class="quiz-opt" data-quiz-opt="${i}">${esc(label)}</button>`).join("")}</div></div>${qs.step ? '<button type="button" class="ghost" data-quiz-prev style="margin-top:12px">← Back</button>' : ""}`;
+  const step = QUIZ[qs.step]
+  t.innerHTML = `<button type="button" class="ghost tech-back" data-quiz-back>← Techniques</button>${viewHead("Find your technique", `Question ${qs.step + 1} of ${QUIZ.length}`)}<div class="card"><h2>${esc(step.q)}</h2><div class="quiz-opts">${step.options.map(([label], i) => `<button type="button" class="quiz-opt" data-quiz-opt="${i}">${esc(label)}</button>`).join("")}</div></div>${
+    qs.step
+      ? '<button type="button" class="ghost" data-quiz-prev style="margin-top:12px">← Back</button>'
+      : ""
+  }`
   $("[data-quiz-back]", t).onclick = () => {
-    quizView = false;
-    quizState = null;
-    renderTechniques();
-  };
-  const prev = $("[data-quiz-prev]", t);
+    quizView = false
+    quizState = null
+    renderTechniques()
+  }
+  const prev = $("[data-quiz-prev]", t)
   if (prev)
     prev.onclick = () => {
-      qs.answers.pop();
-      qs.step--;
-      renderQuiz(t);
-    };
+      qs.answers.pop()
+      qs.step--
+      renderQuiz(t)
+    }
   $$("[data-quiz-opt]", t).forEach(
     (b) =>
       (b.onclick = () => {
-        qs.answers[qs.step] = +b.dataset.quizOpt;
-        qs.step++;
-        renderQuiz(t);
+        qs.answers[qs.step] = +b.dataset.quizOpt
+        qs.step++
+        renderQuiz(t)
       }),
-  );
+  )
 }
 
 function resolveFavorite(id) {
-  if (typeof id !== "string") return null;
+  if (typeof id !== "string") return null
   if (id.startsWith("sound-")) {
-    const s = sounds.find((x) => x[0] === id.slice(6));
-    if (!s) return null;
+    const s = sounds.find((x) => x[0] === id.slice(6))
+    if (!s) return null
     return {
       id,
       kind: "Sound",
       icon: s[1].startsWith("Rain") ? sicon("rain") : s[2],
       name: s[1],
       sub: `${s[3] || "Soundscape"} · Sound studio`,
-    };
+    }
   }
-  const x = techniques.find((t) => t[0] === id);
-  if (!x) return null;
+  const x = techniques.find((t) => t[0] === id)
+  if (!x) return null
   return {
     id,
     kind: "Technique",
     icon: x[2],
     name: x[1],
     sub: `${x[3] || ""} · Technique guide`,
-  };
+  }
 }
 
 function openFavorite(id) {
-  const item = resolveFavorite(id);
-  if (!item) return notify("That favorite no longer exists");
+  const item = resolveFavorite(id)
+  if (!item) return notify("That favorite no longer exists")
   if (item.kind === "Technique") {
-    state.tab = "techniques";
-    activeTechnique = id;
+    state.tab = "techniques"
+    activeTechnique = id
   } else {
-    state.tab = "sounds";
+    state.tab = "sounds"
   }
-  persist();
-  shell();
+  persist()
+  shell()
 }
 
 function renderFavorites() {
-  const t = $("#tab-favorites");
-  if (!t) return;
-  const items = (state.favorites || []).map(resolveFavorite).filter(Boolean);
-  const techs = items.filter((i) => i.kind === "Technique");
-  const snds = items.filter((i) => i.kind === "Sound");
-  const row = (i) => `<div class="task"><span class="collection-item">${i.icon} <strong>${esc(i.name)}</strong></span><span class="muted" style="font-size:12px">${esc(i.sub)}</span><span class="collection-actions"><button type="button" class="ghost equip-btn" data-fav-open="${i.id}">Open</button><button type="button" class="favorite on" data-fav="${i.id}" title="Unfavorite">${sicon("star")}</button></span></div>`;
-  t.innerHTML = `${viewHead("Favorites", "Everything you starred — techniques and sounds, one tap away.")}${items.length ? `${techs.length ? `<div class="card" style="margin-bottom:18px"><h2>Techniques (${techs.length})</h2><div class="collection">${techs.map(row).join("")}</div></div>` : ""}${snds.length ? `<div class="card"><h2>Sounds (${snds.length})</h2><div class="collection">${snds.map(row).join("")}</div></div>` : ""}` : `<div class="card empty-state"><div class="emoji">${sicon("starOutline")}</div><h3>No favorites yet</h3><p class="muted">Tap the star on any technique or sound and it will wait for you here.</p><button type="button" class="primary" data-fav-browse>Browse techniques</button></div>`}`;
-  bindFavorites(t);
+  const t = $("#tab-favorites")
+  if (!t) return
+  const items = (state.favorites || []).map(resolveFavorite).filter(Boolean)
+  const techs = items.filter((i) => i.kind === "Technique")
+  const snds = items.filter((i) => i.kind === "Sound")
+  const row = (i) =>
+    `<div class="task"><span class="collection-item">${i.icon} <strong>${esc(i.name)}</strong></span><span class="muted" style="font-size:12px">${esc(i.sub)}</span><span class="collection-actions"><button type="button" class="ghost equip-btn" data-fav-open="${i.id}">Open</button><button type="button" class="favorite on" data-fav="${i.id}" title="Unfavorite">${sicon("star")}</button></span></div>`
+  t.innerHTML = `${viewHead("Favorites", "Everything you starred — techniques and sounds, one tap away.")}${
+    items.length
+      ? `${
+          techs.length
+            ? `<div class="card" style="margin-bottom:18px"><h2>Techniques (${techs.length})</h2><div class="collection">${techs.map(row).join("")}</div></div>`
+            : ""
+        }${
+          snds.length
+            ? `<div class="card"><h2>Sounds (${snds.length})</h2><div class="collection">${snds.map(row).join("")}</div></div>`
+            : ""
+        }`
+      : `<div class="card empty-state"><div class="emoji">${sicon("starOutline")}</div><h3>No favorites yet</h3><p class="muted">Tap the star on any technique or sound and it will wait for you here.</p><button type="button" class="primary" data-fav-browse>Browse techniques</button></div>`
+  }`
+  bindFavorites(t)
   $$("[data-fav-open]", t).forEach(
     (b) => (b.onclick = () => openFavorite(b.dataset.favOpen)),
-  );
+  )
   $("[data-fav-browse]", t)?.addEventListener("click", () => {
-    state.tab = "techniques";
-    persist();
-    shell();
-  });
+    state.tab = "techniques"
+    persist()
+    shell()
+  })
 }
 
-
-
-export { techniques, activeTechnique, flashView, cornellView, reviewState, feynmanView, duckView, mindView, quizView, quizState, duckIdx, TECH_DETAILS, matchTech, renderTechniques, techCard, renderTechGrid, bindTechRegion, renderTechDetail, applyTechPreset, BOX_DAYS, deckDue, totalDue, findDeck, renderFlash, renderDeckList, renderDeckDetail, freshReview, loadReview, saveReview, clearReview, renderReview, gradeCard, renderCornell, renderCornellList, renderCornellEditor, countSyllables, readability, readLevel, renderFeynman, renderFeynmanList, renderFeynmanEditor, DUCK_LINES, duckReply, renderDuck, MIND_COLORS, mindLayout, mindSvg, renderMind, renderMindList, renderMindEditor, QUIZ, quizWhy, renderQuiz, resolveFavorite, openFavorite, renderFavorites, TECH_CHECK_IDS, TECH_CHECK_QUESTIONS, TECH_CHECK_WHY, scoreTechCheck, techCheckReturn, tcSession, startTechCheck, skipTechCheck, enterApp, exitTechCheck, answerTechCheck, techCheckAnswered, techCheckNext, techCheckBack, finishTechCheck, techInfo, renderTechCheck, openTechniqueGuide };
+export {
+  techniques,
+  activeTechnique,
+  flashView,
+  cornellView,
+  reviewState,
+  feynmanView,
+  duckView,
+  mindView,
+  quizView,
+  quizState,
+  duckIdx,
+  TECH_DETAILS,
+  matchTech,
+  renderTechniques,
+  techCard,
+  renderTechGrid,
+  bindTechRegion,
+  renderTechDetail,
+  applyTechPreset,
+  BOX_DAYS,
+  deckDue,
+  totalDue,
+  findDeck,
+  renderFlash,
+  renderDeckList,
+  renderDeckDetail,
+  freshReview,
+  loadReview,
+  saveReview,
+  clearReview,
+  renderReview,
+  gradeCard,
+  renderCornell,
+  renderCornellList,
+  renderCornellEditor,
+  countSyllables,
+  readability,
+  readLevel,
+  renderFeynman,
+  renderFeynmanList,
+  renderFeynmanEditor,
+  DUCK_LINES,
+  duckReply,
+  renderDuck,
+  MIND_COLORS,
+  mindLayout,
+  mindSvg,
+  renderMind,
+  renderMindList,
+  renderMindEditor,
+  QUIZ,
+  quizWhy,
+  renderQuiz,
+  resolveFavorite,
+  openFavorite,
+  renderFavorites,
+  TECH_CHECK_IDS,
+  TECH_CHECK_QUESTIONS,
+  TECH_CHECK_WHY,
+  scoreTechCheck,
+  techCheckReturn,
+  tcSession,
+  startTechCheck,
+  skipTechCheck,
+  enterApp,
+  exitTechCheck,
+  answerTechCheck,
+  techCheckAnswered,
+  techCheckNext,
+  techCheckBack,
+  finishTechCheck,
+  techInfo,
+  renderTechCheck,
+  openTechniqueGuide,
+}

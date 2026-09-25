@@ -1,79 +1,115 @@
 /* books-reader.js — text/PDF reader: sections, progress, search, highlights, notes, bookmarks, settings */
 import {
-  state, $, $$, uid, esc, sicon, persist, toast, fitTextarea, get, save,
+  state,
+  $,
+  $$,
+  uid,
+  esc,
+  sicon,
+  persist,
+  toast,
+  fitTextarea,
+  get,
+  save,
   isPersistHalted,
-} from "./core.js";
+} from "./core.js"
 import {
-  getBookBlob, getBookText, bookProgressOf, resizeCover,
-  renderLibrary, BOOK_COLORS,
-  recordBookOpen, recordBookTime, markBookCompleted, isBookCompleted,
+  getBookBlob,
+  getBookText,
+  bookProgressOf,
+  resizeCover,
+  renderLibrary,
+  BOOK_COLORS,
+  recordBookOpen,
+  recordBookTime,
+  markBookCompleted,
+  isBookCompleted,
   bookFingerprintOf,
-} from "./books.js";
+} from "./books.js"
 import {
-  backendConfigured, saveBookProgress, cloudUpsertBooks,
-  listBookBookmarks, addBookBookmark, removeBookBookmark,
-  listBookHighlights, addBookHighlight, updateBookHighlight, removeBookHighlight,
-  listBookNotes, addBookNote, updateBookNote, removeBookNote,
-} from "./services/backend.js";
-import { renderCompanionPanel as paintCompanion } from "./books-companion.js";
-import { parseEpub, epubSupported } from "./books-epub.js";
+  backendConfigured,
+  saveBookProgress,
+  cloudUpsertBooks,
+  listBookBookmarks,
+  addBookBookmark,
+  removeBookBookmark,
+  listBookHighlights,
+  addBookHighlight,
+  updateBookHighlight,
+  removeBookHighlight,
+  listBookNotes,
+  addBookNote,
+  updateBookNote,
+  removeBookNote,
+} from "./services/backend.js"
+import { renderCompanionPanel as paintCompanion } from "./books-companion.js"
+import { parseEpub, epubSupported } from "./books-epub.js"
 
-let R = null;
+let R = null
 function readerSettings() {
-  let raw = {};
+  let raw = {}
   try {
-    raw = JSON.parse(localStorage.getItem("sf-book-settings") || "{}") || {};
+    raw = JSON.parse(localStorage.getItem("sf-book-settings") || "{}") || {}
   } catch {
     /* corrupted settings reset to defaults */
   }
-  const fonts = ["serif", "sans", "system"];
+  const fonts = ["serif", "sans", "system"]
   return {
-    fontSize: 18, lineHeight: 1.7, width: "medium", theme: "auto", align: "left",
-    font: "serif", ...raw,
+    fontSize: 18,
+    lineHeight: 1.7,
+    width: "medium",
+    theme: "auto",
+    align: "left",
+    font: "serif",
+    ...raw,
     fontSize: Math.min(24, Math.max(14, Number(raw.fontSize) || 18)),
     lineHeight: Math.min(2.2, Math.max(1.4, Number(raw.lineHeight) || 1.7)),
-    width: ["narrow", "medium", "wide"].includes(raw.width) ? raw.width : "medium",
-    theme: ["auto", "light", "dark", "sepia"].includes(raw.theme) ? raw.theme : "auto",
+    width: ["narrow", "medium", "wide"].includes(raw.width)
+      ? raw.width
+      : "medium",
+    theme: ["auto", "light", "dark", "sepia"].includes(raw.theme)
+      ? raw.theme
+      : "auto",
     align: raw.align === "justify" ? "justify" : "left",
     font: fonts.includes(raw.font) ? raw.font : "serif",
     ruler: raw.ruler === true,
-  };
+  }
 }
 function saveReaderSettings(s) {
   try {
-    localStorage.setItem("sf-book-settings", JSON.stringify(s));
+    localStorage.setItem("sf-book-settings", JSON.stringify(s))
   } catch {
     /* ignore */
   }
 }
 function localStore(bookId) {
-  const all = state.bookLocal || {};
+  const all = state.bookLocal || {}
   if (!all[bookId] || typeof all[bookId] !== "object")
-    all[bookId] = { highlights: [], bookmarks: [], notes: [] };
-  const s = all[bookId];
-  if (!Array.isArray(s.highlights)) s.highlights = [];
-  if (!Array.isArray(s.bookmarks)) s.bookmarks = [];
-  if (!Array.isArray(s.notes)) s.notes = [];
-  if (typeof s.dirtyAnn !== "boolean") s.dirtyAnn = false;
+    all[bookId] = { highlights: [], bookmarks: [], notes: [] }
+  const s = all[bookId]
+  if (!Array.isArray(s.highlights)) s.highlights = []
+  if (!Array.isArray(s.bookmarks)) s.bookmarks = []
+  if (!Array.isArray(s.notes)) s.notes = []
+  if (typeof s.dirtyAnn !== "boolean") s.dirtyAnn = false
   if (!s.deletedAnn || typeof s.deletedAnn !== "object") {
-    s.deletedAnn = { highlights: [], bookmarks: [], notes: [] };
+    s.deletedAnn = { highlights: [], bookmarks: [], notes: [] }
   }
   for (const k of ["highlights", "bookmarks", "notes"]) {
-    if (!Array.isArray(s.deletedAnn[k])) s.deletedAnn[k] = [];
+    if (!Array.isArray(s.deletedAnn[k])) s.deletedAnn[k] = []
   }
-  state.bookLocal = all;
-  return s;
+  state.bookLocal = all
+  return s
 }
 
 // Tombstone a deleted server row so an offline delete still lands later.
 // Local-only ids need no tombstone (they never reached the cloud).
 function queueAnnDelete(kind, id) {
-  if (!R || !UUID_LIKE.test(String(id || ""))) return;
+  if (!R || !UUID_LIKE.test(String(id || ""))) return
   try {
-    const store = localStore(R.id);
-    const list = store.deletedAnn[kind] || (store.deletedAnn[kind] = []);
-    if (!list.includes(id)) list.push(id);
-    persist();
+    const store = localStore(R.id)
+    const list = store.deletedAnn[kind] || (store.deletedAnn[kind] = [])
+    if (!list.includes(id)) list.push(id)
+    persist()
   } catch {
     /* ignore */
   }
@@ -82,100 +118,112 @@ function queueAnnDelete(kind, id) {
 // Annotations created offline get local ids; this backlog inserts them when
 // the connection returns (remapping to server uuids). Edits to already-synced
 // rows write through immediately at their action sites.
-const UUID_LIKE = /^[0-9a-f]{8}-/i;
-let annFlushT = 0;
+const UUID_LIKE = /^[0-9a-f]{8}-/i
+let annFlushT = 0
 
 function markAnnotationsDirty() {
-  if (!R) return;
+  if (!R) return
   try {
-    const store = localStore(R.id);
-    store.dirtyAnn = true;
-    persist();
+    const store = localStore(R.id)
+    store.dirtyAnn = true
+    persist()
   } catch {
     /* ignore */
   }
-  scheduleAnnotationFlush();
+  scheduleAnnotationFlush()
 }
 
 function scheduleAnnotationFlush() {
-  clearTimeout(annFlushT);
+  clearTimeout(annFlushT)
   annFlushT = setTimeout(() => {
-    flushAnnotations().catch(() => {});
-  }, 3000);
+    flushAnnotations().catch(() => {})
+  }, 3000)
 }
 
 async function flushAnnotations(bookId) {
-  const id = bookId || R?.id;
-  if (!id || !backendConfigured || !state.user || navigator.onLine === false) return;
-  const store = localStore(id);
-  if (!store.dirtyAnn) return;
+  const id = bookId || R?.id
+  if (!id || !backendConfigured || !state.user || navigator.onLine === false)
+    return
+  const store = localStore(id)
+  if (!store.dirtyAnn) return
   // Make sure the parent book row exists first (offline-first books may never
   // have been mirrored); annotation inserts FK-fail without it.
   try {
-    const book = (state.books || []).find((b) => b && b.id === id);
-    if (book) await cloudUpsertBooks([book]);
+    const book = (state.books || []).find((b) => b && b.id === id)
+    if (book) await cloudUpsertBooks([book])
   } catch {
     /* row mirror is best-effort here; per-item errors retry later */
   }
   const dropTombstone = (kind, tid) => {
-    store.deletedAnn[kind] = (store.deletedAnn[kind] || []).filter((x) => x !== tid);
-  };
+    store.deletedAnn[kind] = (store.deletedAnn[kind] || []).filter(
+      (x) => x !== tid,
+    )
+  }
   for (const tid of [...(store.deletedAnn.highlights || [])]) {
     try {
-      await removeBookHighlight(tid);
-      dropTombstone("highlights", tid);
+      await removeBookHighlight(tid)
+      dropTombstone("highlights", tid)
     } catch {
       /* retry later */
     }
   }
   for (const tid of [...(store.deletedAnn.bookmarks || [])]) {
     try {
-      await removeBookBookmark(tid);
-      dropTombstone("bookmarks", tid);
+      await removeBookBookmark(tid)
+      dropTombstone("bookmarks", tid)
     } catch {
       /* retry later */
     }
   }
   for (const tid of [...(store.deletedAnn.notes || [])]) {
     try {
-      await removeBookNote(tid);
-      dropTombstone("notes", tid);
+      await removeBookNote(tid)
+      dropTombstone("notes", tid)
     } catch {
       /* retry later */
     }
   }
-  let remapped = false;
+  let remapped = false
   for (const h of store.highlights) {
-    if (!h || UUID_LIKE.test(String(h.id || ""))) continue;
+    if (!h || UUID_LIKE.test(String(h.id || ""))) continue
     try {
-      const { data, error } = await addBookHighlight(id, h);
+      const { data, error } = await addBookHighlight(id, h)
       if (!error && data && data.id) {
-        h.id = data.id;
-        remapped = true;
+        h.id = data.id
+        remapped = true
       }
     } catch {
       /* retry later */
     }
   }
   for (const b of store.bookmarks) {
-    if (!b || UUID_LIKE.test(String(b.id || ""))) continue;
+    if (!b || UUID_LIKE.test(String(b.id || ""))) continue
     try {
-      const { data, error } = await addBookBookmark(id, b.label || "", `sec=${b.sec || 0} frac=${Number(b.frac || 0).toFixed(3)}`);
+      const { data, error } = await addBookBookmark(
+        id,
+        b.label || "",
+        `sec=${b.sec || 0} frac=${Number(b.frac || 0).toFixed(3)}`,
+      )
       if (!error && data && data.id) {
-        b.id = data.id;
-        remapped = true;
+        b.id = data.id
+        remapped = true
       }
     } catch {
       /* retry later */
     }
   }
   for (const n of store.notes || []) {
-    if (!n || !n.body || UUID_LIKE.test(String(n.id || ""))) continue;
+    if (!n || !n.body || UUID_LIKE.test(String(n.id || ""))) continue
     try {
-      const { data, error } = await addBookNote(id, { kind: n.kind, label: n.label, locator: n.locator, body: n.body });
+      const { data, error } = await addBookNote(id, {
+        kind: n.kind,
+        label: n.label,
+        locator: n.locator,
+        body: n.body,
+      })
       if (!error && data && data.id) {
-        n.id = data.id;
-        remapped = true;
+        n.id = data.id
+        remapped = true
       }
     } catch {
       /* retry later */
@@ -184,71 +232,81 @@ async function flushAnnotations(bookId) {
   const stillLocal =
     store.highlights.some((h) => h && !UUID_LIKE.test(String(h.id || ""))) ||
     store.bookmarks.some((b) => b && !UUID_LIKE.test(String(b.id || ""))) ||
-    (store.notes || []).some((n) => n && n.body && !UUID_LIKE.test(String(n.id || ""))) ||
+    (store.notes || []).some(
+      (n) => n && n.body && !UUID_LIKE.test(String(n.id || "")),
+    ) ||
     (store.deletedAnn.highlights || []).length > 0 ||
     (store.deletedAnn.bookmarks || []).length > 0 ||
-    (store.deletedAnn.notes || []).length > 0;
-  store.dirtyAnn = stillLocal;
-  persist();
+    (store.deletedAnn.notes || []).length > 0
+  store.dirtyAnn = stillLocal
+  persist()
   if (remapped && R && R.id === id) {
-    paintAllParagraphs();
-    renderNotesPanelIfOpen();
+    paintAllParagraphs()
+    renderNotesPanelIfOpen()
   }
-  if (stillLocal) scheduleAnnotationFlush();
+  if (stillLocal) scheduleAnnotationFlush()
 }
 
 if (!window.__sfReaderAnnFlush) {
-  window.__sfReaderAnnFlush = true;
+  window.__sfReaderAnnFlush = true
   window.addEventListener("online", () => {
     try {
-      const all = state.bookLocal || {};
+      const all = state.bookLocal || {}
       Object.keys(all).forEach((bid) => {
-        if (all[bid]?.dirtyAnn) flushAnnotations(bid).catch(() => {});
-      });
+        if (all[bid]?.dirtyAnn) flushAnnotations(bid).catch(() => {})
+      })
     } catch {
       /* ignore */
     }
-  });
+  })
 }
 function unionById(local, remote) {
-  const map = new Map();
-  for (const r of remote || []) if (r && r.id) map.set(r.id, r);
-  for (const l of local || []) if (l && l.id) map.set(l.id, l);
-  return [...map.values()];
+  const map = new Map()
+  for (const r of remote || []) if (r && r.id) map.set(r.id, r)
+  for (const l of local || []) if (l && l.id) map.set(l.id, l)
+  return [...map.values()]
 }
 function parseBookText(text) {
-  const sections = [];
-  let cur = { title: null, paras: [] };
-  let buf = [];
+  const sections = []
+  let cur = { title: null, paras: [] }
+  let buf = []
   const flushPara = () => {
-    const p = buf.join(" ").replace(/\s+/g, " ").trim();
-    if (p) cur.paras.push(p.slice(0, 4000));
-    buf = [];
-  };
+    const p = buf.join(" ").replace(/\s+/g, " ").trim()
+    if (p) cur.paras.push(p.slice(0, 4000))
+    buf = []
+  }
   const pushSec = () => {
-    if (cur.paras.length || cur.title) sections.push(cur);
-  };
+    if (cur.paras.length || cur.title) sections.push(cur)
+  }
   for (const raw of String(text || "").split("\n")) {
-    const line = raw.trim();
-    const h = line.match(/^(#{1,3})\s+(.*)$/);
+    const line = raw.trim()
+    const h = line.match(/^(#{1,3})\s+(.*)$/)
     if (h) {
-      flushPara(); pushSec();
-      cur = { title: h[2].trim().slice(0, 120), paras: [] };
-      continue;
+      flushPara()
+      pushSec()
+      cur = { title: h[2].trim().slice(0, 120), paras: [] }
+      continue
     }
-    if (!line) { flushPara(); continue; }
-    buf.push(line);
-    if (buf.join(" ").length > 2000) flushPara();
+    if (!line) {
+      flushPara()
+      continue
+    }
+    buf.push(line)
+    if (buf.join(" ").length > 2000) flushPara()
   }
-  flushPara(); pushSec();
+  flushPara()
+  pushSec()
   // chunk long untitled runs so the TOC stays useful
-  const out = [];
+  const out = []
   for (const s of sections) {
-    if (s.title || s.paras.length <= 15) { out.push(s); continue; }
+    if (s.title || s.paras.length <= 15) {
+      out.push(s)
+      continue
+    }
     for (let i = 0; i < s.paras.length; i += 15)
-      out.push({ title: null, paras: s.paras.slice(i, i + 15) });
+      out.push({ title: null, paras: s.paras.slice(i, i + 15) })
   }
-  return out.length ? out : [{ title: null, paras: ["(Empty book)"] }];
+  return out.length ? out : [{ title: null, paras: ["(Empty book)"] }]
 }
 // --- Section windowing math (pure; exported for tests) -------------------------
 // Only a small window of sections lives in the DOM at once (large books must
@@ -256,186 +314,226 @@ function parseBookText(text) {
 // weights, so saved fractions, bookmarks and highlights stay valid.
 export function sectionWeights(sections) {
   const weights = (sections || []).map((s) =>
-    Math.max(1, (s.paras || []).reduce((a, p) => a + (typeof p === "string" ? p.length : 0), 0)));
-  const total = weights.reduce((a, w) => a + w, 0);
-  return { weights, total };
+    Math.max(
+      1,
+      (s.paras || []).reduce(
+        (a, p) => a + (typeof p === "string" ? p.length : 0),
+        0,
+      ),
+    ),
+  )
+  const total = weights.reduce((a, w) => a + w, 0)
+  return { weights, total }
 }
 
 export function fractionToSection(sections, frac) {
-  const { weights, total } = sectionWeights(sections);
-  const f = Math.min(0.9999, Math.max(0, Number(frac) || 0));
-  if (!total) return { sec: 0, frac: 0 };
-  let acc = 0;
+  const { weights, total } = sectionWeights(sections)
+  const f = Math.min(0.9999, Math.max(0, Number(frac) || 0))
+  if (!total) return { sec: 0, frac: 0 }
+  let acc = 0
   for (let i = 0; i < weights.length; i++) {
-    const w = weights[i] / total;
+    const w = weights[i] / total
     if (f < acc + w || i === weights.length - 1) {
-      return { sec: i, frac: Math.min(1, Math.max(0, (f - acc) / w)) };
+      return { sec: i, frac: Math.min(1, Math.max(0, (f - acc) / w)) }
     }
-    acc += w;
+    acc += w
   }
-  return { sec: 0, frac: 0 };
+  return { sec: 0, frac: 0 }
 }
 
 export function globalFraction(sections, secIdx, intraFrac) {
-  const { weights, total } = sectionWeights(sections);
-  if (!total || !weights.length) return 0;
-  const i = Math.max(0, Math.min(secIdx, weights.length - 1));
-  let acc = 0;
-  for (let k = 0; k < i; k++) acc += weights[k];
-  const f = Math.min(1, Math.max(0, Number(intraFrac) || 0));
-  return Math.min(1, Math.max(0, (acc + f * weights[i]) / total));
+  const { weights, total } = sectionWeights(sections)
+  if (!total || !weights.length) return 0
+  const i = Math.max(0, Math.min(secIdx, weights.length - 1))
+  let acc = 0
+  for (let k = 0; k < i; k++) acc += weights[k]
+  const f = Math.min(1, Math.max(0, Number(intraFrac) || 0))
+  return Math.min(1, Math.max(0, (acc + f * weights[i]) / total))
 }
 
 export function sectionPlainText(sec) {
-  return (sec.paras || []).filter((p) => typeof p === "string").join(" ");
+  return (sec.paras || []).filter((p) => typeof p === "string").join(" ")
 }
 
 function bookKind(b) {
-  const nm = `${b.fileName || ""} ${b.fileType || ""}`.toLowerCase();
-  if (nm.includes("pdf")) return "pdf";
-  if (nm.includes("epub")) return "epub";
-  return "text";
+  const nm = `${b.fileName || ""} ${b.fileType || ""}`.toLowerCase()
+  if (nm.includes("pdf")) return "pdf"
+  if (nm.includes("epub")) return "epub"
+  return "text"
 }
 
 function closeReaderState() {
-  if (!R) return;
-  noteReadingTime();
+  if (!R) return
+  noteReadingTime()
   try {
-    if (R.pdfUrl) URL.revokeObjectURL(R.pdfUrl);
+    if (R.pdfUrl) URL.revokeObjectURL(R.pdfUrl)
   } catch {
     /* ignore */
   }
   try {
-    if (R.epubHandle) R.epubHandle.release();
+    if (R.epubHandle) R.epubHandle.release()
   } catch {
     /* ignore */
   }
-  R = null;
+  R = null
 }
 
 function noteReadingTime() {
-  if (!R || !R.t0) return;
-  const secs = Math.max(0, Math.min(12 * 3600, Math.round((Date.now() - R.t0) / 1000)));
-  R.t0 = Date.now();
-  if (secs > 0) recordBookTime(R.id, secs, R.pdfTurns || 0);
-  R.pdfTurns = 0;
+  if (!R || !R.t0) return
+  const secs = Math.max(
+    0,
+    Math.min(12 * 3600, Math.round((Date.now() - R.t0) / 1000)),
+  )
+  R.t0 = Date.now()
+  if (secs > 0) recordBookTime(R.id, secs, R.pdfTurns || 0)
+  R.pdfTurns = 0
 }
 
 export async function openReader(id, opts = {}) {
-  const { findBook } = await import("./books.js");
-  closeReaderState();
-  const book = findBook(id);
+  const { findBook } = await import("./books.js")
+  closeReaderState()
+  const book = findBook(id)
   if (!book) {
-    toast("Book unavailable");
-    state.bookView = { name: "home" };
-    persist();
-    renderLibrary();
-    return;
+    toast("Book unavailable")
+    state.bookView = { name: "home" }
+    persist()
+    renderLibrary()
+    return
   }
-  const kind = bookKind(book);
+  const kind = bookKind(book)
   if (kind !== "text" && kind !== "pdf" && kind !== "epub") {
-    toast("This book format is not currently supported.");
-    return;
+    toast("This book format is not currently supported.")
+    return
   }
   R = {
-    id: book.id, book, kind, sections: [], panel: null,
-    settings: readerSettings(), search: { q: "", hits: [], idx: -1 },
-    saveT: 0, cloudT: 0, scrollT: 0, win: 0,
-    pdf: null, epubHandle: null, imgMaps: {}, pdfUrl: null,
-    t0: Date.now(), pdfTurns: 0, fromStart: opts.fromStart === true,
-  };
+    id: book.id,
+    book,
+    kind,
+    sections: [],
+    panel: null,
+    settings: readerSettings(),
+    search: { q: "", hits: [], idx: -1 },
+    saveT: 0,
+    cloudT: 0,
+    scrollT: 0,
+    win: 0,
+    pdf: null,
+    epubHandle: null,
+    imgMaps: {},
+    pdfUrl: null,
+    t0: Date.now(),
+    pdfTurns: 0,
+    fromStart: opts.fromStart === true,
+  }
   try {
     if (kind === "text") {
-      const text = await getBookText(book);
+      const text = await getBookText(book)
       if (!text) {
-        toast("No readable text found in this book");
-        R = null;
-        return;
+        toast("No readable text found in this book")
+        R = null
+        return
       }
-      R.sections = parseBookText(text);
+      R.sections = parseBookText(text)
       if (!book.wordCount) {
-        const words = text.split(/\s+/).filter(Boolean).length;
-        book.wordCount = words;
-        book.updatedAt = Date.now();
-        persist();
+        const words = text.split(/\s+/).filter(Boolean).length
+        book.wordCount = words
+        book.updatedAt = Date.now()
+        persist()
       }
     } else if (kind === "epub") {
       if (!epubSupported()) {
-        toast("EPUB reading needs a modern browser (this one can't decompress EPUB files)");
-        R = null;
-        return;
+        toast(
+          "EPUB reading needs a modern browser (this one can't decompress EPUB files)",
+        )
+        R = null
+        return
       }
-      const blob = await getBookBlob(book);
+      const blob = await getBookBlob(book)
       if (!blob) {
-        toast("Could not load the EPUB file — it may have been removed");
-        R = null;
-        return;
+        toast("Could not load the EPUB file — it may have been removed")
+        R = null
+        return
       }
-      let parsed;
+      let parsed
       try {
-        parsed = await parseEpub(blob);
+        parsed = await parseEpub(blob)
       } catch (e) {
-        toast(e?.message || "This EPUB file is corrupted or unsupported");
-        R = null;
-        return;
+        toast(e?.message || "This EPUB file is corrupted or unsupported")
+        R = null
+        return
       }
-      R.epubHandle = parsed;
-      R.epubChapters = parsed.chapters;
-      R.sections = [];
+      R.epubHandle = parsed
+      R.epubChapters = parsed.chapters
+      R.sections = []
       for (const ch of parsed.chapters) {
-        for (const s of ch.sections) R.sections.push({ ...s, chapter: ch.title, chapterId: ch.id });
+        for (const s of ch.sections)
+          R.sections.push({ ...s, chapter: ch.title, chapterId: ch.id })
       }
       if (!R.sections.length) {
-        toast("No readable chapters found in this EPUB");
-        R = null;
-        return;
+        toast("No readable chapters found in this EPUB")
+        R = null
+        return
       }
       if (parsed.title && (!book.title || book.title === "Untitled")) {
-        book.title = parsed.title.slice(0, 300);
-        book.updatedAt = Date.now();
+        book.title = parsed.title.slice(0, 300)
+        book.updatedAt = Date.now()
       }
       if (parsed.author && (!book.author || book.author === "Unknown author")) {
-        book.author = parsed.author.slice(0, 200);
-        book.updatedAt = Date.now();
+        book.author = parsed.author.slice(0, 200)
+        book.updatedAt = Date.now()
       }
       if (!book.wordCount) {
-        book.wordCount = R.sections.reduce((a, s) => a + sectionPlainText(s).split(/\s+/).filter(Boolean).length, 0);
-        book.updatedAt = Date.now();
+        book.wordCount = R.sections.reduce(
+          (a, s) => a + sectionPlainText(s).split(/\s+/).filter(Boolean).length,
+          0,
+        )
+        book.updatedAt = Date.now()
       }
       if (!book.coverData && parsed.coverBlob) {
         try {
-          book.coverData = await resizeCover(new File([parsed.coverBlob], "cover", { type: parsed.coverBlob.type || "image/jpeg" })).catch(() => "");
-          book.updatedAt = Date.now();
+          book.coverData = await resizeCover(
+            new File([parsed.coverBlob], "cover", {
+              type: parsed.coverBlob.type || "image/jpeg",
+            }),
+          ).catch(() => "")
+          book.updatedAt = Date.now()
         } catch {
           /* cover stays monogram */
         }
       }
-      persist();
+      persist()
     } else {
       // PDF: browser embed renders pages; the reader tracks a manual page
       // counter (estimated total) for progress, resume and stats.
-      const blob = await getBookBlob(book);
+      const blob = await getBookBlob(book)
       if (!blob) {
-        toast("Could not load the PDF file — it may have been removed");
-        R = null;
-        return;
+        toast("Could not load the PDF file — it may have been removed")
+        R = null
+        return
       }
-      R.pdfBlob = blob;
-      const total = Number(book.pageCount) || null;
-      const savedPage = pdfSavedPage(book.id);
-      R.pdf = { page: 1, pages: total, turns: 0 };
-      if (Number.isFinite(savedPage) && savedPage >= 1) R.pdf.page = Math.round(savedPage);
+      R.pdfBlob = blob
+      const total = Number(book.pageCount) || null
+      const savedPage = pdfSavedPage(book.id)
+      R.pdf = { page: 1, pages: total, turns: 0 }
+      if (Number.isFinite(savedPage) && savedPage >= 1)
+        R.pdf.page = Math.round(savedPage)
     }
     // Backfill the duplicate fingerprint once audio/file bytes are at hand.
     if (!book.fingerprint) {
       try {
-        const blob = kind === "pdf" && R.pdfBlob ? R.pdfBlob : await getBookBlob(book);
+        const blob =
+          kind === "pdf" && R.pdfBlob ? R.pdfBlob : await getBookBlob(book)
         if (blob) {
-          const fp = await bookFingerprintOf({ name: book.fileName, size: blob.size, type: blob.type, slice: blob.slice.bind(blob) });
+          const fp = await bookFingerprintOf({
+            name: book.fileName,
+            size: blob.size,
+            type: blob.type,
+            slice: blob.slice.bind(blob),
+          })
           if (fp) {
-            book.fingerprint = fp;
-            book.updatedAt = Date.now();
-            persist();
+            book.fingerprint = fp
+            book.updatedAt = Date.now()
+            persist()
           }
         }
       } catch {
@@ -443,9 +541,9 @@ export async function openReader(id, opts = {}) {
       }
     }
   } catch (e) {
-    toast(e?.message || "Unable to open this book.");
-    R = null;
-    return;
+    toast(e?.message || "Unable to open this book.")
+    R = null
+    return
   }
   // load annotations: backend wins when signed in, union with local (local intent wins ties)
   if (backendConfigured && state.user) {
@@ -454,114 +552,156 @@ export async function openReader(id, opts = {}) {
         listBookHighlights(book.id),
         listBookBookmarks(book.id),
         listBookNotes(book.id),
-      ]);
-      const store = localStore(book.id);
+      ])
+      const store = localStore(book.id)
       if (!h.error && Array.isArray(h.data) && h.data.length) {
-        const mapped = h.data.map((x) => ({ id: x.id, color: x.color, excerpt: x.excerpt, prefix: x.prefix || "", suffix: x.suffix || "", note: x.note || "", ts: new Date(x.created_at).getTime() || Date.now() }));
-        store.highlights = unionById(store.highlights, mapped);
+        const mapped = h.data.map((x) => ({
+          id: x.id,
+          color: x.color,
+          excerpt: x.excerpt,
+          prefix: x.prefix || "",
+          suffix: x.suffix || "",
+          note: x.note || "",
+          ts: new Date(x.created_at).getTime() || Date.now(),
+        }))
+        store.highlights = unionById(store.highlights, mapped)
       }
       if (!bkm.error && Array.isArray(bkm.data) && bkm.data.length) {
-        const mapped = bkm.data.map((x) => ({ id: x.id, label: x.label, sec: 0, frac: 0, locator: x.locator || "", ts: new Date(x.created_at).getTime() || Date.now() }));
-        store.bookmarks = unionById(store.bookmarks, mapped.map((m) => ({ ...m, ...parseLocator(m.locator) })));
+        const mapped = bkm.data.map((x) => ({
+          id: x.id,
+          label: x.label,
+          sec: 0,
+          frac: 0,
+          locator: x.locator || "",
+          ts: new Date(x.created_at).getTime() || Date.now(),
+        }))
+        store.bookmarks = unionById(
+          store.bookmarks,
+          mapped.map((m) => ({ ...m, ...parseLocator(m.locator) })),
+        )
       }
       if (!nts.error && Array.isArray(nts.data) && nts.data.length) {
-        const mapped = nts.data.map((x) => ({ id: x.id, kind: x.kind || "general", label: x.label || "", locator: x.locator || "", body: x.body || "", ts: new Date(x.created_at).getTime() || Date.now() }));
-        store.notes = unionById(store.notes, mapped);
+        const mapped = nts.data.map((x) => ({
+          id: x.id,
+          kind: x.kind || "general",
+          label: x.label || "",
+          locator: x.locator || "",
+          body: x.body || "",
+          ts: new Date(x.created_at).getTime() || Date.now(),
+        }))
+        store.notes = unionById(store.notes, mapped)
       }
-      persist();
+      persist()
     } catch {
       /* offline — local store stands */
     }
   }
-  recordBookOpen(book.id);
-  state.bookView = { name: "reader", id: book.id };
-  persist();
-  renderReader();
-  maybeResumePrompt();
+  recordBookOpen(book.id)
+  state.bookView = { name: "reader", id: book.id }
+  persist()
+  renderReader()
+  maybeResumePrompt()
 }
 
 function pdfSavedPage(bookId) {
-  const pos = bookProgressOf(bookId);
-  const pages = R?.pdf?.pages;
-  if (!pages || pages <= 1 || !(pos > 0)) return null;
-  return Math.min(pages, Math.max(1, Math.round(pos * (pages - 1)) + 1));
+  const pos = bookProgressOf(bookId)
+  const pages = R?.pdf?.pages
+  if (!pages || pages <= 1 || !(pos > 0)) return null
+  return Math.min(pages, Math.max(1, Math.round(pos * (pages - 1)) + 1))
 }
 
 // "Continue where you left off?" — asked when real progress exists, never
 // erasing anything on a plain open. Explicit Start-over resets by choice.
 function maybeResumePrompt() {
   if (!R || R.fromStart) {
-    if (R?.fromStart) resetReaderProgress();
-    setTimeout(() => restoreReaderPosition(), 60);
-    return;
+    if (R?.fromStart) resetReaderProgress()
+    setTimeout(() => restoreReaderPosition(), 60)
+    return
   }
-  const pos = bookProgressOf(R.id);
-  const hasProgress = R.kind === "pdf"
-    ? (R.pdf.pages ? pos > 0.005 && pos < 0.999 : false) || (R.pdf.page || 1) > 1
-    : pos > 0.02 && pos < 0.98;
+  const pos = bookProgressOf(R.id)
+  const hasProgress =
+    R.kind === "pdf"
+      ? (R.pdf.pages ? pos > 0.005 && pos < 0.999 : false) ||
+        (R.pdf.page || 1) > 1
+      : pos > 0.02 && pos < 0.98
   if (!hasProgress) {
-    setTimeout(() => restoreReaderPosition(), 60);
-    return;
+    setTimeout(() => restoreReaderPosition(), 60)
+    return
   }
-  const pct = Math.round(pos * 100);
-  const modal = document.createElement("div");
-  modal.className = "modal-backdrop";
-  modal.setAttribute("data-rs-modal", "");
-  modal.innerHTML = `<div class="modal"><div class="eyebrow">Welcome back</div><h2>Continue where you left off?</h2><p class="muted">${esc(R.book.title)} · ${R.kind === "pdf" ? `page ${R.pdf.page}` : `${pct}% read`}</p><div class="modal-actions"><button type="button" class="ghost" data-rs-start>Start from beginning</button><button type="button" class="primary" data-rs-continue>Continue</button></div></div>`;
-  const host = $("#modal-root") || document.body;
-  host.append(modal);
+  const pct = Math.round(pos * 100)
+  const modal = document.createElement("div")
+  modal.className = "modal-backdrop"
+  modal.setAttribute("data-rs-modal", "")
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Welcome back</div><h2>Continue where you left off?</h2><p class="muted">${esc(R.book.title)} · ${
+    R.kind === "pdf" ? `page ${R.pdf.page}` : `${pct}% read`
+  }</p><div class="modal-actions"><button type="button" class="ghost" data-rs-start>Start from beginning</button><button type="button" class="primary" data-rs-continue>Continue</button></div></div>`
+  const host = $("#modal-root") || document.body
+  host.append(modal)
   const done = (reset) => {
-    try { modal.remove(); } catch { /* ignore */ }
-    if (!R) return;
-    if (reset) resetReaderProgress();
-    else setTimeout(() => restoreReaderPosition(), 60);
-  };
-  modal.querySelector("[data-rs-start]").onclick = () => done(true);
-  modal.querySelector("[data-rs-continue]").onclick = () => done(false);
-  modal.addEventListener("click", (e) => { if (e.target === modal) done(false); });
+    try {
+      modal.remove()
+    } catch {
+      /* ignore */
+    }
+    if (!R) return
+    if (reset) resetReaderProgress()
+    else setTimeout(() => restoreReaderPosition(), 60)
+  }
+  modal.querySelector("[data-rs-start]").onclick = () => done(true)
+  modal.querySelector("[data-rs-continue]").onclick = () => done(false)
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) done(false)
+  })
 }
 
 function resetReaderProgress() {
-  if (!R) return;
+  if (!R) return
   if (R.kind === "pdf" && R.pdf) {
-    R.pdf.page = 1;
-    R.pdf.turns = 0;
+    R.pdf.page = 1
+    R.pdf.turns = 0
   }
-  state.bookProgress = { ...(state.bookProgress || {}), [R.id]: 0 };
-  persist();
-  if (backendConfigured && state.user) saveBookProgress(R.id, 0).catch(() => {});
-  renderReader();
+  state.bookProgress = { ...(state.bookProgress || {}), [R.id]: 0 }
+  persist()
+  if (backendConfigured && state.user) saveBookProgress(R.id, 0).catch(() => {})
+  renderReader()
 }
 export function readerOpenId() {
-  return R ? R.id : null;
+  return R ? R.id : null
 }
 export function repaintReader() {
-  if (!R) return;
-  renderReader();
-  setTimeout(() => restoreReaderPosition(), 60);
+  if (!R) return
+  renderReader()
+  setTimeout(() => restoreReaderPosition(), 60)
 }
 function parseLocator(loc) {
   try {
-    const m = String(loc || "").match(/sec=(\d+)\s+frac=([\d.]+)/);
-    if (m) return { sec: Math.max(0, +m[1] || 0), frac: Math.min(1, Math.max(0, +m[2] || 0)) };
+    const m = String(loc || "").match(/sec=(\d+)\s+frac=([\d.]+)/)
+    if (m)
+      return {
+        sec: Math.max(0, +m[1] || 0),
+        frac: Math.min(1, Math.max(0, +m[2] || 0)),
+      }
   } catch {
     /* ignore */
   }
-  return { sec: 0, frac: 0 };
+  return { sec: 0, frac: 0 }
 }
 function readerRoot() {
-  return $("#tab-books");
+  return $("#tab-books")
 }
 export function renderReader() {
-  const t = readerRoot();
-  if (!t || !R) return;
-  const { book, settings: s } = R;
-  const pct = Math.round(currentFraction() * 100);
-  const themeCls = s.theme === "auto" ? "" : ` reader-${s.theme}`;
-  const widthPx = s.width === "narrow" ? 560 : s.width === "wide" ? 860 : 700;
-  const fontFam = s.font === "sans"
-    ? "system-ui, -apple-system, 'Segoe UI', sans-serif"
-    : s.font === "system" ? "inherit" : "Georgia, 'Times New Roman', serif";
+  const t = readerRoot()
+  if (!t || !R) return
+  const { book, settings: s } = R
+  const pct = Math.round(currentFraction() * 100)
+  const themeCls = s.theme === "auto" ? "" : ` reader-${s.theme}`
+  const widthPx = s.width === "narrow" ? 560 : s.width === "wide" ? 860 : 700
+  const fontFam =
+    s.font === "sans"
+      ? "system-ui, -apple-system, 'Segoe UI', sans-serif"
+      : s.font === "system"
+        ? "inherit"
+        : "Georgia, 'Times New Roman', serif"
   t.innerHTML = `<div class="reader${themeCls}" data-reader>
     <div class="reader-top"><button type="button" class="ghost" data-r-back>← Library</button>
       <div class="reader-title"><strong>${esc(book.title)}</strong><small>${esc(book.author || "")} · <span data-r-pct>${pct}%</span></small></div>
@@ -576,33 +716,37 @@ export function renderReader() {
       </div></div>
     <div class="reader-main">
       <div class="reader-bodywrap"><div class="reader-progress"><i data-r-bar style="width:${pct}%"></i></div>
-        <div class="reader-body" data-r-body data-ruler="${s.ruler ? 1 : 0}" style="--read-fs:${s.fontSize}px;--read-lh:${s.lineHeight};--read-w:${widthPx}px;--read-ff:${fontFam};text-align:${s.align === "justify" ? "justify" : "left"}"></div>
+        <div class="reader-body" data-r-body data-ruler="${
+          s.ruler ? 1 : 0
+        }" style="--read-fs:${s.fontSize}px;--read-lh:${s.lineHeight};--read-w:${widthPx}px;--read-ff:${fontFam};text-align:${
+          s.align === "justify" ? "justify" : "left"
+        }"></div>
         <div class="reader-foot"><button type="button" class="ghost" data-r-prev>‹ Prev</button><span class="muted" data-r-page></span><button type="button" class="ghost" data-r-next>Next ›</button></div>
       </div>
       <aside class="reader-side" data-r-side hidden></aside>
     </div>
     <div class="reader-selectbar" data-r-selbar hidden></div>
-  </div>`;
-  renderReaderBody();
-  bindReader(t);
-  applyReaderPanel();
+  </div>`
+  renderReaderBody()
+  bindReader(t)
+  applyReaderPanel()
 }
 
 // Window of sections actually in the DOM: [win-1, win, win+1]. Large books
 // never render fully — this is what keeps thousand-page imports fluid.
 function windowRange() {
-  const n = R.sections.length;
-  const c = Math.max(0, Math.min(R.win || 0, Math.max(0, n - 1)));
-  R.win = c;
-  return [Math.max(0, c - 1), Math.min(n - 1, c + 1)];
+  const n = R.sections.length
+  const c = Math.max(0, Math.min(R.win || 0, Math.max(0, n - 1)))
+  R.win = c
+  return [Math.max(0, c - 1), Math.min(n - 1, c + 1)]
 }
 
 function renderReaderBody() {
-  const body = document.querySelector("[data-r-body]");
-  if (!body || !R) return;
+  const body = document.querySelector("[data-r-body]")
+  if (!body || !R) return
   if (R.kind === "pdf") {
-    renderPdfBody(body);
-    return;
+    renderPdfBody(body)
+    return
   }
   // "Chapterplate" reading design — an original StudyFlow layout:
   //   · sections open with a rule + small-caps label and a drop cap on the
@@ -611,439 +755,500 @@ function renderReaderBody() {
   //     its place when you return
   //   · while a session is live the reader dims every line except the one
   //     you're on (ruler reading), driven by pure CSS hover/focus
-  const [lo, hi] = windowRange();
-  body.innerHTML = R.sections.slice(lo, hi + 1).map((sec, k) => {
-    const i = lo + k;
-    let pi = -1;
-    const blocks = (sec.paras || []).map((p) => {
-      if (p && typeof p === "object" && p.img) {
-        const url = (R.imgMaps[chapterIndexForSection(i)] || new Map()).get(p.img);
-        return url
-          ? `<div class="reader-img"><img src="${url}" alt="Book illustration" loading="lazy"></div>`
-          : `<div class="reader-img reader-img-loading"><span class="muted">Loading image…</span></div>`;
-      }
-      if (typeof p !== "string") return "";
-      pi++;
-      const j = pi;
-      return `<p class="reader-p${j === 0 ? " reader-p-first" : ""}${(j + 1) % 5 === 0 ? " reader-tick" : ""}" data-p data-pidx="${j}">${esc(p)}</p>`;
-    }).join("");
-    return `<section class="reader-sec" data-sec="${i}"><div class="reader-sec-head">${sec.title ? `<span class="reader-sec-rule"></span><h3>${esc(sec.title)}</h3>` : `<span class="reader-sec-rule"></span><h3 class="reader-sec-auto">§ ${i + 1}</h3>`}</div>${blocks}</section>`;
-  }).join("");
-  resolveWindowImages(lo, hi);
-  applyHighlights();
-  applySearchMarks();
-  updateReaderFoot();
+  const [lo, hi] = windowRange()
+  body.innerHTML = R.sections
+    .slice(lo, hi + 1)
+    .map((sec, k) => {
+      const i = lo + k
+      let pi = -1
+      const blocks = (sec.paras || [])
+        .map((p) => {
+          if (p && typeof p === "object" && p.img) {
+            const url = (R.imgMaps[chapterIndexForSection(i)] || new Map()).get(
+              p.img,
+            )
+            return url
+              ? `<div class="reader-img"><img src="${url}" alt="Book illustration" loading="lazy"></div>`
+              : `<div class="reader-img reader-img-loading"><span class="muted">Loading image…</span></div>`
+          }
+          if (typeof p !== "string") return ""
+          pi++
+          const j = pi
+          return `<p class="reader-p${j === 0 ? " reader-p-first" : ""}${
+            (j + 1) % 5 === 0 ? " reader-tick" : ""
+          }" data-p data-pidx="${j}">${esc(p)}</p>`
+        })
+        .join("")
+      return `<section class="reader-sec" data-sec="${i}"><div class="reader-sec-head">${
+        sec.title
+          ? `<span class="reader-sec-rule"></span><h3>${esc(sec.title)}</h3>`
+          : `<span class="reader-sec-rule"></span><h3 class="reader-sec-auto">§ ${i + 1}</h3>`
+      }</div>${blocks}</section>`
+    })
+    .join("")
+  resolveWindowImages(lo, hi)
+  applyHighlights()
+  applySearchMarks()
+  updateReaderFoot()
 }
 
 // Resolve chapter artwork only for rendered sections (lazy, bounded).
 async function resolveWindowImages(lo, hi) {
-  if (!R || !R.epubHandle) return;
-  const mine = R.win;
-  const jobs = [];
+  if (!R || !R.epubHandle) return
+  const mine = R.win
+  const jobs = []
   for (let i = lo; i <= hi; i++) {
-    const chIdx = chapterIndexForSection(i);
-    if (chIdx < 0 || R.imgMaps[chIdx]) continue;
+    const chIdx = chapterIndexForSection(i)
+    if (chIdx < 0 || R.imgMaps[chIdx]) continue
     jobs.push(
-      R.epubHandle.resolveImages(R.epubChapters[chIdx]).then((map) => {
-        if (!R || R.win !== mine) return; // user moved on; drop it
-        R.imgMaps[chIdx] = map;
-        // Preserve the user's exact scroll: async image fills must never
-        // yank the page out from under active reading.
-        const body = readerBodyEl();
-        const top = body ? body.scrollTop : 0;
-        renderReaderBody();
-        try {
-          const fresh = readerBodyEl();
-          if (fresh) fresh.scrollTop = top;
-        } catch {
-          /* ignore */
-        }
-      }).catch(() => {}),
-    );
+      R.epubHandle
+        .resolveImages(R.epubChapters[chIdx])
+        .then((map) => {
+          if (!R || R.win !== mine) return // user moved on; drop it
+          R.imgMaps[chIdx] = map
+          // Preserve the user's exact scroll: async image fills must never
+          // yank the page out from under active reading.
+          const body = readerBodyEl()
+          const top = body ? body.scrollTop : 0
+          renderReaderBody()
+          try {
+            const fresh = readerBodyEl()
+            if (fresh) fresh.scrollTop = top
+          } catch {
+            /* ignore */
+          }
+        })
+        .catch(() => {}),
+    )
   }
-  if (jobs.length) await Promise.all(jobs);
+  if (jobs.length) await Promise.all(jobs)
 }
 
 function chapterIndexForSection(secIdx) {
-  if (!R?.epubChapters) return -1;
-  let acc = 0;
+  if (!R?.epubChapters) return -1
+  let acc = 0
   for (let c = 0; c < R.epubChapters.length; c++) {
-    const n = (R.epubChapters[c].sections || []).length;
-    if (secIdx >= acc && secIdx < acc + n) return c;
-    acc += n;
+    const n = (R.epubChapters[c].sections || []).length
+    if (secIdx >= acc && secIdx < acc + n) return c
+    acc += n
   }
-  return -1;
+  return -1
 }
 function renderPdfBody(body) {
-  body.innerHTML = `<p class="muted">Read in the viewer below; track your page with the Prev/Next controls so progress and resume keep working.</p><div data-r-pdfwrap class="muted">Loading PDF…</div>`;
-  getBookBlob(R.book).then((blob) => {
-    const wrap = document.querySelector("[data-r-pdfwrap]");
-    if (!R || R.kind !== "pdf") return;
-    if (!wrap || !blob) {
-      if (wrap) wrap.textContent = "Could not load the PDF file.";
-      return;
-    }
-    try {
-      if (R.pdfUrl) URL.revokeObjectURL(R.pdfUrl);
-    } catch {
-      /* ignore */
-    }
-    R.pdfUrl = URL.createObjectURL(blob);
-    wrap.innerHTML = `<embed class="reader-pdf" src="${R.pdfUrl}" type="application/pdf">`;
-  }).catch(() => {
-    const wrap = document.querySelector("[data-r-pdfwrap]");
-    if (wrap) wrap.textContent = "Could not load the PDF file.";
-  });
-  updateReaderFoot();
+  body.innerHTML = `<p class="muted">Read in the viewer below; track your page with the Prev/Next controls so progress and resume keep working.</p><div data-r-pdfwrap class="muted">Loading PDF…</div>`
+  getBookBlob(R.book)
+    .then((blob) => {
+      const wrap = document.querySelector("[data-r-pdfwrap]")
+      if (!R || R.kind !== "pdf") return
+      if (!wrap || !blob) {
+        if (wrap) wrap.textContent = "Could not load the PDF file."
+        return
+      }
+      try {
+        if (R.pdfUrl) URL.revokeObjectURL(R.pdfUrl)
+      } catch {
+        /* ignore */
+      }
+      R.pdfUrl = URL.createObjectURL(blob)
+      wrap.innerHTML = `<embed class="reader-pdf" src="${R.pdfUrl}" type="application/pdf">`
+    })
+    .catch(() => {
+      const wrap = document.querySelector("[data-r-pdfwrap]")
+      if (wrap) wrap.textContent = "Could not load the PDF file."
+    })
+  updateReaderFoot()
 }
 
 function readerBodyEl() {
-  return document.querySelector("[data-r-body]");
+  return document.querySelector("[data-r-body]")
 }
 function pdfFraction() {
-  if (!R?.pdf) return 0;
-  const pages = Number(R.pdf.pages) || 0;
-  const page = Math.max(1, Number(R.pdf.page) || 1);
-  if (pages <= 1) return 0;
-  return Math.min(1, Math.max(0, (page - 1) / (pages - 1)));
+  if (!R?.pdf) return 0
+  const pages = Number(R.pdf.pages) || 0
+  const page = Math.max(1, Number(R.pdf.page) || 1)
+  if (pages <= 1) return 0
+  return Math.min(1, Math.max(0, (page - 1) / (pages - 1)))
 }
 
 function updateReaderFoot() {
-  const body = readerBodyEl();
-  const page = document.querySelector("[data-r-page]");
-  if (!body || !page || !R) return;
-  const prev = document.querySelector("[data-r-prev]");
-  const next = document.querySelector("[data-r-next]");
+  const body = readerBodyEl()
+  const page = document.querySelector("[data-r-page]")
+  if (!body || !page || !R) return
+  const prev = document.querySelector("[data-r-prev]")
+  const next = document.querySelector("[data-r-next]")
   const setDisabled = (btn, off) => {
-    if (!btn) return;
-    btn.disabled = off;
-    btn.setAttribute("aria-disabled", String(off));
-  };
-  if (R.kind === "pdf") {
-    const p = R.pdf || { page: 1, pages: null };
-    page.textContent = p.pages ? `Page ${p.page} of ${p.pages}` : `Page ${p.page}`;
-    setDisabled(prev, p.page <= 1);
-    setDisabled(next, Boolean(p.pages) && p.page >= p.pages);
-    return;
+    if (!btn) return
+    btn.disabled = off
+    btn.setAttribute("aria-disabled", String(off))
   }
-  const secs = R.sections.length;
-  const win = R.win || 0;
-  page.textContent = secs ? `Section ${Math.min(win + 1, secs)} of ${secs}` : "";
-  setDisabled(prev, win <= 0);
-  setDisabled(next, win >= Math.max(0, secs - 1));
+  if (R.kind === "pdf") {
+    const p = R.pdf || { page: 1, pages: null }
+    page.textContent = p.pages
+      ? `Page ${p.page} of ${p.pages}`
+      : `Page ${p.page}`
+    setDisabled(prev, p.page <= 1)
+    setDisabled(next, Boolean(p.pages) && p.page >= p.pages)
+    return
+  }
+  const secs = R.sections.length
+  const win = R.win || 0
+  page.textContent = secs ? `Section ${Math.min(win + 1, secs)} of ${secs}` : ""
+  setDisabled(prev, win <= 0)
+  setDisabled(next, win >= Math.max(0, secs - 1))
 }
 
 function currentFraction() {
-  if (!R) return 0;
-  if (R.kind === "pdf") return pdfFraction();
-  const body = readerBodyEl();
-  if (!body) return bookProgressOf(R.id);
+  if (!R) return 0
+  if (R.kind === "pdf") return pdfFraction()
+  const body = readerBodyEl()
+  if (!body) return bookProgressOf(R.id)
   // Global position = completed weight before the top section + intra-window
   // progress mapped onto the rendered window's weight.
-  const { weights, total } = sectionWeights(R.sections);
-  if (!total) return 0;
-  const nodes = [...body.querySelectorAll("[data-sec]")];
-  if (!nodes.length) return bookProgressOf(R.id);
-  const y = body.scrollTop;
-  let top = 0;
+  const { weights, total } = sectionWeights(R.sections)
+  if (!total) return 0
+  const nodes = [...body.querySelectorAll("[data-sec]")]
+  if (!nodes.length) return bookProgressOf(R.id)
+  const y = body.scrollTop
+  let top = 0
   nodes.forEach((n, i) => {
-    if (n.offsetTop <= y + 8) top = i;
-  });
-  const gTop = Number(nodes[top].dataset.sec) || 0;
-  let acc = 0;
-  for (let k = 0; k < gTop; k++) acc += weights[k] || 0;
-  const winAcc = nodes.reduce((a, n) => a + (weights[Number(n.dataset.sec)] || 0), 0);
-  const max = body.scrollHeight - body.clientHeight;
-  const local = max > 0 ? Math.min(1, Math.max(0, y / max)) : 0;
-  return Math.min(1, Math.max(0, (acc + local * winAcc) / total));
+    if (n.offsetTop <= y + 8) top = i
+  })
+  const gTop = Number(nodes[top].dataset.sec) || 0
+  let acc = 0
+  for (let k = 0; k < gTop; k++) acc += weights[k] || 0
+  const winAcc = nodes.reduce(
+    (a, n) => a + (weights[Number(n.dataset.sec)] || 0),
+    0,
+  )
+  const max = body.scrollHeight - body.clientHeight
+  const local = max > 0 ? Math.min(1, Math.max(0, y / max)) : 0
+  return Math.min(1, Math.max(0, (acc + local * winAcc) / total))
 }
 function saveReaderProgress(force) {
-  if (!R) return;
-  const now = Date.now();
-  if (!force && now - R.saveT < 1000) return;
-  R.saveT = now;
-  const pos = currentFraction();
-  state.bookProgress = { ...(state.bookProgress || {}), [R.id]: pos };
-  const book = (R.book) || {};
-  book.updatedAt = Date.now();
-  persist();
+  if (!R) return
+  const now = Date.now()
+  if (!force && now - R.saveT < 1000) return
+  R.saveT = now
+  const pos = currentFraction()
+  state.bookProgress = { ...(state.bookProgress || {}), [R.id]: pos }
+  const book = R.book || {}
+  book.updatedAt = Date.now()
+  persist()
   if (pos >= 0.995 && !isBookCompleted(R.id)) {
-    markBookCompleted(R.id, true);
-    toast(`Finished “${book.title || "book"}” — nice work`);
+    markBookCompleted(R.id, true)
+    toast(`Finished “${book.title || "book"}” — nice work`)
   }
-  const pct = Math.round(pos * 100);
-  const bar = document.querySelector("[data-r-bar]");
-  if (bar) bar.style.width = pct + "%";
-  const label = document.querySelector("[data-r-pct]");
-  if (label) label.textContent = pct + "%";
-  if (R.kind === "pdf") updateReaderFoot();
+  const pct = Math.round(pos * 100)
+  const bar = document.querySelector("[data-r-bar]")
+  if (bar) bar.style.width = pct + "%"
+  const label = document.querySelector("[data-r-pct]")
+  if (label) label.textContent = pct + "%"
+  if (R.kind === "pdf") updateReaderFoot()
   if (force || now - R.cloudT > 10000) {
-    R.cloudT = now;
+    R.cloudT = now
     if (backendConfigured && state.user) {
-      saveBookProgress(R.id, pos).catch(() => {});
+      saveBookProgress(R.id, pos).catch(() => {})
     }
   }
 }
 function restoreReaderPosition() {
-  const body = readerBodyEl();
-  if (!body || !R) return;
+  const body = readerBodyEl()
+  if (!body || !R) return
   if (R.kind === "pdf") {
-    updateReaderFoot();
-    return;
+    updateReaderFoot()
+    return
   }
-  const { sec, frac } = fractionToSection(R.sections, bookProgressOf(R.id));
-  R.win = sec;
-  renderReaderBody();
-  const fresh = readerBodyEl();
-  const node = fresh?.querySelector(`[data-sec="${sec}"]`);
+  const { sec, frac } = fractionToSection(R.sections, bookProgressOf(R.id))
+  R.win = sec
+  renderReaderBody()
+  const fresh = readerBodyEl()
+  const node = fresh?.querySelector(`[data-sec="${sec}"]`)
   if (node && fresh) {
     try {
-      fresh.scrollTop = Math.round(node.offsetTop + Math.min(1, Math.max(0, frac)) * node.offsetHeight);
+      fresh.scrollTop = Math.round(
+        node.offsetTop + Math.min(1, Math.max(0, frac)) * node.offsetHeight,
+      )
     } catch {
       /* ignore */
     }
   }
-  updateReaderFoot();
+  updateReaderFoot()
 }
 function currentLocator() {
-  const body = readerBodyEl();
-  if (!body || !R) return { sec: 0, frac: 0 };
+  const body = readerBodyEl()
+  if (!body || !R) return { sec: 0, frac: 0 }
   if (R.kind === "pdf") {
-    return { sec: Math.max(1, Number(R.pdf?.page) || 1), frac: 0 };
+    return { sec: Math.max(1, Number(R.pdf?.page) || 1), frac: 0 }
   }
-  const nodes = [...body.querySelectorAll("[data-sec]")];
-  const y = body.scrollTop;
-  let gSec = R.win || 0;
-  let top = null;
+  const nodes = [...body.querySelectorAll("[data-sec]")]
+  const y = body.scrollTop
+  let gSec = R.win || 0
+  let top = null
   nodes.forEach((n) => {
     if (n.offsetTop <= y + 8) {
-      top = n;
-      gSec = Number(n.dataset.sec) || 0;
+      top = n
+      gSec = Number(n.dataset.sec) || 0
     }
-  });
-  let frac = 0;
+  })
+  let frac = 0
   if (top && top.offsetHeight > 0)
-    frac = Math.min(1, Math.max(0, (y - top.offsetTop) / top.offsetHeight));
-  return { sec: gSec, frac };
+    frac = Math.min(1, Math.max(0, (y - top.offsetTop) / top.offsetHeight))
+  return { sec: gSec, frac }
 }
 function jumpToLocator(sec, frac) {
-  const body = readerBodyEl();
-  if (!body || !R) return;
+  const body = readerBodyEl()
+  if (!body || !R) return
   if (R.kind === "pdf") {
-    setPdfPage(Math.max(1, Math.round(Number(sec) || 1)));
-    return;
+    setPdfPage(Math.max(1, Math.round(Number(sec) || 1)))
+    return
   }
-  const n = R.sections.length;
-  R.win = Math.max(0, Math.min(sec | 0, Math.max(0, n - 1)));
-  renderReaderBody();
-  const fresh = readerBodyEl();
-  const node = fresh?.querySelector(`[data-sec="${R.win}"]`);
+  const n = R.sections.length
+  R.win = Math.max(0, Math.min(sec | 0, Math.max(0, n - 1)))
+  renderReaderBody()
+  const fresh = readerBodyEl()
+  const node = fresh?.querySelector(`[data-sec="${R.win}"]`)
   if (node && fresh) {
     try {
-      fresh.scrollTop = Math.round(node.offsetTop + Math.min(1, Math.max(0, Number(frac) || 0)) * node.offsetHeight);
+      fresh.scrollTop = Math.round(
+        node.offsetTop +
+          Math.min(1, Math.max(0, Number(frac) || 0)) * node.offsetHeight,
+      )
     } catch {
       /* ignore */
     }
   }
-  updateReaderFoot();
-  saveReaderProgress(true);
+  updateReaderFoot()
+  saveReaderProgress(true)
 }
 function bindReader(t) {
-  const body = t.querySelector("[data-r-body]");
+  const body = t.querySelector("[data-r-body]")
   t.querySelector("[data-r-back]").onclick = () => {
-    saveReaderProgress(true);
-    closeReaderState();
+    saveReaderProgress(true)
+    closeReaderState()
     try {
-      document.querySelectorAll("[data-rs-modal]").forEach((m) => m.remove());
+      document.querySelectorAll("[data-rs-modal]").forEach((m) => m.remove())
     } catch {
       /* ignore */
     }
-    state.bookView = { name: "home" };
-    persist();
-    renderLibrary();
-  };
+    state.bookView = { name: "home" }
+    persist()
+    renderLibrary()
+  }
   t.querySelector("[data-r-full]").onclick = () => {
-    const root = t.querySelector("[data-reader]");
+    const root = t.querySelector("[data-reader]")
     try {
-      if (document.fullscreenElement) document.exitFullscreen();
-      else root.requestFullscreen();
+      if (document.fullscreenElement) document.exitFullscreen()
+      else root.requestFullscreen()
     } catch {
-      toast("Fullscreen is not available here");
+      toast("Fullscreen is not available here")
     }
-  };
-  t.querySelector("[data-r-prev]").onclick = () => stepSection(-1);
-  t.querySelector("[data-r-next]").onclick = () => stepSection(1);
+  }
+  t.querySelector("[data-r-prev]").onclick = () => stepSection(-1)
+  t.querySelector("[data-r-next]").onclick = () => stepSection(1)
   // Keyboard: arrows turn sections/pages, Escape closes the side panel.
   // Never hijack typing inside inputs.
   t.onkeydown = (e) => {
-    const tag = (e.target?.tagName || "").toLowerCase();
-    if (tag === "input" || tag === "textarea" || tag === "select" || e.target?.isContentEditable) return;
+    const tag = (e.target?.tagName || "").toLowerCase()
+    if (
+      tag === "input" ||
+      tag === "textarea" ||
+      tag === "select" ||
+      e.target?.isContentEditable
+    )
+      return
     if (e.key === "ArrowRight") {
-      e.preventDefault();
-      stepSection(1);
+      e.preventDefault()
+      stepSection(1)
     } else if (e.key === "ArrowLeft") {
-      e.preventDefault();
-      stepSection(-1);
+      e.preventDefault()
+      stepSection(-1)
     } else if (e.key === "Escape" && R?.panel) {
-      R.panel = null;
-      applyReaderPanel();
+      R.panel = null
+      applyReaderPanel()
     }
-  };
-  $$("[data-r-panel]", t).forEach((b) => (b.onclick = () => {
-    const next = R.panel === b.dataset.rPanel ? null : b.dataset.rPanel;
-    if (next !== "companion") R.askCtx = null; // selection context only lives for the companion
-    R.panel = next;
-    applyReaderPanel();
-  }));
+  }
+  $$("[data-r-panel]", t).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const next = R.panel === b.dataset.rPanel ? null : b.dataset.rPanel
+        if (next !== "companion") R.askCtx = null // selection context only lives for the companion
+        R.panel = next
+        applyReaderPanel()
+      }),
+  )
   if (body && R.kind !== "pdf") {
-    let ticking = false;
-    body.addEventListener("scroll", () => {
-      if (R && R.kind !== "pdf") {
-        if (!ticking) {
-          ticking = true;
-          // rAF is throttled/paused for hidden documents (background tabs and
-          // embedded previews). Fall back to a timeout so progress still saves.
-          let settled = false;
-          const done = () => {
-            if (settled) return;
-            settled = true;
-            ticking = false;
-            updateReaderFoot();
-            saveReaderProgress(false);
-            refreshCompanionContext();
-          };
-          if (window.requestAnimationFrame) requestAnimationFrame(done);
-          else setTimeout(done, 16);
-          // Safety net: if rAF never fires (hidden document), run within 300ms.
-          setTimeout(done, 300);
+    let ticking = false
+    body.addEventListener(
+      "scroll",
+      () => {
+        if (R && R.kind !== "pdf") {
+          if (!ticking) {
+            ticking = true
+            // rAF is throttled/paused for hidden documents (background tabs and
+            // embedded previews). Fall back to a timeout so progress still saves.
+            let settled = false
+            const done = () => {
+              if (settled) return
+              settled = true
+              ticking = false
+              updateReaderFoot()
+              saveReaderProgress(false)
+              refreshCompanionContext()
+            }
+            if (window.requestAnimationFrame) requestAnimationFrame(done)
+            else setTimeout(done, 16)
+            // Safety net: if rAF never fires (hidden document), run within 300ms.
+            setTimeout(done, 300)
+          }
         }
-      }
-    }, { passive: true });
+      },
+      { passive: true },
+    )
     // Selection capture is centralized in the document-level selectionchange
     // listener (works for mouse AND touch); nothing per-body needed here.
   }
   if (!window.__sfReaderSelBound) {
-    window.__sfReaderSelBound = true;
-    document.addEventListener("selectionchange", (() => {
-      let t = 0;
-      return () => {
-        clearTimeout(t);
-        t = setTimeout(() => {
-          // Only react to selections made inside an open text/epub reader.
-          const body = document.querySelector("[data-r-body]");
-          if (!body || !R || R.kind === "pdf") return;
-          const sel = window.getSelection();
-          if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
-          if (!body.contains(sel.anchorNode)) return;
-          onReaderSelect();
-        }, 350);
-      };
-    })());
+    window.__sfReaderSelBound = true
+    document.addEventListener(
+      "selectionchange",
+      (() => {
+        let t = 0
+        return () => {
+          clearTimeout(t)
+          t = setTimeout(() => {
+            // Only react to selections made inside an open text/epub reader.
+            const body = document.querySelector("[data-r-body]")
+            if (!body || !R || R.kind === "pdf") return
+            const sel = window.getSelection()
+            if (!sel || sel.isCollapsed || sel.rangeCount === 0) return
+            if (!body.contains(sel.anchorNode)) return
+            onReaderSelect()
+          }, 350)
+        }
+      })(),
+    )
     // Tap (or click) an existing highlight to restyle it — the Ink Tray in edit mode.
     document.addEventListener("click", (e) => {
-      const mark = e.target.closest?.("mark[data-hl]");
-      if (!mark) return;
-      if (!R || R.kind === "pdf") return;
-      const store = localStore(R.id);
-      const h = store.highlights.find((x) => x.id === mark.dataset.hl);
-      if (!h) return;
-      e.preventDefault();
-      e.stopPropagation();
-      openInkTray("edit", { ...h, rect: mark.getBoundingClientRect() });
-    });
+      const mark = e.target.closest?.("mark[data-hl]")
+      if (!mark) return
+      if (!R || R.kind === "pdf") return
+      const store = localStore(R.id)
+      const h = store.highlights.find((x) => x.id === mark.dataset.hl)
+      if (!h) return
+      e.preventDefault()
+      e.stopPropagation()
+      openInkTray("edit", { ...h, rect: mark.getBoundingClientRect() })
+    })
     document.addEventListener("pointerdown", (e) => {
-      const tray = document.querySelector("[data-r-selbar]");
-      if (tray && !tray.hidden && !(e.target.closest && e.target.closest("[data-r-selbar]")) && !(e.target.closest && e.target.closest("mark[data-hl]"))) {
+      const tray = document.querySelector("[data-r-selbar]")
+      if (
+        tray &&
+        !tray.hidden &&
+        !(e.target.closest && e.target.closest("[data-r-selbar]")) &&
+        !(e.target.closest && e.target.closest("mark[data-hl]"))
+      ) {
         // Dismiss on outside tap only when the tray is in edit mode; in new
         // mode the selection itself is the anchor and will re-open on change.
-        if (R?.trayMode === "edit") tray.hidden = true;
+        if (R?.trayMode === "edit") tray.hidden = true
       }
-    });
+    })
     // A reader closed by tab close / refresh must not lose the last positions.
     // (After a full wipe, nothing may write again — see haltPersist.)
     window.addEventListener("beforeunload", () => {
       try {
-        if (isPersistHalted()) return;
-        if (R) saveReaderProgress(true);
-        noteReadingTime();
-      } catch { /* ignore */ }
-    });
+        if (isPersistHalted()) return
+        if (R) saveReaderProgress(true)
+        noteReadingTime()
+      } catch {
+        /* ignore */
+      }
+    })
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) {
         try {
-          if (R) saveReaderProgress(true);
-          noteReadingTime();
-        } catch { /* ignore */ }
+          if (R) saveReaderProgress(true)
+          noteReadingTime()
+        } catch {
+          /* ignore */
+        }
       }
-    });
+    })
   }
 }
 function setPdfPage(page) {
-  if (!R || R.kind !== "pdf" || !R.pdf) return;
-  const pages = Number(R.pdf.pages) || 0;
-  const next = Math.max(1, pages > 0 ? Math.min(pages, Math.round(page)) : Math.round(page));
+  if (!R || R.kind !== "pdf" || !R.pdf) return
+  const pages = Number(R.pdf.pages) || 0
+  const next = Math.max(
+    1,
+    pages > 0 ? Math.min(pages, Math.round(page)) : Math.round(page),
+  )
   if (next === R.pdf.page) {
-    updateReaderFoot();
-    return;
+    updateReaderFoot()
+    return
   }
-  R.pdf.page = next;
-  R.pdf.turns = (R.pdf.turns || 0) + 1;
-  updateReaderFoot();
-  saveReaderProgress(true);
+  R.pdf.page = next
+  R.pdf.turns = (R.pdf.turns || 0) + 1
+  updateReaderFoot()
+  saveReaderProgress(true)
 }
 
 function stepSection(dir) {
-  const body = readerBodyEl();
-  if (!body || !R) return;
+  const body = readerBodyEl()
+  if (!body || !R) return
   if (R.kind === "pdf") {
-    setPdfPage((Number(R.pdf?.page) || 1) + dir);
-    return;
+    setPdfPage((Number(R.pdf?.page) || 1) + dir)
+    return
   }
-  const n = R.sections.length;
-  if (!n) return;
-  R.win = Math.max(0, Math.min((R.win || 0) + dir, n - 1));
-  renderReaderBody();
-  const fresh = readerBodyEl();
+  const n = R.sections.length
+  if (!n) return
+  R.win = Math.max(0, Math.min((R.win || 0) + dir, n - 1))
+  renderReaderBody()
+  const fresh = readerBodyEl()
   try {
-    if (dir > 0) fresh.scrollTop = 0;
-    else fresh.scrollTop = Math.max(0, fresh.scrollHeight - fresh.clientHeight);
+    if (dir > 0) fresh.scrollTop = 0
+    else fresh.scrollTop = Math.max(0, fresh.scrollHeight - fresh.clientHeight)
   } catch {
     /* ignore */
   }
-  updateReaderFoot();
-  saveReaderProgress(true);
+  updateReaderFoot()
+  saveReaderProgress(true)
 }
 function applyReaderPanel() {
-  const side = document.querySelector("[data-r-side]");
-  if (!side || !R) return;
-  $$("[data-r-panel]").forEach((b) => b.classList.toggle("on", R.panel === b.dataset.rPanel));
+  const side = document.querySelector("[data-r-side]")
+  if (!side || !R) return
+  $$("[data-r-panel]").forEach((b) =>
+    b.classList.toggle("on", R.panel === b.dataset.rPanel),
+  )
   if (!R.panel) {
-    side.hidden = true;
-    side.innerHTML = "";
-    return;
+    side.hidden = true
+    side.innerHTML = ""
+    return
   }
-  side.hidden = false;
-  if (R.panel === "toc") renderTocPanel(side);
-  else if (R.panel === "search") renderSearchPanel(side);
-  else if (R.panel === "marks") renderMarksPanel(side);
-  else if (R.panel === "notes") renderNotesPanel(side);
-  else if (R.panel === "settings") renderSettingsPanel(side);
+  side.hidden = false
+  if (R.panel === "toc") renderTocPanel(side)
+  else if (R.panel === "search") renderSearchPanel(side)
+  else if (R.panel === "marks") renderMarksPanel(side)
+  else if (R.panel === "notes") renderNotesPanel(side)
+  else if (R.panel === "settings") renderSettingsPanel(side)
   else if (R.panel === "companion") {
     // The companion reads its book/context/highlights from side.__compMod;
     // rebuild it on every open so the context tracks the current section.
-    side.__compMod = buildCompanionMod();
-    paintCompanion(side);
+    side.__compMod = buildCompanionMod()
+    paintCompanion(side)
   }
 }
 function companionContextFor() {
-  if (!R) return { text: "", title: "this section" };
-  if (R.askCtx) return { text: R.askCtx, title: "your selection" };
-  const cur = currentLocator();
-  const sec = R.sections[cur.sec] || { title: null, paras: [] };
-  return { text: sec.paras.join(" "), title: sec.title || `Section ${cur.sec + 1}` };
+  if (!R) return { text: "", title: "this section" }
+  if (R.askCtx) return { text: R.askCtx, title: "your selection" }
+  const cur = currentLocator()
+  const sec = R.sections[cur.sec] || { title: null, paras: [] }
+  return {
+    text: sec.paras.join(" "),
+    title: sec.title || `Section ${cur.sec + 1}`,
+  }
 }
 function buildCompanionMod() {
-  const { text, title } = companionContextFor();
+  const { text, title } = companionContextFor()
   return {
     bookId: R.id,
     ctx: title,
@@ -1053,83 +1258,96 @@ function buildCompanionMod() {
     askPhrase: R.askCtx ? String(R.askCtx).slice(0, 80) : "",
     highlights: (R.kind === "pdf" ? [] : localStore(R.id).highlights) || [],
     onClose: () => {
-      R.askCtx = null;
-      R.panel = null;
-      applyReaderPanel();
+      R.askCtx = null
+      R.panel = null
+      applyReaderPanel()
     },
-  };
+  }
 }
 function refreshCompanionContext() {
-  if (!R || R.panel !== "companion") return;
-  const side = document.querySelector("[data-r-side]");
-  if (!side || !side.__compMod) return;
-  Object.assign(side.__compMod, buildCompanionMod());
+  if (!R || R.panel !== "companion") return
+  const side = document.querySelector("[data-r-side]")
+  if (!side || !side.__compMod) return
+  Object.assign(side.__compMod, buildCompanionMod())
 }
 function sideHead(title) {
-  return `<div class="section-row"><h3>${esc(title)}</h3><button type="button" class="ghost" data-r-closepanel>Close</button></div>`;
+  return `<div class="section-row"><h3>${esc(title)}</h3><button type="button" class="ghost" data-r-closepanel>Close</button></div>`
 }
 function bindPanelClose(side) {
-  const c = side.querySelector("[data-r-closepanel]");
-  if (c) c.onclick = () => {
-    R.panel = null;
-    applyReaderPanel();
-  };
+  const c = side.querySelector("[data-r-closepanel]")
+  if (c)
+    c.onclick = () => {
+      R.panel = null
+      applyReaderPanel()
+    }
 }
 function renderTocPanel(side) {
   if (R.kind === "epub" && R.epubChapters?.length) {
-    let acc = 0;
-    const rows = R.epubChapters.map((ch) => {
-      const start = acc;
-      acc += (ch.sections || []).length;
-      return `<button type="button" class="reader-row" data-r-goto="${start}"><span>${esc(ch.title || "Chapter")}</span><small class="muted">${ch.sections.length} §</small></button>`;
-    }).join("");
-    side.innerHTML = `${sideHead("Contents")}<div class="reader-list">${rows}</div>`;
+    let acc = 0
+    const rows = R.epubChapters
+      .map((ch) => {
+        const start = acc
+        acc += (ch.sections || []).length
+        return `<button type="button" class="reader-row" data-r-goto="${start}"><span>${esc(ch.title || "Chapter")}</span><small class="muted">${ch.sections.length} §</small></button>`
+      })
+      .join("")
+    side.innerHTML = `${sideHead("Contents")}<div class="reader-list">${rows}</div>`
   } else if (R.kind === "pdf") {
-    side.innerHTML = `${sideHead("Contents")}<p class="muted">Use the page controls below the document to move through this PDF.</p>`;
+    side.innerHTML = `${sideHead("Contents")}<p class="muted">Use the page controls below the document to move through this PDF.</p>`
   } else {
-    side.innerHTML = `${sideHead("Contents")}<div class="reader-list">${R.sections.map((s, i) => `<button type="button" class="reader-row" data-r-goto="${i}"><span>${esc(s.title || "Section " + (i + 1))}</span></button>`).join("")}</div>`;
+    side.innerHTML = `${sideHead("Contents")}<div class="reader-list">${R.sections.map((s, i) => `<button type="button" class="reader-row" data-r-goto="${i}"><span>${esc(s.title || "Section " + (i + 1))}</span></button>`).join("")}</div>`
   }
-  bindPanelClose(side);
-  side.querySelectorAll("[data-r-goto]").forEach((b) => (b.onclick = () => {
-    jumpToLocator(+b.dataset.rGoto, 0);
-  }));
+  bindPanelClose(side)
+  side.querySelectorAll("[data-r-goto]").forEach(
+    (b) =>
+      (b.onclick = () => {
+        jumpToLocator(+b.dataset.rGoto, 0)
+      }),
+  )
 }
 function renderSearchPanel(side) {
-  side.innerHTML = `${sideHead("Search in book")}<div class="input-row"><input class="input" data-r-q placeholder="Find in this book…" aria-label="Search in book" value="${esc(R.search.q)}"><button type="button" class="primary" data-r-find>Find</button></div><div data-r-hits></div>`;
-  bindPanelClose(side);
-  const input = side.querySelector("[data-r-q]");
+  side.innerHTML = `${sideHead("Search in book")}<div class="input-row"><input class="input" data-r-q placeholder="Find in this book…" aria-label="Search in book" value="${esc(R.search.q)}"><button type="button" class="primary" data-r-find>Find</button></div><div data-r-hits></div>`
+  bindPanelClose(side)
+  const input = side.querySelector("[data-r-q]")
   const run = () => {
-    R.search.q = input.value.trim();
-    R.search.idx = -1;
-    applySearchMarks();
-    paintSearchHits(side);
-  };
-  side.querySelector("[data-r-find]").onclick = run;
+    R.search.q = input.value.trim()
+    R.search.idx = -1
+    applySearchMarks()
+    paintSearchHits(side)
+  }
+  side.querySelector("[data-r-find]").onclick = run
   input.onkeydown = (e) => {
-    if (e.key === "Enter") run();
-  };
-  paintSearchHits(side);
-  setTimeout(() => input.focus(), 0);
+    if (e.key === "Enter") run()
+  }
+  paintSearchHits(side)
+  setTimeout(() => input.focus(), 0)
 }
 function paintSearchHits(side) {
-  const box = side.querySelector("[data-r-hits]");
-  if (!box) return;
+  const box = side.querySelector("[data-r-hits]")
+  if (!box) return
   if (R.kind === "pdf") {
-    box.innerHTML = '<p class="muted">Search inside PDF isn\'t supported here — use your browser viewer\'s search (Ctrl+F).</p>';
-    return;
+    box.innerHTML =
+      "<p class=\"muted\">Search inside PDF isn't supported here — use your browser viewer's search (Ctrl+F).</p>"
+    return
   }
-  const { hits, q } = R.search;
+  const { hits, q } = R.search
   if (!q) {
-    box.innerHTML = '<p class="muted">Type a word or phrase above.</p>';
-    return;
+    box.innerHTML = '<p class="muted">Type a word or phrase above.</p>'
+    return
   }
   if (!hits.length) {
-    box.innerHTML = '<p class="muted">No matches in this book.</p>';
-    return;
+    box.innerHTML = '<p class="muted">No matches in this book.</p>'
+    return
   }
-  box.innerHTML = `<div class="section-row"><span class="muted">${hits.length} match${hits.length === 1 ? "" : "es"}${R.search.capped ? " (first 2000)" : ""}</span><span><span class="muted" data-r-hitpos>${R.search.idx >= 0 ? `${R.search.idx + 1} of ${hits.length}` : ""}</span> <button type="button" class="ghost" data-r-hitprev>‹</button> <button type="button" class="ghost" data-r-hitnext>›</button></span></div>`;
-  box.querySelector("[data-r-hitprev]").onclick = () => stepSearchHit(-1);
-  box.querySelector("[data-r-hitnext]").onclick = () => stepSearchHit(1);
+  box.innerHTML = `<div class="section-row"><span class="muted">${hits.length} match${
+    hits.length === 1 ? "" : "es"
+  }${
+    R.search.capped ? " (first 2000)" : ""
+  }</span><span><span class="muted" data-r-hitpos>${
+    R.search.idx >= 0 ? `${R.search.idx + 1} of ${hits.length}` : ""
+  }</span> <button type="button" class="ghost" data-r-hitprev>‹</button> <button type="button" class="ghost" data-r-hitnext>›</button></span></div>`
+  box.querySelector("[data-r-hitprev]").onclick = () => stepSearchHit(-1)
+  box.querySelector("[data-r-hitnext]").onclick = () => stepSearchHit(1)
 }
 // ---- Paragraph paint engine -------------------------------------------------
 // Every paragraph is rebuilt from its ORIGINAL text (kept in a WeakMap — the
@@ -1138,397 +1356,529 @@ function paintSearchHits(side) {
 // are merged into one non-overlapping range list per paragraph, then painted
 // in a single pass. Multi-highlight paragraphs, overlapping selections and
 // repeated phrases all work.
-const paraOrig = new WeakMap();
+const paraOrig = new WeakMap()
 function paraText(p) {
-  if (!paraOrig.has(p)) paraOrig.set(p, p.textContent);
-  return paraOrig.get(p);
+  if (!paraOrig.has(p)) paraOrig.set(p, p.textContent)
+  return paraOrig.get(p)
 }
-function hlStart(a, b) { return a.start - b.start || b.end - a.end; }
+function hlStart(a, b) {
+  return a.start - b.start || b.end - a.end
+}
 
 function paintParagraph(p, hls, marks, secIdx = 0, pIdx = 0) {
-  const text = paraText(p);
-  const ranges = [];
+  const text = paraText(p)
+  const ranges = []
   for (const h of hls) {
     // exact-range highlights (current format): anchored to this paragraph
-    if (h.sec === secIdx && h.pIdx === pIdx && Number.isInteger(h.start) && Number.isInteger(h.end) && h.start >= 0 && h.end > h.start && h.end <= text.length) {
-      ranges.push({ start: h.start, end: h.end, kind: "hl", h });
-      continue;
+    if (
+      h.sec === secIdx &&
+      h.pIdx === pIdx &&
+      Number.isInteger(h.start) &&
+      Number.isInteger(h.end) &&
+      h.start >= 0 &&
+      h.end > h.start &&
+      h.end <= text.length
+    ) {
+      ranges.push({ start: h.start, end: h.end, kind: "hl", h })
+      continue
     }
     // legacy highlights: find the excerpt anywhere in this paragraph
-    if (h.sec != null && (h.sec !== secIdx || (h.pIdx != null && h.pIdx !== pIdx))) continue;
-    const needle = h.excerpt;
-    if (!needle) continue;
-    let at = 0;
+    if (
+      h.sec != null &&
+      (h.sec !== secIdx || (h.pIdx != null && h.pIdx !== pIdx))
+    )
+      continue
+    const needle = h.excerpt
+    if (!needle) continue
+    let at = 0
     // paint EVERY occurrence of an excerpt (repeated phrases), not just the first
     while (true) {
-      const i = text.indexOf(needle, at);
-      if (i < 0) break;
-      ranges.push({ start: i, end: i + needle.length, kind: "hl", h });
-      at = i + needle.length;
+      const i = text.indexOf(needle, at)
+      if (i < 0) break
+      ranges.push({ start: i, end: i + needle.length, kind: "hl", h })
+      at = i + needle.length
     }
   }
-  for (const m of marks) ranges.push({ start: m.start, end: m.end, kind: "mark", sh: m.sh });
+  for (const m of marks)
+    ranges.push({ start: m.start, end: m.end, kind: "mark", sh: m.sh })
   if (!ranges.length) {
-    if (p.firstChild?.nodeType !== 3 || p.textContent !== text) p.replaceChildren(document.createTextNode(text));
-    return;
+    if (p.firstChild?.nodeType !== 3 || p.textContent !== text)
+      p.replaceChildren(document.createTextNode(text))
+    return
   }
-  ranges.sort(hlStart);
+  ranges.sort(hlStart)
   // merge: highlights outrank search marks; overlaps collapse to the longest
-  const merged = [];
+  const merged = []
   for (const r of ranges) {
-    const last = merged[merged.length - 1];
+    const last = merged[merged.length - 1]
     if (last && r.start < last.end) {
-      if (r.kind === "hl" && last.kind === "mark") last.kind = "hl", last.h = r.h;
-      if (r.end > last.end) last.end = r.end;
-      continue;
+      if (r.kind === "hl" && last.kind === "mark")
+        (last.kind = "hl"), (last.h = r.h)
+      if (r.end > last.end) last.end = r.end
+      continue
     }
-    merged.push({ ...r });
+    merged.push({ ...r })
   }
-  const frag = document.createDocumentFragment();
-  let cursor = 0;
+  const frag = document.createDocumentFragment()
+  let cursor = 0
   for (const r of merged) {
-    if (r.start > cursor) frag.append(document.createTextNode(text.slice(cursor, r.start)));
-    const el = document.createElement("mark");
+    if (r.start > cursor)
+      frag.append(document.createTextNode(text.slice(cursor, r.start)))
+    const el = document.createElement("mark")
     if (r.kind === "hl") {
-      el.className = `ink-${r.h.style || "marker"} ink-${r.h.color || "yellow"}`;
-      el.dataset.hl = r.h.id;
-      if (r.h.note) el.classList.add("has-note");
-      el.title = r.h.note ? "Has a note — tap to view" : "Tap to restyle or edit";
+      el.className = `ink-${r.h.style || "marker"} ink-${r.h.color || "yellow"}`
+      el.dataset.hl = r.h.id
+      if (r.h.note) el.classList.add("has-note")
+      el.title = r.h.note
+        ? "Has a note — tap to view"
+        : "Tap to restyle or edit"
     } else {
-      el.className = "search-hit";
-      if (r.sh) el.dataset.sh = r.sh;
+      el.className = "search-hit"
+      if (r.sh) el.dataset.sh = r.sh
     }
-    el.textContent = text.slice(r.start, r.end);
-    frag.append(el);
-    cursor = r.end;
+    el.textContent = text.slice(r.start, r.end)
+    frag.append(el)
+    cursor = r.end
   }
-  if (cursor < text.length) frag.append(document.createTextNode(text.slice(cursor)));
-  p.replaceChildren(frag);
+  if (cursor < text.length)
+    frag.append(document.createTextNode(text.slice(cursor)))
+  p.replaceChildren(frag)
 }
 
 function paintAllParagraphs() {
-  const body = readerBodyEl();
-  if (!body || !R || R.kind === "pdf") return;
-  const store = localStore(R.id);
-  const byPara = R.search.map || new Map();
+  const body = readerBodyEl()
+  if (!body || !R || R.kind === "pdf") return
+  const store = localStore(R.id)
+  const byPara = R.search.map || new Map()
   body.querySelectorAll("[data-sec]").forEach((secEl) => {
-    const secIdx = Number(secEl.dataset.sec) || 0;
+    const secIdx = Number(secEl.dataset.sec) || 0
     secEl.querySelectorAll("p[data-p]").forEach((p, pIdx) => {
-      const marks = byPara.get(`${secIdx}:${pIdx}`) || [];
-      paintParagraph(p, store.highlights, marks, secIdx, pIdx);
-    });
-  });
+      const marks = byPara.get(`${secIdx}:${pIdx}`) || []
+      paintParagraph(p, store.highlights, marks, secIdx, pIdx)
+    })
+  })
 }
 
 // Search runs over section DATA (all of it, not just the rendered window),
 // so large books stay fast and hits outside the viewport are still found.
 function applySearchMarks() {
-  if (!R) return;
+  if (!R) return
   // Recomputes deterministically, so window jumps during hit-stepping keep
   // their place: callers own R.search.idx (run() resets it for new queries).
-  R.search.hits = [];
-  R.search.map = new Map();
-  R.search.capped = false;
-  const q = (R.search.q || "").trim().toLowerCase();
+  R.search.hits = []
+  R.search.map = new Map()
+  R.search.capped = false
+  const q = (R.search.q || "").trim().toLowerCase()
   if (q.length >= 2 && R.kind !== "pdf") {
-    let capped = false;
-    (R.sections || []).forEach((sec, secIdx) => {
-      if (capped) return;
-      let pIdx = -1;
+    let capped = false
+    ;(R.sections || []).forEach((sec, secIdx) => {
+      if (capped) return
+      let pIdx = -1
       for (const para of sec.paras || []) {
-        if (capped) break;
-        if (typeof para !== "string") continue;
+        if (capped) break
+        if (typeof para !== "string") continue
         // pIdx counts text paras only, matching the paint engine.
-        pIdx++;
-        const lower = para.toLowerCase();
-        let at = 0;
+        pIdx++
+        const lower = para.toLowerCase()
+        let at = 0
         while (true) {
-          const i = lower.indexOf(q, at);
-          if (i < 0) break;
-          const hit = { sec: secIdx, pIdx, start: i, end: i + q.length };
-          R.search.hits.push(hit);
-          const key = `${secIdx}:${pIdx}`;
-          if (!R.search.map.has(key)) R.search.map.set(key, []);
-          R.search.map.get(key).push({ ...hit, sh: key + `:${i}` });
-          at = i + q.length;
+          const i = lower.indexOf(q, at)
+          if (i < 0) break
+          const hit = { sec: secIdx, pIdx, start: i, end: i + q.length }
+          R.search.hits.push(hit)
+          const key = `${secIdx}:${pIdx}`
+          if (!R.search.map.has(key)) R.search.map.set(key, [])
+          R.search.map.get(key).push({ ...hit, sh: key + `:${i}` })
+          at = i + q.length
           if (R.search.hits.length >= 2000) {
-            capped = true;
-            R.search.capped = true;
-            break;
+            capped = true
+            R.search.capped = true
+            break
           }
         }
       }
-    });
+    })
   }
-  paintAllParagraphs();
+  paintAllParagraphs()
 }
 
 function applyHighlights() {
-  paintAllParagraphs();
+  paintAllParagraphs()
 }
 function stepSearchHit(dir) {
-  if (!R || !R.search.hits.length) return;
-  R.search.idx = (R.search.idx + dir + R.search.hits.length) % R.search.hits.length;
-  const h = R.search.hits[R.search.idx];
+  if (!R || !R.search.hits.length) return
+  R.search.idx =
+    (R.search.idx + dir + R.search.hits.length) % R.search.hits.length
+  const h = R.search.hits[R.search.idx]
   // Jump the render window if the hit lives outside it.
-  const body = readerBodyEl();
-  let el = body?.querySelector(`.search-hit[data-sh="${h.sec}:${h.pIdx}:${h.start}"]`) || null;
+  const body = readerBodyEl()
+  let el =
+    body?.querySelector(
+      `.search-hit[data-sh="${h.sec}:${h.pIdx}:${h.start}"]`,
+    ) || null
   if (!el) {
-    R.win = Math.max(0, Math.min(h.sec, R.sections.length - 1));
-    renderReaderBody();
-    el = readerBodyEl()?.querySelector(`.search-hit[data-sh="${h.sec}:${h.pIdx}:${h.start}"]`) || null;
+    R.win = Math.max(0, Math.min(h.sec, R.sections.length - 1))
+    renderReaderBody()
+    el =
+      readerBodyEl()?.querySelector(
+        `.search-hit[data-sh="${h.sec}:${h.pIdx}:${h.start}"]`,
+      ) || null
   }
-  document.querySelectorAll(".search-hit.current").forEach((x) => x.classList.remove("current"));
+  document
+    .querySelectorAll(".search-hit.current")
+    .forEach((x) => x.classList.remove("current"))
   if (el) {
-    el.classList.add("current");
+    el.classList.add("current")
     try {
-      el.scrollIntoView({ block: "center", behavior: state.reduceMotion ? "auto" : "smooth" });
+      el.scrollIntoView({
+        block: "center",
+        behavior: state.reduceMotion ? "auto" : "smooth",
+      })
     } catch {
       /* ignore */
     }
   }
-  const pos = document.querySelector("[data-r-hitpos]");
-  if (pos) pos.textContent = `${R.search.idx + 1} of ${R.search.hits.length}${R.search.capped ? "+" : ""}`;
-  const side = document.querySelector("[data-r-side]");
-  if (side && !side.hidden) paintSearchHits(side);
+  const pos = document.querySelector("[data-r-hitpos]")
+  if (pos)
+    pos.textContent = `${R.search.idx + 1} of ${R.search.hits.length}${
+      R.search.capped ? "+" : ""
+    }`
+  const side = document.querySelector("[data-r-side]")
+  if (side && !side.hidden) paintSearchHits(side)
 }
 // ---- Selection capture (mouse + touch) --------------------------------------
 // Mobile keyboards/OS UI report text selection before mouseup ever fires, so we
 // listen to selectionchange (debounced) instead of relying on mouseup alone.
-const INK_STYLES = ["marker", "underline", "ring"];
+const INK_STYLES = ["marker", "underline", "ring"]
 // NOTE: books.js ↔ books-reader.js are circular imports — BOOK_COLORS must be
 // read lazily inside functions, never captured at module top level (TDZ).
 function paraOffsetMap(p) {
   // offset of every descendant text node within the paragraph's full text
-  const map = [];
-  let off = 0;
-  const walk = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+  const map = []
+  let off = 0
+  const walk = document.createTreeWalker(p, NodeFilter.SHOW_TEXT)
   for (let n = walk.nextNode(); n; n = walk.nextNode()) {
-    map.push({ node: n, start: off });
-    off += n.textContent.length;
+    map.push({ node: n, start: off })
+    off += n.textContent.length
   }
-  return map;
+  return map
 }
 function selSpans(body, range) {
   // Exact per-paragraph character ranges covered by the selection — works
   // within one paragraph, across paragraphs, and over existing highlights.
-  const byPara = new Map();
-  const walk = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+  const byPara = new Map()
+  const walk = document.createTreeWalker(body, NodeFilter.SHOW_TEXT)
   for (let n = walk.nextNode(); n; n = walk.nextNode()) {
-    if (!range.intersectsNode(n)) continue;
-    const s = n === range.startContainer ? range.startOffset : 0;
-    const e = n === range.endContainer ? range.endOffset : n.textContent.length;
-    if (s >= e) continue;
-    const pEl = n.parentElement?.closest("[data-p]");
-    if (!pEl || !body.contains(pEl)) continue;
-    let entry = byPara.get(pEl);
-    if (!entry) byPara.set(pEl, (entry = []));
-    entry.push({ node: n, s, e });
+    if (!range.intersectsNode(n)) continue
+    const s = n === range.startContainer ? range.startOffset : 0
+    const e = n === range.endContainer ? range.endOffset : n.textContent.length
+    if (s >= e) continue
+    const pEl = n.parentElement?.closest("[data-p]")
+    if (!pEl || !body.contains(pEl)) continue
+    let entry = byPara.get(pEl)
+    if (!entry) byPara.set(pEl, (entry = []))
+    entry.push({ node: n, s, e })
   }
-  const spans = [];
+  const spans = []
   for (const [pEl, hits] of byPara) {
-    const map = paraOffsetMap(pEl);
-    let min = Infinity, max = -Infinity;
+    const map = paraOffsetMap(pEl)
+    let min = Infinity,
+      max = -Infinity
     for (const { node, s, e } of hits) {
-      const rec = map.find((x) => x.node === node);
-      if (!rec) continue;
-      min = Math.min(min, rec.start + s);
-      max = Math.max(max, rec.start + e);
+      const rec = map.find((x) => x.node === node)
+      if (!rec) continue
+      min = Math.min(min, rec.start + s)
+      max = Math.max(max, rec.start + e)
     }
-    if (min < max) spans.push({ p: pEl, start: min, end: max });
+    if (min < max) spans.push({ p: pEl, start: min, end: max })
   }
-  spans.sort((a, b) => (a.p.compareDocumentPosition(b.p) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
-  return spans;
+  spans.sort((a, b) =>
+    a.p.compareDocumentPosition(b.p) & Node.DOCUMENT_POSITION_FOLLOWING
+      ? -1
+      : 1,
+  )
+  return spans
 }
 function selContext() {
-  const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
-  const body = readerBodyEl();
-  const range = sel.getRangeAt(0);
-  if (!body || !body.contains(range.commonAncestorContainer)) return null;
-  const text = sel.toString().replace(/\s+/g, " ").trim();
-  if (text.length < 2 || text.length > 2000) return null;
-  const spans = selSpans(body, range);
-  if (!spans.length) return null;
+  const sel = window.getSelection()
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null
+  const body = readerBodyEl()
+  const range = sel.getRangeAt(0)
+  if (!body || !body.contains(range.commonAncestorContainer)) return null
+  const text = sel.toString().replace(/\s+/g, " ").trim()
+  if (text.length < 2 || text.length > 2000) return null
+  const spans = selSpans(body, range)
+  if (!spans.length) return null
   // prefix/suffix are derived from the anchor paragraph for cloud-row fallback
-  const first = spans[0], last = spans[spans.length - 1];
-  const firstText = paraText(first.p), lastText = paraText(last.p);
+  const first = spans[0],
+    last = spans[spans.length - 1]
+  const firstText = paraText(first.p),
+    lastText = paraText(last.p)
   return {
     text,
     spans,
-    prefix: first.start > 0 ? firstText.slice(Math.max(0, first.start - 120), first.start) : "",
-    suffix: last.end < lastText.length ? lastText.slice(last.end, last.end + 120) : "",
+    prefix:
+      first.start > 0
+        ? firstText.slice(Math.max(0, first.start - 120), first.start)
+        : "",
+    suffix:
+      last.end < lastText.length
+        ? lastText.slice(last.end, last.end + 120)
+        : "",
     rect: range.getBoundingClientRect(),
-  };
+  }
 }
 function positionInkTray(tray, rect) {
-  const anchor = document.querySelector("[data-reader]") || document.body;
-  const anchorRect = anchor.getBoundingClientRect();
-  const trayW = Math.min(300, anchorRect.width - 16);
-  tray.style.width = trayW + "px";
-  const top = Math.max(8, rect.top - anchorRect.top - tray.offsetHeight - 10);
-  const left = Math.max(8, Math.min(anchorRect.width - trayW - 8, rect.left + rect.width / 2 - anchorRect.left - trayW / 2));
-  tray.style.top = top + "px";
-  tray.style.left = left + "px";
+  const anchor = document.querySelector("[data-reader]") || document.body
+  const anchorRect = anchor.getBoundingClientRect()
+  const trayW = Math.min(300, anchorRect.width - 16)
+  tray.style.width = trayW + "px"
+  const top = Math.max(8, rect.top - anchorRect.top - tray.offsetHeight - 10)
+  const left = Math.max(
+    8,
+    Math.min(
+      anchorRect.width - trayW - 8,
+      rect.left + rect.width / 2 - anchorRect.left - trayW / 2,
+    ),
+  )
+  tray.style.top = top + "px"
+  tray.style.left = left + "px"
 }
 function inkTrayMarkup(mode, h) {
-  const editing = mode === "edit";
-  const cur = h || {};
-  const colors = BOOK_COLORS.map((c) => `<button type="button" class="ink-dot ink-${c}${(cur.color || "yellow") === c ? " picked" : ""}" data-ink-color="${c}" title="${c}" aria-label="${c} ink" aria-pressed="${(cur.color || "yellow") === c}"></button>`).join("");
-  const styles = INK_STYLES.map((st) => `<button type="button" class="ink-style-chip${(cur.style || "marker") === st ? " picked" : ""}" data-ink-style="${st}" title="${st}"><span class="ink-chip-sample ink-${st} ink-${cur.color || "yellow"}">Ab</span>${st}</button>`).join("");
-  return `<div class="ink-tray-head"><span class="ink-tray-title">${editing ? "Ink" : "Highlight"}</span>${editing ? `<button type="button" class="ghost" data-ink-delete>${sicon("trash")} Remove</button>` : ""}</div><div class="ink-tray-colors" role="group" aria-label="Ink color">${colors}</div><div class="ink-tray-styles" role="group" aria-label="Ink style">${styles}</div><div class="ink-tray-note" data-ink-notebox ${cur.note ? "" : "hidden"}><textarea class="textarea autogrow" data-ink-notetext rows="2" placeholder="Private note on this passage…">${esc(cur.note || "")}</textarea></div><div class="ink-tray-actions"><button type="button" class="ghost" data-ink-note>${sicon("memo")} ${cur.note ? "Edit note" : "Note"}</button><button type="button" class="primary" data-ink-apply>${editing ? "Save" : "Apply"}</button></div>`;
+  const editing = mode === "edit"
+  const cur = h || {}
+  const colors = BOOK_COLORS.map(
+    (c) =>
+      `<button type="button" class="ink-dot ink-${c}${
+        (cur.color || "yellow") === c ? " picked" : ""
+      }" data-ink-color="${c}" title="${c}" aria-label="${c} ink" aria-pressed="${(cur.color || "yellow") === c}"></button>`,
+  ).join("")
+  const styles = INK_STYLES.map(
+    (st) =>
+      `<button type="button" class="ink-style-chip${
+        (cur.style || "marker") === st ? " picked" : ""
+      }" data-ink-style="${st}" title="${st}"><span class="ink-chip-sample ink-${st} ink-${cur.color || "yellow"}">Ab</span>${st}</button>`,
+  ).join("")
+  return `<div class="ink-tray-head"><span class="ink-tray-title">${
+    editing ? "Ink" : "Highlight"
+  }</span>${
+    editing
+      ? `<button type="button" class="ghost" data-ink-delete>${sicon("trash")} Remove</button>`
+      : ""
+  }</div><div class="ink-tray-colors" role="group" aria-label="Ink color">${colors}</div><div class="ink-tray-styles" role="group" aria-label="Ink style">${styles}</div><div class="ink-tray-note" data-ink-notebox ${
+    cur.note ? "" : "hidden"
+  }><textarea class="textarea autogrow" data-ink-notetext rows="2" placeholder="Private note on this passage…">${esc(cur.note || "")}</textarea></div><div class="ink-tray-actions"><button type="button" class="ghost" data-ink-note>${sicon("memo")} ${
+    cur.note ? "Edit note" : "Note"
+  }</button><button type="button" class="primary" data-ink-apply>${
+    editing ? "Save" : "Apply"
+  }</button></div>`
 }
 function openInkTray(mode, payload) {
-  const tray = document.querySelector("[data-r-selbar]");
-  if (!tray || !R) return;
-  R.trayMode = mode;
-  R.trayDraft = mode === "edit" ? { id: payload.id, color: payload.color || "yellow", style: payload.style || "marker", note: payload.note || "" } : { color: "yellow", style: "marker", note: "" };
-  tray.innerHTML = inkTrayMarkup(mode, mode === "edit" ? payload : null);
-  positionInkTray(tray, payload.rect || R.selCtx?.rect || { top: 60, left: 40, width: 100 });
-  tray.hidden = false;
+  const tray = document.querySelector("[data-r-selbar]")
+  if (!tray || !R) return
+  R.trayMode = mode
+  R.trayDraft =
+    mode === "edit"
+      ? {
+          id: payload.id,
+          color: payload.color || "yellow",
+          style: payload.style || "marker",
+          note: payload.note || "",
+        }
+      : { color: "yellow", style: "marker", note: "" }
+  tray.innerHTML = inkTrayMarkup(mode, mode === "edit" ? payload : null)
+  positionInkTray(
+    tray,
+    payload.rect || R.selCtx?.rect || { top: 60, left: 40, width: 100 },
+  )
+  tray.hidden = false
   const paintPicked = () => {
     tray.querySelectorAll("[data-ink-color]").forEach((b) => {
-      b.classList.toggle("picked", b.dataset.inkColor === R.trayDraft.color);
-      b.setAttribute("aria-pressed", String(b.dataset.inkColor === R.trayDraft.color));
-    });
-    tray.querySelectorAll("[data-ink-style]").forEach((b) => b.classList.toggle("picked", b.dataset.inkStyle === R.trayDraft.style));
-  };
-  tray.querySelectorAll("[data-ink-color]").forEach((b) => (b.onclick = () => { R.trayDraft.color = b.dataset.inkColor; paintPicked(); }));
-  tray.querySelectorAll("[data-ink-style]").forEach((b) => (b.onclick = () => { R.trayDraft.style = b.dataset.inkStyle; paintPicked(); }));
-  const noteBox = tray.querySelector("[data-ink-notebox]");
+      b.classList.toggle("picked", b.dataset.inkColor === R.trayDraft.color)
+      b.setAttribute(
+        "aria-pressed",
+        String(b.dataset.inkColor === R.trayDraft.color),
+      )
+    })
+    tray
+      .querySelectorAll("[data-ink-style]")
+      .forEach((b) =>
+        b.classList.toggle("picked", b.dataset.inkStyle === R.trayDraft.style),
+      )
+  }
+  tray.querySelectorAll("[data-ink-color]").forEach(
+    (b) =>
+      (b.onclick = () => {
+        R.trayDraft.color = b.dataset.inkColor
+        paintPicked()
+      }),
+  )
+  tray.querySelectorAll("[data-ink-style]").forEach(
+    (b) =>
+      (b.onclick = () => {
+        R.trayDraft.style = b.dataset.inkStyle
+        paintPicked()
+      }),
+  )
+  const noteBox = tray.querySelector("[data-ink-notebox]")
   tray.querySelector("[data-ink-note]").onclick = () => {
-    noteBox.hidden = !noteBox.hidden;
+    noteBox.hidden = !noteBox.hidden
     if (!noteBox.hidden) {
-      const ta = noteBox.querySelector("[data-ink-notetext]");
-      fitTextarea(ta);
-      ta.focus();
-      positionInkTray(tray, payload.rect || R.selCtx?.rect || { top: 60, left: 40, width: 100 });
+      const ta = noteBox.querySelector("[data-ink-notetext]")
+      fitTextarea(ta)
+      ta.focus()
+      positionInkTray(
+        tray,
+        payload.rect || R.selCtx?.rect || { top: 60, left: 40, width: 100 },
+      )
     }
-  };
+  }
   if (mode === "edit") {
     tray.querySelector("[data-ink-delete]").onclick = () => {
-      removeHighlightById(R.trayDraft.id);
-      tray.hidden = true;
-    };
+      removeHighlightById(R.trayDraft.id)
+      tray.hidden = true
+    }
   }
   tray.querySelector("[data-ink-apply]").onclick = () => {
-    R.trayDraft.note = tray.querySelector("[data-ink-notetext]").value.trim().slice(0, 4000);
-    if (mode === "edit") updateHighlight(R.trayDraft);
-    else addHighlight(R.trayDraft.color, R.trayDraft.style, R.trayDraft.note);
-    tray.hidden = true;
-  };
+    R.trayDraft.note = tray
+      .querySelector("[data-ink-notetext]")
+      .value.trim()
+      .slice(0, 4000)
+    if (mode === "edit") updateHighlight(R.trayDraft)
+    else addHighlight(R.trayDraft.color, R.trayDraft.style, R.trayDraft.note)
+    tray.hidden = true
+  }
 }
 function onReaderSelect() {
-  if (!R || R.kind === "pdf") return;
+  if (!R || R.kind === "pdf") return
   setTimeout(() => {
-    const ctx = selContext();
-    if (!ctx || !R) return;
-    R.selCtx = ctx;
-    openInkTray("new", ctx);
-  }, 10);
+    const ctx = selContext()
+    if (!ctx || !R) return
+    R.selCtx = ctx
+    openInkTray("new", ctx)
+  }, 10)
 }
 async function addHighlight(color, style, note) {
-  if (!R || !R.selCtx) return;
-  const { text, spans, prefix, suffix } = R.selCtx;
-  const store = localStore(R.id);
+  if (!R || !R.selCtx) return
+  const { text, spans, prefix, suffix } = R.selCtx
+  const store = localStore(R.id)
   const secOf = (pEl) => {
-    const sec = pEl.closest("[data-sec]");
-    return sec ? Number(sec.dataset.sec) || 0 : 0;
-  };
+    const sec = pEl.closest("[data-sec]")
+    return sec ? Number(sec.dataset.sec) || 0 : 0
+  }
   // One entry per touched paragraph so each repaints with its own exact range.
   const entries = spans.map((sp, i) => ({
-    id: uid(), color, style: style || "marker",
+    id: uid(),
+    color,
+    style: style || "marker",
     excerpt: paraText(sp.p).slice(sp.start, sp.end),
-    pIdx: [...sp.p.closest("[data-sec]").querySelectorAll("p[data-p]")].indexOf(sp.p),
-    sec: secOf(sp.p), start: sp.start, end: sp.end,
-    prefix, suffix,
+    pIdx: [...sp.p.closest("[data-sec]").querySelectorAll("p[data-p]")].indexOf(
+      sp.p,
+    ),
+    sec: secOf(sp.p),
+    start: sp.start,
+    end: sp.end,
+    prefix,
+    suffix,
     part: i === 0 ? "start" : i === spans.length - 1 ? "end" : "mid",
-    note: note || "", ts: Date.now(),
-  }));
-  store.highlights = [...store.highlights, ...entries];
-  persist();
-  markAnnotationsDirty();
-  R.selCtx = null;
+    note: note || "",
+    ts: Date.now(),
+  }))
+  store.highlights = [...store.highlights, ...entries]
+  persist()
+  markAnnotationsDirty()
+  R.selCtx = null
   if (backendConfigured && state.user) {
     try {
       for (const entry of entries) {
-        const { data, error } = await addBookHighlight(R.id, entry);
+        const { data, error } = await addBookHighlight(R.id, entry)
         if (!error && data && data.id) {
-          entry.id = data.id;
-          persist();
+          entry.id = data.id
+          persist()
         }
       }
     } catch {
       /* local copy stands */
     }
   }
-  paintAllParagraphs();
-  toast(note ? "Note saved" : "Highlighted");
+  paintAllParagraphs()
+  toast(note ? "Note saved" : "Highlighted")
   try {
-    window.getSelection()?.removeAllRanges();
+    window.getSelection()?.removeAllRanges()
   } catch {
     /* ignore */
   }
 }
 async function updateHighlight(draft) {
-  if (!R) return;
-  const store = localStore(R.id);
-  const h = store.highlights.find((x) => x.id === draft.id);
-  if (!h) return;
-  h.color = draft.color;
-  h.style = draft.style;
-  h.note = draft.note;
-  persist();
-  markAnnotationsDirty();
+  if (!R) return
+  const store = localStore(R.id)
+  const h = store.highlights.find((x) => x.id === draft.id)
+  if (!h) return
+  h.color = draft.color
+  h.style = draft.style
+  h.note = draft.note
+  persist()
+  markAnnotationsDirty()
   if (backendConfigured && state.user && !String(h.id).startsWith("lh_")) {
     try {
-      await updateBookHighlight(h.id, { color: h.color, note: h.note });
+      await updateBookHighlight(h.id, { color: h.color, note: h.note })
     } catch {
       /* local copy stands */
     }
   }
-  paintAllParagraphs();
-  renderNotesPanelIfOpen();
-  toast("Highlight updated");
+  paintAllParagraphs()
+  renderNotesPanelIfOpen()
+  toast("Highlight updated")
 }
 async function removeHighlightById(id) {
-  if (!R) return;
-  const store = localStore(R.id);
-  store.highlights = store.highlights.filter((x) => x.id !== id);
-  queueAnnDelete("highlights", id);
-  persist();
-  markAnnotationsDirty();
+  if (!R) return
+  const store = localStore(R.id)
+  store.highlights = store.highlights.filter((x) => x.id !== id)
+  queueAnnDelete("highlights", id)
+  persist()
+  markAnnotationsDirty()
   if (backendConfigured && state.user && !String(id).startsWith("lh_")) {
     try {
-      await removeBookHighlight(id);
+      await removeBookHighlight(id)
     } catch {
       /* ignore */
     }
   }
-  paintAllParagraphs();
-  renderNotesPanelIfOpen();
-  toast("Highlight removed");
+  paintAllParagraphs()
+  renderNotesPanelIfOpen()
+  toast("Highlight removed")
 }
 async function newStandaloneNote(side) {
-  if (!R) return;
-  const loc = currentLocator();
-  const locator = R.kind === "pdf" ? `sec=${loc.sec} frac=0` : `sec=${loc.sec} frac=${Number(loc.frac || 0).toFixed(3)}`;
-  const label = R.kind === "pdf"
-    ? `Page ${Math.max(1, loc.sec)}`
-    : `§${(loc.sec || 0) + 1} · ${Math.round(bookProgressOf(R.id) * 100)}%`;
-  const store = localStore(R.id);
-  const entry = { id: uid(), kind: "page", label, locator, body: "", ts: Date.now() };
-  store.notes = [...(store.notes || []), entry];
-  persist();
-  renderNotesPanel(side);
+  if (!R) return
+  const loc = currentLocator()
+  const locator =
+    R.kind === "pdf"
+      ? `sec=${loc.sec} frac=0`
+      : `sec=${loc.sec} frac=${Number(loc.frac || 0).toFixed(3)}`
+  const label =
+    R.kind === "pdf"
+      ? `Page ${Math.max(1, loc.sec)}`
+      : `§${(loc.sec || 0) + 1} · ${Math.round(bookProgressOf(R.id) * 100)}%`
+  const store = localStore(R.id)
+  const entry = {
+    id: uid(),
+    kind: "page",
+    label,
+    locator,
+    body: "",
+    ts: Date.now(),
+  }
+  store.notes = [...(store.notes || []), entry]
+  persist()
+  renderNotesPanel(side)
   // Open the fresh note's editor immediately.
-  const form = side.querySelector(`[data-r-noteform2="${entry.id}"]`);
+  const form = side.querySelector(`[data-r-noteform2="${entry.id}"]`)
   if (form) {
-    form.hidden = false;
-    const ta = form.querySelector("[data-r-notetext2]");
+    form.hidden = false
+    const ta = form.querySelector("[data-r-notetext2]")
     if (ta) {
-      fitTextarea(ta);
-      ta.focus();
+      fitTextarea(ta)
+      ta.focus()
     }
   }
 }
@@ -1537,280 +1887,399 @@ async function newStandaloneNote(side) {
 // empty bodies are refused there ("delete it instead"). Cloud insert happens
 // on first non-empty save:
 async function saveStandaloneNoteCloud(entry) {
-  if (!R || !backendConfigured || !state.user) return;
+  if (!R || !backendConfigured || !state.user) return
   try {
-    if (String(entry.id).startsWith("lh_")) return;
+    if (String(entry.id).startsWith("lh_")) return
     // Already cloud-backed (has a uuid)? update, else insert.
-    const isUuid = /^[0-9a-f]{8}-/i.test(String(entry.id));
+    const isUuid = /^[0-9a-f]{8}-/i.test(String(entry.id))
     if (isUuid) {
-      await updateBookNote(entry.id, { body: entry.body, label: entry.label, locator: entry.locator });
-      return;
+      await updateBookNote(entry.id, {
+        body: entry.body,
+        label: entry.label,
+        locator: entry.locator,
+      })
+      return
     }
     const { data, error } = await addBookNote(R.id, {
-      kind: "page", label: entry.label, locator: entry.locator, body: entry.body,
-    });
+      kind: "page",
+      label: entry.label,
+      locator: entry.locator,
+      body: entry.body,
+    })
     if (!error && data && data.id) {
-      entry.id = data.id;
-      persist();
+      entry.id = data.id
+      persist()
     }
   } catch {
     /* local copy stands */
   }
 }
 function renderNotesPanelIfOpen() {
-  const side = document.querySelector("[data-r-side]");
-  if (side && !side.hidden && R?.panel === "notes") renderNotesPanel(side);
+  const side = document.querySelector("[data-r-side]")
+  if (side && !side.hidden && R?.panel === "notes") renderNotesPanel(side)
 }
 function scrollHlIntoView(id) {
-  const m = document.querySelector(`mark[data-hl="${id}"]`);
+  const m = document.querySelector(`mark[data-hl="${id}"]`)
   if (!m) {
-    toast("That passage is not on screen — it may be in another section");
-    return;
+    toast("That passage is not on screen — it may be in another section")
+    return
   }
   try {
-    m.scrollIntoView({ block: "center", behavior: state.reduceMotion ? "auto" : "smooth" });
+    m.scrollIntoView({
+      block: "center",
+      behavior: state.reduceMotion ? "auto" : "smooth",
+    })
   } catch {
     /* ignore */
   }
-  m.classList.add("ink-flash");
-  setTimeout(() => m.classList.remove("ink-flash"), 1200);
+  m.classList.add("ink-flash")
+  setTimeout(() => m.classList.remove("ink-flash"), 1200)
 }
 function renderMarksPanel(side) {
-  const store = localStore(R.id);
-  side.innerHTML = `${sideHead("Bookmarks")}<button type="button" class="primary" data-r-addmark style="margin-bottom:12px">Bookmark this spot</button>${store.bookmarks.length ? `<div class="reader-list">${store.bookmarks.map((b) => `<div class="reader-row"><button type="button" class="reader-row-main" data-r-jumpmark="${b.id}"><span>${esc(b.label)}</span></button><button type="button" class="ghost" data-r-delmark="${b.id}">Remove</button></div>`).join("")}</div>` : '<p class="muted">No bookmarks yet. Use the button above — reopening the book offers them instantly.</p>'}`;
-  bindPanelClose(side);
+  const store = localStore(R.id)
+  side.innerHTML = `${sideHead("Bookmarks")}<button type="button" class="primary" data-r-addmark style="margin-bottom:12px">Bookmark this spot</button>${
+    store.bookmarks.length
+      ? `<div class="reader-list">${store.bookmarks.map((b) => `<div class="reader-row"><button type="button" class="reader-row-main" data-r-jumpmark="${b.id}"><span>${esc(b.label)}</span></button><button type="button" class="ghost" data-r-delmark="${b.id}">Remove</button></div>`).join("")}</div>`
+      : '<p class="muted">No bookmarks yet. Use the button above — reopening the book offers them instantly.</p>'
+  }`
+  bindPanelClose(side)
   side.querySelector("[data-r-addmark]").onclick = async () => {
-    const loc = currentLocator();
-    const pct = Math.round(bookProgressOf(R.id) * 100);
-    const entry = { id: uid(), label: `Page ${pct}% · §${loc.sec + 1}`, sec: loc.sec, frac: loc.frac, ts: Date.now() };
-    store.bookmarks = [...store.bookmarks, entry];
-    persist();
-    markAnnotationsDirty();
+    const loc = currentLocator()
+    const pct = Math.round(bookProgressOf(R.id) * 100)
+    const entry = {
+      id: uid(),
+      label: `Page ${pct}% · §${loc.sec + 1}`,
+      sec: loc.sec,
+      frac: loc.frac,
+      ts: Date.now(),
+    }
+    store.bookmarks = [...store.bookmarks, entry]
+    persist()
+    markAnnotationsDirty()
     if (backendConfigured && state.user) {
       try {
-        const { data, error } = await addBookBookmark(R.id, entry.label, `sec=${loc.sec} frac=${loc.frac.toFixed(3)}`);
+        const { data, error } = await addBookBookmark(
+          R.id,
+          entry.label,
+          `sec=${loc.sec} frac=${loc.frac.toFixed(3)}`,
+        )
         if (!error && data && data.id) {
-          entry.id = data.id;
-          persist();
+          entry.id = data.id
+          persist()
         }
       } catch {
         /* local copy stands */
       }
     }
-    toast("Bookmarked");
-    renderMarksPanel(side);
-  };
-  side.querySelectorAll("[data-r-jumpmark]").forEach((b) => (b.onclick = () => {
-    const m = store.bookmarks.find((x) => x.id === b.dataset.rJumpmark);
-    if (m) jumpToLocator(m.sec || 0, m.frac || 0);
-  }));
-  side.querySelectorAll("[data-r-delmark]").forEach((b) => (b.onclick = async () => {
-    const id = b.dataset.rDelmark;
-    store.bookmarks = store.bookmarks.filter((x) => x.id !== id);
-    queueAnnDelete("bookmarks", id);
-    persist();
-    markAnnotationsDirty();
-    if (backendConfigured && state.user) {
-      try {
-        await removeBookBookmark(id);
-      } catch {
-        /* ignore */
-      }
-    }
-    renderMarksPanel(side);
-  }));
+    toast("Bookmarked")
+    renderMarksPanel(side)
+  }
+  side.querySelectorAll("[data-r-jumpmark]").forEach(
+    (b) =>
+      (b.onclick = () => {
+        const m = store.bookmarks.find((x) => x.id === b.dataset.rJumpmark)
+        if (m) jumpToLocator(m.sec || 0, m.frac || 0)
+      }),
+  )
+  side.querySelectorAll("[data-r-delmark]").forEach(
+    (b) =>
+      (b.onclick = async () => {
+        const id = b.dataset.rDelmark
+        store.bookmarks = store.bookmarks.filter((x) => x.id !== id)
+        queueAnnDelete("bookmarks", id)
+        persist()
+        markAnnotationsDirty()
+        if (backendConfigured && state.user) {
+          try {
+            await removeBookBookmark(id)
+          } catch {
+            /* ignore */
+          }
+        }
+        renderMarksPanel(side)
+      }),
+  )
 }
 function renderNotesPanel(side) {
-  const store = localStore(R.id);
-  const notes = [...(store.notes || [])].reverse();
-  const items = [...store.highlights].reverse();
-  side.innerHTML = `${sideHead("Notes & highlights")}`
-    + `<button type="button" class="primary" data-r-newnote style="margin-bottom:12px">New note here</button>`
-    + (notes.length
-      ? `<div class="eyebrow">My notes (${notes.length})</div><div class="reader-list">` + notes.map((n) => {
-        const loc = parseLocator(n.locator);
-        const where = R.kind === "pdf" ? `Page ${Math.max(1, loc.sec)}` : `§${(loc.sec || 0) + 1}`;
-        return `<div class="reader-note"><button type="button" class="reader-note-excerpt" data-r-jumpnote="${n.id}"><strong>${esc(n.label || "Note")}</strong> <span class="muted">· ${where}</span></button>`
-          + `<p>${esc(n.body)}</p><small class="muted">${new Date(n.ts || Date.now()).toLocaleDateString()}</small>`
-          + `<div class="reader-note-actions"><button type="button" class="ghost" data-r-editnote2="${n.id}">Edit</button><button type="button" class="ghost" data-r-delnote="${n.id}">Delete</button></div>`
-          + `<div data-r-noteform2="${n.id}" hidden><textarea class="textarea autogrow" data-r-notetext2 rows="2">${esc(n.body || "")}</textarea><div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px"><button type="button" class="ghost" data-r-notecancel2="${n.id}">Cancel</button><button type="button" class="primary" data-r-notesave2="${n.id}">Save</button></div></div></div>`;
-      }).join("") + `</div>`
-      : "")
-    + (items.length
+  const store = localStore(R.id)
+  const notes = [...(store.notes || [])].reverse()
+  const items = [...store.highlights].reverse()
+  side.innerHTML =
+    `${sideHead("Notes & highlights")}` +
+    `<button type="button" class="primary" data-r-newnote style="margin-bottom:12px">New note here</button>` +
+    (notes.length
+      ? `<div class="eyebrow">My notes (${notes.length})</div><div class="reader-list">` +
+        notes
+          .map((n) => {
+            const loc = parseLocator(n.locator)
+            const where =
+              R.kind === "pdf"
+                ? `Page ${Math.max(1, loc.sec)}`
+                : `§${(loc.sec || 0) + 1}`
+            return (
+              `<div class="reader-note"><button type="button" class="reader-note-excerpt" data-r-jumpnote="${n.id}"><strong>${esc(n.label || "Note")}</strong> <span class="muted">· ${where}</span></button>` +
+              `<p>${esc(n.body)}</p><small class="muted">${new Date(n.ts || Date.now()).toLocaleDateString()}</small>` +
+              `<div class="reader-note-actions"><button type="button" class="ghost" data-r-editnote2="${n.id}">Edit</button><button type="button" class="ghost" data-r-delnote="${n.id}">Delete</button></div>` +
+              `<div data-r-noteform2="${n.id}" hidden><textarea class="textarea autogrow" data-r-notetext2 rows="2">${esc(n.body || "")}</textarea><div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px"><button type="button" class="ghost" data-r-notecancel2="${n.id}">Cancel</button><button type="button" class="primary" data-r-notesave2="${n.id}">Save</button></div></div></div>`
+            )
+          })
+          .join("") +
+        `</div>`
+      : "") +
+    (items.length
       ? `<div class="eyebrow" style="margin-top:12px">From highlights (${items.length})</div><div class="reader-list">${items.map((h) => `<div class="reader-note"><button type="button" class="reader-note-excerpt ink-${h.style || "marker"} ink-${h.color || "yellow"}" data-r-jumphl="${h.id}">${esc(h.excerpt.slice(0, 140))}${h.excerpt.length > 140 ? "…" : ""}</button>${h.note ? `<p>${esc(h.note)}</p>` : '<p class="muted">No note attached.</p>'}<div class="reader-note-actions"><button type="button" class="ghost" data-r-editnote="${h.id}">${h.note ? "Edit note" : "Add note"}</button><button type="button" class="ghost" data-r-restyle="${h.id}">Ink</button><button type="button" class="ghost" data-r-delhl="${h.id}">Delete</button></div><div data-r-noteform="${h.id}" hidden><textarea class="textarea autogrow" data-r-notetext rows="2">${esc(h.note || "")}</textarea><div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px"><button type="button" class="ghost" data-r-notecancel="${h.id}">Cancel</button><button type="button" class="primary" data-r-notesave="${h.id}">Save</button></div></div></div>`).join("")}</div>`
-      : (!notes.length ? '<p class="muted">Select any passage to highlight it — pick a color and a style in the ink tray, or tap a highlight in the text to change it later.</p>' : ""));
-  bindPanelClose(side);
-  side.querySelector("[data-r-newnote]").onclick = () => newStandaloneNote(side);
-  side.querySelectorAll("[data-r-jumpnote]").forEach((b) => (b.onclick = () => {
-    const n = (localStore(R.id).notes || []).find((x) => x.id === b.dataset.rJumpnote);
-    if (!n) return;
-    const loc = parseLocator(n.locator);
-    if (R.kind === "pdf") jumpToLocator(Math.max(1, loc.sec), 0);
-    else jumpToLocator(loc.sec || 0, loc.frac || 0);
-  }));
-  side.querySelectorAll("[data-r-editnote2]").forEach((b) => (b.onclick = () => {
-    const form = side.querySelector(`[data-r-noteform2="${b.dataset.rEditnote2}"]`);
-    if (form) {
-      form.hidden = !form.hidden;
-      if (!form.hidden) fitTextarea(form.querySelector("[data-r-notetext2]"));
-    }
-  }));
-  side.querySelectorAll("[data-r-notecancel2]").forEach((b) => (b.onclick = () => {
-    const id = b.dataset.rNotecancel2;
-    const store2 = localStore(R.id);
-    // Cancel means cancel: a never-saved draft vanishes entirely (persist +
-    // repaint); an existing note just hides its editor, body untouched.
-    if (cancelNoteDraft(store2, id)) {
-      persist();
-      renderNotesPanel(side);
-      return;
-    }
-    side.querySelector(`[data-r-noteform2="${id}"]`).hidden = true;
-  }));
-  side.querySelectorAll("[data-r-notesave2]").forEach((b) => (b.onclick = async () => {
-    const id = b.dataset.rNotesave2;
-    const store2 = localStore(R.id);
-    const n = (store2.notes || []).find((x) => x.id === id);
-    if (!n) return;
-    const body = side.querySelector(`[data-r-noteform2="${id}"] [data-r-notetext2]`).value.trim().slice(0, 4000);
-    if (!body) return toast("Note is empty — delete it instead");
-    n.body = body;
-    persist();
-    markAnnotationsDirty();
-    await saveStandaloneNoteCloud(n);
-    toast("Note saved");
-    renderNotesPanel(side);
-  }));
-  side.querySelectorAll("[data-r-delnote]").forEach((b) => (b.onclick = async () => {
-    const id = b.dataset.rDelnote;
-    const store2 = localStore(R.id);
-    store2.notes = (store2.notes || []).filter((x) => x.id !== id);
-    queueAnnDelete("notes", id);
-    persist();
-    markAnnotationsDirty();
-    if (backendConfigured && state.user && !String(id).startsWith("lh_")) {
-      try {
-        await removeBookNote(id);
-      } catch {
-        /* ignore */
-      }
-    }
-    toast("Note deleted");
-    renderNotesPanel(side);
-  }));
-  side.querySelectorAll("[data-r-jumphl]").forEach((b) => (b.onclick = () => scrollHlIntoView(b.dataset.rJumphl)));
-  side.querySelectorAll("[data-r-restyle]").forEach((b) => (b.onclick = () => {
-    const h = store.highlights.find((x) => x.id === b.dataset.rRestyle);
-    if (!h) return;
-    const m = document.querySelector(`mark[data-hl="${h.id}"]`);
-    openInkTray("edit", { ...h, rect: m ? m.getBoundingClientRect() : null });
-  }));
-  side.querySelectorAll("[data-r-editnote]").forEach((b) => (b.onclick = () => {
-    const form = side.querySelector(`[data-r-noteform="${b.dataset.rEditnote}"]`);
-    if (form) {
-      form.hidden = !form.hidden;
-      if (!form.hidden) fitTextarea(form.querySelector("[data-r-notetext]"));
-    }
-  }));
-  side.querySelectorAll("[data-r-notecancel]").forEach((b) => (b.onclick = () => {
-    side.querySelector(`[data-r-noteform="${b.dataset.rNotecancel}"]`).hidden = true;
-  }));
-  side.querySelectorAll("[data-r-notesave]").forEach((b) => (b.onclick = async () => {
-    const id = b.dataset.rNotesave;
-    const h = store.highlights.find((x) => x.id === id);
-    if (!h) return;
-    h.note = side.querySelector(`[data-r-noteform="${id}"] [data-r-notetext]`).value.trim().slice(0, 4000);
-    persist();
-    markAnnotationsDirty();
-    if (backendConfigured && state.user) {
-      try {
-        await updateBookHighlight(id, { note: h.note });
-      } catch {
-        /* local copy stands */
-      }
-    }
-    toast("Note saved");
-    renderNotesPanel(side);
-    applyHighlights();
-  }));
-  side.querySelectorAll("[data-r-delhl]").forEach((b) => (b.onclick = async () => {
-    const id = b.dataset.rDelhl;
-    store.highlights = store.highlights.filter((x) => x.id !== id);
-    persist();
-    markAnnotationsDirty();
-    if (backendConfigured && state.user) {
-      try {
-        await removeBookHighlight(id);
-      } catch {
-        /* ignore */
-      }
-    }
-    renderReaderBody();
-    renderNotesPanel(side);
-  }));
+      : !notes.length
+        ? '<p class="muted">Select any passage to highlight it — pick a color and a style in the ink tray, or tap a highlight in the text to change it later.</p>'
+        : "")
+  bindPanelClose(side)
+  side.querySelector("[data-r-newnote]").onclick = () => newStandaloneNote(side)
+  side.querySelectorAll("[data-r-jumpnote]").forEach(
+    (b) =>
+      (b.onclick = () => {
+        const n = (localStore(R.id).notes || []).find(
+          (x) => x.id === b.dataset.rJumpnote,
+        )
+        if (!n) return
+        const loc = parseLocator(n.locator)
+        if (R.kind === "pdf") jumpToLocator(Math.max(1, loc.sec), 0)
+        else jumpToLocator(loc.sec || 0, loc.frac || 0)
+      }),
+  )
+  side.querySelectorAll("[data-r-editnote2]").forEach(
+    (b) =>
+      (b.onclick = () => {
+        const form = side.querySelector(
+          `[data-r-noteform2="${b.dataset.rEditnote2}"]`,
+        )
+        if (form) {
+          form.hidden = !form.hidden
+          if (!form.hidden)
+            fitTextarea(form.querySelector("[data-r-notetext2]"))
+        }
+      }),
+  )
+  side.querySelectorAll("[data-r-notecancel2]").forEach(
+    (b) =>
+      (b.onclick = () => {
+        const id = b.dataset.rNotecancel2
+        const store2 = localStore(R.id)
+        // Cancel means cancel: a never-saved draft vanishes entirely (persist +
+        // repaint); an existing note just hides its editor, body untouched.
+        if (cancelNoteDraft(store2, id)) {
+          persist()
+          renderNotesPanel(side)
+          return
+        }
+        side.querySelector(`[data-r-noteform2="${id}"]`).hidden = true
+      }),
+  )
+  side.querySelectorAll("[data-r-notesave2]").forEach(
+    (b) =>
+      (b.onclick = async () => {
+        const id = b.dataset.rNotesave2
+        const store2 = localStore(R.id)
+        const n = (store2.notes || []).find((x) => x.id === id)
+        if (!n) return
+        const body = side
+          .querySelector(`[data-r-noteform2="${id}"] [data-r-notetext2]`)
+          .value.trim()
+          .slice(0, 4000)
+        if (!body) return toast("Note is empty — delete it instead")
+        n.body = body
+        persist()
+        markAnnotationsDirty()
+        await saveStandaloneNoteCloud(n)
+        toast("Note saved")
+        renderNotesPanel(side)
+      }),
+  )
+  side.querySelectorAll("[data-r-delnote]").forEach(
+    (b) =>
+      (b.onclick = async () => {
+        const id = b.dataset.rDelnote
+        const store2 = localStore(R.id)
+        store2.notes = (store2.notes || []).filter((x) => x.id !== id)
+        queueAnnDelete("notes", id)
+        persist()
+        markAnnotationsDirty()
+        if (backendConfigured && state.user && !String(id).startsWith("lh_")) {
+          try {
+            await removeBookNote(id)
+          } catch {
+            /* ignore */
+          }
+        }
+        toast("Note deleted")
+        renderNotesPanel(side)
+      }),
+  )
+  side
+    .querySelectorAll("[data-r-jumphl]")
+    .forEach((b) => (b.onclick = () => scrollHlIntoView(b.dataset.rJumphl)))
+  side.querySelectorAll("[data-r-restyle]").forEach(
+    (b) =>
+      (b.onclick = () => {
+        const h = store.highlights.find((x) => x.id === b.dataset.rRestyle)
+        if (!h) return
+        const m = document.querySelector(`mark[data-hl="${h.id}"]`)
+        openInkTray("edit", {
+          ...h,
+          rect: m ? m.getBoundingClientRect() : null,
+        })
+      }),
+  )
+  side.querySelectorAll("[data-r-editnote]").forEach(
+    (b) =>
+      (b.onclick = () => {
+        const form = side.querySelector(
+          `[data-r-noteform="${b.dataset.rEditnote}"]`,
+        )
+        if (form) {
+          form.hidden = !form.hidden
+          if (!form.hidden) fitTextarea(form.querySelector("[data-r-notetext]"))
+        }
+      }),
+  )
+  side.querySelectorAll("[data-r-notecancel]").forEach(
+    (b) =>
+      (b.onclick = () => {
+        side.querySelector(
+          `[data-r-noteform="${b.dataset.rNotecancel}"]`,
+        ).hidden = true
+      }),
+  )
+  side.querySelectorAll("[data-r-notesave]").forEach(
+    (b) =>
+      (b.onclick = async () => {
+        const id = b.dataset.rNotesave
+        const h = store.highlights.find((x) => x.id === id)
+        if (!h) return
+        h.note = side
+          .querySelector(`[data-r-noteform="${id}"] [data-r-notetext]`)
+          .value.trim()
+          .slice(0, 4000)
+        persist()
+        markAnnotationsDirty()
+        if (backendConfigured && state.user) {
+          try {
+            await updateBookHighlight(id, { note: h.note })
+          } catch {
+            /* local copy stands */
+          }
+        }
+        toast("Note saved")
+        renderNotesPanel(side)
+        applyHighlights()
+      }),
+  )
+  side.querySelectorAll("[data-r-delhl]").forEach(
+    (b) =>
+      (b.onclick = async () => {
+        const id = b.dataset.rDelhl
+        store.highlights = store.highlights.filter((x) => x.id !== id)
+        persist()
+        markAnnotationsDirty()
+        if (backendConfigured && state.user) {
+          try {
+            await removeBookHighlight(id)
+          } catch {
+            /* ignore */
+          }
+        }
+        renderReaderBody()
+        renderNotesPanel(side)
+      }),
+  )
 }
 
 // Pure draft-vs-edit decision, exported for tests: true = draft discarded.
 export function cancelNoteDraft(store, id) {
-  const n = (store.notes || []).find((x) => x.id === id);
+  const n = (store.notes || []).find((x) => x.id === id)
   if (n && !n.body) {
-    store.notes = (store.notes || []).filter((x) => x.id !== id);
-    return true;
+    store.notes = (store.notes || []).filter((x) => x.id !== id)
+    return true
   }
-  return false;
+  return false
 }
 function renderSettingsPanel(side) {
-  const s = R.settings;
+  const s = R.settings
   side.innerHTML = `${sideHead("Reading settings")}
   <label class="field-label">Font size (${s.fontSize}px)<input type="range" min="14" max="24" step="1" value="${s.fontSize}" data-r-set-font aria-label="Font size"></label>
   <label class="field-label">Line spacing<input type="range" min="1.4" max="2.2" step="0.1" value="${s.lineHeight}" data-r-set-lh aria-label="Line spacing"></label>
-  <label class="field-label">Reading width<select class="select" data-r-set-width><option value="narrow"${s.width === "narrow" ? " selected" : ""}>Narrow</option><option value="medium"${s.width === "medium" ? " selected" : ""}>Medium</option><option value="wide"${s.width === "wide" ? " selected" : ""}>Wide</option></select></label>
-  <label class="field-label">Theme<select class="select" data-r-set-theme><option value="auto"${s.theme === "auto" ? " selected" : ""}>Match app theme</option><option value="light"${s.theme === "light" ? " selected" : ""}>Light</option><option value="dark"${s.theme === "dark" ? " selected" : ""}>Dark</option><option value="sepia"${s.theme === "sepia" ? " selected" : ""}>Sepia</option></select></label>
-  <label class="field-label">Font<select class="select" data-r-set-fontface><option value="serif"${s.font !== "sans" && s.font !== "system" ? " selected" : ""}>Book serif</option><option value="sans"${s.font === "sans" ? " selected" : ""}>Clean sans</option><option value="system"${s.font === "system" ? " selected" : ""}>System</option></select></label>
-  <label class="field-label">Alignment<select class="select" data-r-set-align><option value="left"${s.align !== "justify" ? " selected" : ""}>Left</option><option value="justify"${s.align === "justify" ? " selected" : ""}>Justified</option></select></label>
-  <label class="toggle-row"><span><strong>Ruler reading</strong><small>Dim all lines except the one under your cursor</small></span><input type="checkbox" data-r-set-ruler ${s.ruler ? "checked" : ""}></label>`;
-  bindPanelClose(side);
+  <label class="field-label">Reading width<select class="select" data-r-set-width><option value="narrow"${
+    s.width === "narrow" ? " selected" : ""
+  }>Narrow</option><option value="medium"${
+    s.width === "medium" ? " selected" : ""
+  }>Medium</option><option value="wide"${
+    s.width === "wide" ? " selected" : ""
+  }>Wide</option></select></label>
+  <label class="field-label">Theme<select class="select" data-r-set-theme><option value="auto"${
+    s.theme === "auto" ? " selected" : ""
+  }>Match app theme</option><option value="light"${
+    s.theme === "light" ? " selected" : ""
+  }>Light</option><option value="dark"${
+    s.theme === "dark" ? " selected" : ""
+  }>Dark</option><option value="sepia"${
+    s.theme === "sepia" ? " selected" : ""
+  }>Sepia</option></select></label>
+  <label class="field-label">Font<select class="select" data-r-set-fontface><option value="serif"${
+    s.font !== "sans" && s.font !== "system" ? " selected" : ""
+  }>Book serif</option><option value="sans"${
+    s.font === "sans" ? " selected" : ""
+  }>Clean sans</option><option value="system"${
+    s.font === "system" ? " selected" : ""
+  }>System</option></select></label>
+  <label class="field-label">Alignment<select class="select" data-r-set-align><option value="left"${
+    s.align !== "justify" ? " selected" : ""
+  }>Left</option><option value="justify"${
+    s.align === "justify" ? " selected" : ""
+  }>Justified</option></select></label>
+  <label class="toggle-row"><span><strong>Ruler reading</strong><small>Dim all lines except the one under your cursor</small></span><input type="checkbox" data-r-set-ruler ${
+    s.ruler ? "checked" : ""
+  }></label>`
+  bindPanelClose(side)
   const restyle = () => {
-    saveReaderSettings(R.settings);
-    renderReader();
-    R.panel = "settings";
-    applyReaderPanel();
-  };
-  const fontInput = side.querySelector("[data-r-set-font]");
+    saveReaderSettings(R.settings)
+    renderReader()
+    R.panel = "settings"
+    applyReaderPanel()
+  }
+  const fontInput = side.querySelector("[data-r-set-font]")
   fontInput.oninput = (e) => {
-    R.settings.fontSize = +e.target.value || 18;
-    const body = readerBodyEl();
-    if (body) body.style.setProperty("--read-fs", R.settings.fontSize + "px");
-    fontInput.closest("label").firstChild.textContent = `Font size (${R.settings.fontSize}px)`;
-  };
-  fontInput.onchange = () => restyle();
-  const lhInput = side.querySelector("[data-r-set-lh]");
+    R.settings.fontSize = +e.target.value || 18
+    const body = readerBodyEl()
+    if (body) body.style.setProperty("--read-fs", R.settings.fontSize + "px")
+    fontInput.closest("label").firstChild.textContent =
+      `Font size (${R.settings.fontSize}px)`
+  }
+  fontInput.onchange = () => restyle()
+  const lhInput = side.querySelector("[data-r-set-lh]")
   lhInput.oninput = (e) => {
-    R.settings.lineHeight = +e.target.value || 1.7;
-    const body = readerBodyEl();
-    if (body) body.style.setProperty("--read-lh", R.settings.lineHeight);
-  };
-  lhInput.onchange = () => restyle();
+    R.settings.lineHeight = +e.target.value || 1.7
+    const body = readerBodyEl()
+    if (body) body.style.setProperty("--read-lh", R.settings.lineHeight)
+  }
+  lhInput.onchange = () => restyle()
   side.querySelector("[data-r-set-width]").onchange = (e) => {
-    R.settings.width = e.target.value;
-    restyle();
-  };
+    R.settings.width = e.target.value
+    restyle()
+  }
   side.querySelector("[data-r-set-theme]").onchange = (e) => {
-    R.settings.theme = e.target.value;
-    restyle();
-  };
+    R.settings.theme = e.target.value
+    restyle()
+  }
   side.querySelector("[data-r-set-fontface]").onchange = (e) => {
-    R.settings.font = e.target.value;
-    restyle();
-  };
+    R.settings.font = e.target.value
+    restyle()
+  }
   side.querySelector("[data-r-set-align]").onchange = (e) => {
-    R.settings.align = e.target.value;
-    restyle();
-  };
+    R.settings.align = e.target.value
+    restyle()
+  }
   side.querySelector("[data-r-set-ruler]").onchange = (e) => {
-    R.settings.ruler = e.target.checked;
-    const body = readerBodyEl();
-    if (body) body.dataset.ruler = e.target.checked ? "1" : "0";
-    saveReaderSettings(R.settings);
-  };
+    R.settings.ruler = e.target.checked
+    const body = readerBodyEl()
+    if (body) body.dataset.ruler = e.target.checked ? "1" : "0"
+    saveReaderSettings(R.settings)
+  }
 }
