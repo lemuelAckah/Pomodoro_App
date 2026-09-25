@@ -10,7 +10,7 @@
 -- The client also drops the Public <option> and filters rings/loops to friends.
 --
 -- Free-plan safe: plain SQL policies only.
-
+v
 -- Owners already read via stories_self_all (for all using auth.uid() = user_id).
 
 drop policy if exists stories_visible_read on public.stories;
