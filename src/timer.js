@@ -1797,9 +1797,7 @@ function completeSession() {
     progressChallenges(focusedMin)
 
     if (state.sprintSession) {
-      const sp = (state.sprints || []).find(
-        (s) => s.id === state.sprintSession,
-      )
+      const sp = (state.sprints || []).find((s) => s.id === state.sprintSession)
 
       if (sp) sp.result = { status: "done", focusedMin, at: Date.now() }
 

@@ -155,7 +155,6 @@ function closeSearch() {
 
 function collectSearch(q) {
   const hits = []
-
   ;(state.tasks || []).forEach((t) => {
     if (!q || t.text.toLowerCase().includes(q))
       hits.push({
@@ -210,7 +209,6 @@ function collectSearch(q) {
       })
     }
   })
-
   ;(state.friends || []).forEach((f) => {
     if (!q || f.username.toLowerCase().includes(q))
       hits.push({

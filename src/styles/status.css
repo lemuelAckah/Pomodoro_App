@@ -1231,3 +1231,519 @@ html[data-night="1"] .st-music-row-item:hover,
 html[data-night="1"] .st-music-row-item:focus-visible {
   background: rgba(255, 255, 255, 0.06);
 }
+
+/* ==== Status editor v2 (Parts 5–27): live canvas, layers, tools, picker ==== */
+
+/* Two new text backgrounds beyond the v1 six. */
+.st-bg-dusk { background: linear-gradient(145deg, #141428, #4a3f8f); }
+.st-bg-forest { background: linear-gradient(145deg, #0c1f10, #3f7a2f); }
+
+/* --- text layers (shared by editor canvas and cloud viewer) --- */
+.st-el-canvas {
+  position: relative;
+  overflow: visible;
+}
+.st-el {
+  position: absolute;
+  z-index: 3;
+  display: inline-block;
+  max-width: 88%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  text-align: inherit;
+  box-sizing: border-box;
+}
+.st-el:empty,
+.st-el .st-el-ghost {
+  min-width: 56px;
+}
+.st-el-ghost {
+  opacity: 0.6;
+  font-style: italic;
+}
+.st-el.sel {
+  outline: 1.5px solid rgba(255, 255, 255, 0.9);
+  outline-offset: 3px;
+}
+.st-el-h {
+  position: absolute;
+  right: -13px;
+  bottom: -13px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid rgba(16, 26, 20, 0.6);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  display: none;
+  cursor: nwse-resize;
+  touch-action: none;
+  z-index: 4;
+}
+.st-el-rot {
+  right: auto;
+  left: -13px;
+  cursor: grab;
+}
+.st-el.sel .st-el-h {
+  display: block;
+}
+.sv-el-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* --- edit step: split canvas + tool column --- */
+.st-edit-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: 16px;
+  align-items: start;
+}
+.st-edit-canvas-col {
+  position: sticky;
+  top: 12px;
+}
+.st-editor-edit .st-preview-frame {
+  min-height: 0;
+  max-width: 360px;
+  margin: 0 auto;
+}
+.st-editor-edit .st-preview-frame .sv-stage {
+  aspect-ratio: 9 / 16;
+  min-height: 320px;
+  max-height: 58vh;
+}
+.st-canvas {
+  width: 100%;
+}
+.st-canvas-hint {
+  font-size: 12px;
+  text-align: center;
+  margin: 8px 0 0;
+}
+.st-canvas-empty {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 240px;
+  display: grid;
+  place-items: center;
+  padding: 14px;
+}
+.st-canvas-empty .st-media-drop {
+  width: 100%;
+}
+
+.st-edit-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  background: var(--panel, rgba(0, 0, 0, 0.03));
+  border: 1px solid var(--line, rgba(0, 0, 0, 0.08));
+  border-radius: 14px;
+  padding: 12px;
+}
+.st-tools-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.st-tools-head {
+  justify-content: space-between;
+}
+.st-tools-spacer {
+  flex: 1;
+}
+.st-tools-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px dashed var(--line, rgba(0, 0, 0, 0.12));
+  padding-top: 10px;
+}
+.st-tools-sec .field-label {
+  margin: 0;
+}
+.st-tools-ranges {
+  gap: 10px;
+}
+.st-tools-acts .ghost {
+  font-size: 12px;
+}
+.st-tools-acts {
+  justify-content: flex-end;
+}
+.st-tools-sec select.select,
+.st-edit-tools .select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.st-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.st-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid rgba(0, 0, 0, 0.2);
+  padding: 0;
+  cursor: pointer;
+}
+.st-swatch.on {
+  outline: 2px solid var(--accent, #47765a);
+  outline-offset: 2px;
+}
+.st-swatch-input {
+  width: 32px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--line, rgba(0, 0, 0, 0.15));
+  border-radius: 8px;
+  background: none;
+  cursor: pointer;
+}
+.st-range-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  flex: 1 1 150px;
+  min-width: 0;
+}
+.st-range-row span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 74px;
+  color: var(--muted, #6b7a72);
+}
+.st-range-row input[type="range"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.st-layers {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 148px;
+  overflow-y: auto;
+}
+.st-layers li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 8px;
+  padding: 3px 6px;
+}
+.st-layers li.on {
+  outline: 1.5px solid var(--accent, #47765a);
+}
+.st-layer-pick {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12.5px;
+  padding: 5px 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.st-layer-acts {
+  display: flex;
+  gap: 2px;
+}
+.st-layer-acts .ghost {
+  padding: 3px 6px;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.st-post-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  border-top: 1px solid var(--line, rgba(0, 0, 0, 0.12));
+  padding-top: 10px;
+  margin-top: 2px;
+}
+.st-post-note {
+  flex: 1;
+  font-size: 12px;
+  min-width: 40px;
+}
+.st-post-bar .primary {
+  min-width: 96px;
+}
+
+/* --- music picker v2: tabs, import zone, waveform trim --- */
+.st-music-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 6px 14px 0;
+  border-bottom: 1px solid var(--line, rgba(0, 0, 0, 0.1));
+}
+.st-music-tab {
+  flex: 1;
+  padding: 9px 10px;
+  border: none;
+  border-radius: 10px 10px 0 0;
+  background: rgba(0, 0, 0, 0.05);
+  color: inherit;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  opacity: 0.72;
+}
+.st-music-tab.on {
+  background: var(--card, #fff);
+  opacity: 1;
+  box-shadow: inset 0 -2px 0 var(--accent, #47765a);
+}
+.st-music-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+.st-music-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.st-music-pane[hidden] {
+  display: none;
+}
+.st-music-pane .st-music-list {
+  max-height: 30vh;
+}
+.st-import-note {
+  font-size: 12px;
+  margin: 0;
+}
+.st-import-zone .st-media-drop {
+  width: 100%;
+}
+.st-import-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line, rgba(0, 0, 0, 0.12));
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.04);
+}
+.st-import-file .st-music-meta {
+  flex: 1;
+  min-width: 0;
+}
+.st-import-file .st-music-meta strong,
+.st-import-file .st-music-meta small {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.smp-wave {
+  position: relative;
+  height: 66px;
+  margin-top: 2px;
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 10px;
+  touch-action: none;
+  cursor: crosshair;
+}
+.smp-wave-bars {
+  position: absolute;
+  inset: 8px 7px;
+  display: flex;
+  align-items: center;
+  gap: 1.5px;
+  pointer-events: none;
+}
+.smp-wave-bars i {
+  flex: 1;
+  min-width: 1px;
+  min-height: 3px;
+  background: rgba(71, 118, 90, 0.6);
+  border-radius: 2px;
+}
+.smp-wave-sel {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 0;
+  background: rgba(233, 174, 63, 0.22);
+  border-left: 2px solid #e9ae3f;
+  border-right: 2px solid #e9ae3f;
+  pointer-events: none;
+}
+.smp-wave-play {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  background: #fff;
+  box-shadow: 0 0 5px rgba(0, 0, 0, 0.65);
+  pointer-events: none;
+}
+.smp-wave-h {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 18px;
+  height: 18px;
+  margin-left: -9px;
+  transform: translateY(-50%);
+  background: #fff;
+  border: 2px solid rgba(16, 26, 20, 0.65);
+  border-radius: 50%;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.4);
+  cursor: ew-resize;
+  touch-action: none;
+  z-index: 3;
+}
+.smp-wave-labs {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11.5px;
+  color: var(--muted, #6b7a72);
+  margin-top: 4px;
+}
+.st-music-now {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.st-music-now strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.st-music-now-ctl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.st-music-now-ctl .muted {
+  font-size: 12px;
+}
+.st-music-clip {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.st-music-clip .st-range-row {
+  flex-basis: 100%;
+}
+
+/* --- responsive (Part 14): stack the editor, sheet the picker --- */
+@media (max-width: 640px) {
+  .st-edit-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .st-edit-canvas-col {
+    position: static;
+  }
+  .st-editor-edit .st-preview-frame {
+    max-width: 300px;
+  }
+  .st-editor-edit .st-preview-frame .sv-stage {
+    max-height: 52vh;
+    min-height: 300px;
+  }
+  .st-canvas-hint {
+    font-size: 11.5px;
+  }
+  .st-post-bar {
+    position: sticky;
+    bottom: 0;
+    background: var(--card, #fff);
+    z-index: 6;
+    padding-bottom: 6px;
+    border-radius: 0 0 10px 10px;
+  }
+  .st-post-bar .primary {
+    flex: 1;
+  }
+  .st-music-ov {
+    align-items: flex-end;
+    padding: 0;
+  }
+  .st-music-modal {
+    width: 100%;
+    max-width: 100%;
+    border-radius: 18px 18px 0 0;
+    max-height: 92vh;
+  }
+  .st-music-pane .st-music-list {
+    max-height: 34vh;
+  }
+  .st-tools-ranges .st-range-row {
+    flex-basis: 100%;
+  }
+}
+
+/* --- night mode additions for the new surfaces --- */
+html[data-night="1"] .st-edit-tools {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+html[data-night="1"] .st-layers li {
+  background: rgba(255, 255, 255, 0.07);
+}
+html[data-night="1"] .st-music-tab {
+  background: rgba(255, 255, 255, 0.07);
+}
+html[data-night="1"] .st-music-tab.on {
+  background: var(--card);
+}
+html[data-night="1"] .st-import-file {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+html[data-night="1"] .smp-wave {
+  background: rgba(255, 255, 255, 0.07);
+}
+html[data-night="1"] .smp-wave-bars i {
+  background: rgba(184, 215, 124, 0.55);
+}
+html[data-night="1"] .st-post-bar {
+  background: var(--card);
+}
+html[data-night="1"] .st-swatch {
+  border-color: rgba(255, 255, 255, 0.35);
+}

@@ -163,13 +163,27 @@ export async function signInWithProvider(provider) {
 }
 
 export async function deleteMyBackendData() {
-  if (!supabase) return { ok: true, signedIn: false, deleted: [], failures: [] }
+  if (!supabase)
+    return {
+      ok: true,
+      signedIn: false,
+      atomic: true,
+      deleted: [],
+      failures: [],
+    }
 
   const {
     data: { user },
   } = await supabase.auth.getUser()
 
-  if (!user) return { ok: true, signedIn: false, deleted: [], failures: [] }
+  if (!user)
+    return {
+      ok: true,
+      signedIn: false,
+      atomic: true,
+      deleted: [],
+      failures: [],
+    }
 
   const uid = user.id
 
@@ -177,10 +191,32 @@ export async function deleteMyBackendData() {
 
   const failures = []
 
+  // True when rows were removed by the transactional RPC (migration 032):
+  // the procedure runs in one subtransaction, so a failure means NOTHING was
+  // removed. False = legacy per-table sequence, where a mid-sequence error
+  // can leave partial data (the UI words its message accordingly).
+  let atomic = false
+
   const missingTable = (err) =>
     /does not exist|not find|schema cache|relation .* does not exist/i.test(
       err?.message || "",
     )
+
+  // Owned-group ids are captured BEFORE any row deletion: the group avatar
+  // files live under the group's own folder (outside this user's folder) and
+  // the ids disappear with the groups rows.
+  let ownedGroupIds = []
+
+  try {
+    const { data } = await supabase
+      .from("groups")
+      .select("id")
+      .eq("owner_id", uid)
+
+    ownedGroupIds = (data || []).map((g) => g.id)
+  } catch {
+    /* best-effort: avatar sweep may miss files if this fails */
+  }
 
   async function wipe(table, build, label) {
     try {
@@ -210,37 +246,147 @@ export async function deleteMyBackendData() {
 
   const eq = (col) => (q) => q.eq(col, uid)
 
-  // Order matters: participants before the calls that cascade them,
+  // Preferred path: one transactional procedure (migration 032) that deletes
+  // every user-owned table in FK-safe order inside a single subtransaction —
+  // either everything goes or nothing does. The legacy per-table sequence
+  // only runs when the function is not provisioned yet (frontend deployed
+  // ahead of the migration).
 
-  // owned groups before the rows that reference them.
+  const rpc = await supabase.rpc("sf_delete_my_data")
 
-  await wipe("call_participants", eq("user_id"), "call participations")
+  const rpcMissing =
+    rpc.error &&
+    /sf_delete_my_data|could not find the function|pgrst202|42883|does not exist/i.test(
+      rpc.error.message || "",
+    )
 
-  await wipe("call_history", eq("initiator_id"), "call history")
+  if (rpc.error && !rpcMissing)
+    return {
+      ok: false,
+      signedIn: true,
+      atomic: false,
+      deleted,
+      failures: [rpc.error.message || "server deletion failed"],
+    }
 
-  await wipe("story_views", eq("viewer_id"), "story views")
+  if (!rpc.error && rpc.data && typeof rpc.data === "object") {
+    atomic = true
 
-  await wipe("stories", eq("user_id"), "stories")
+    if (!rpc.data.ok)
+      return {
+        ok: false,
+        signedIn: true,
+        atomic,
+        deleted,
+        failures: [rpc.data.error || "server deletion failed"],
+      }
 
-  await wipe("community_blocks", eq("blocker_id"), "blocks")
+    const counts = rpc.data.deleted || {}
 
-  // Group avatar files live under groups/{groupId}/ — outside the user's own
+    for (const [table, n] of Object.entries(counts)) {
+      if (n) deleted.push(`${table} (${n})`)
+    }
+  }
 
-  // folder, so they need prefix cleanup before the owned groups go away.
+  if (!atomic) {
+    // Legacy fallback — order matters: events/participants before the calls
+    // that cascade them, owned groups before the rows that reference them.
 
+    await wipe("call_events", eq("actor_id"), "call events")
+
+    await wipe("call_participants", eq("user_id"), "call participations")
+
+    await wipe("call_history", eq("initiator_id"), "call history")
+
+    await wipe("story_views", eq("viewer_id"), "story views")
+
+    await wipe("stories", eq("user_id"), "stories")
+
+    await wipe("community_blocks", eq("blocker_id"), "blocks")
+
+    await wipe("groups", eq("owner_id"), "owned groups")
+
+    await wipe("group_memberships", eq("user_id"), "group memberships")
+
+    await wipe(
+      "friendships",
+      (q) => q.or(`user_id.eq.${uid},friend_id.eq.${uid}`),
+      "friendships",
+    )
+
+    await wipe("messages", eq("sender_id"), "sent messages")
+
+    await wipe("message_reactions", eq("user_id"), "message reactions")
+
+    await wipe("message_receipts", eq("user_id"), "message receipts")
+
+    await wipe("notifications", eq("user_id"), "notifications")
+
+    await wipe("purchases", eq("buyer_id"), "purchase records")
+
+    await wipe("coin_transactions", eq("user_id"), "coin transactions")
+
+    await wipe("user_balances", eq("user_id"), "coin balance")
+
+    await wipe("user_inventory", eq("user_id"), "inventory")
+
+    await wipe("user_achievements", eq("user_id"), "achievements")
+
+    await wipe("streaks", eq("user_id"), "streak")
+
+    await wipe("mystery_box_openings", eq("user_id"), "mystery-box history")
+
+    await wipe("reports", eq("reporter_id"), "reports")
+
+    await wipe("book_highlights", eq("user_id"), "book highlights")
+
+    await wipe("book_bookmarks", eq("user_id"), "book bookmarks")
+
+    await wipe("book_progress", eq("user_id"), "reading progress")
+
+    await wipe("book_favorites", eq("user_id"), "book favorites")
+
+    await wipe("book_notes", eq("user_id"), "book notes")
+
+    await wipe("books", eq("owner_id"), "uploaded books")
+
+    await wipe("tasks", eq("user_id"), "tasks")
+
+    await wipe("user_notes", eq("user_id"), "notes")
+
+    await wipe("technique_assessments", eq("user_id"), "technique assessments")
+
+    await wipe("technique_usage", eq("user_id"), "technique usage")
+
+    await wipe("music_playlist_tracks", eq("user_id"), "playlist memberships")
+
+    await wipe("music_playlists", eq("user_id"), "playlists")
+
+    await wipe("music_tracks", eq("user_id"), "music metadata")
+
+    await wipe("favorites", eq("user_id"), "favorites")
+
+    await wipe("user_progress", eq("user_id"), "progress and coins")
+
+    await wipe("user_settings", eq("user_id"), "settings")
+
+    await wipe("user_state", eq("user_id"), "synced app state")
+
+    await wipe("profiles", (q) => q.eq("id", uid), "profile")
+  } // end legacy per-table fallback (rows deleted by the RPC otherwise)
+
+  // Storage: every file under this user's folder, in each app bucket.
+
+  // Group avatars live under groups/{groupId}/ — outside this user's folder —
+  // so they need their own prefix sweep using the ids captured up front.
   try {
-    const { data: owned } = await supabase
-      .from("groups")
-      .select("id")
-      .eq("owner_id", uid)
-
     const avatars = supabase.storage.from("studyflow-groups")
 
-    for (const g of owned || []) {
-      const listed = await avatars.list(`groups/${g.id}`).catch(() => null)
+    for (const gid of ownedGroupIds) {
+      const listed = await avatars.list(`groups/${gid}`).catch(() => null)
 
       const files = (listed?.data || [])
-        .map((e) => `groups/${g.id}/${e.name}`)
+        .map((e) => `groups/${gid}/${e.name}`)
         .filter((p) => !p.endsWith("/"))
 
       if (files.length) await avatars.remove(files).catch(() => null)
@@ -248,70 +394,6 @@ export async function deleteMyBackendData() {
   } catch {
     /* storage avatar cleanup is best-effort */
   }
-
-  await wipe("groups", eq("owner_id"), "owned groups")
-
-  await wipe("group_memberships", eq("user_id"), "group memberships")
-
-  await wipe(
-    "friendships",
-    (q) => q.or(`user_id.eq.${uid},friend_id.eq.${uid}`),
-    "friendships",
-  )
-
-  await wipe("messages", eq("sender_id"), "sent messages")
-
-  await wipe("message_reactions", eq("user_id"), "message reactions")
-
-  await wipe("message_receipts", eq("user_id"), "message receipts")
-
-  await wipe("notifications", eq("user_id"), "notifications")
-
-  await wipe("purchases", eq("buyer_id"), "purchase records")
-
-  await wipe("coin_transactions", eq("user_id"), "coin transactions")
-
-  await wipe("user_balances", eq("user_id"), "coin balance")
-
-  await wipe("user_inventory", eq("user_id"), "inventory")
-
-  await wipe("user_achievements", eq("user_id"), "achievements")
-
-  await wipe("streaks", eq("user_id"), "streak")
-
-  await wipe("mystery_box_openings", eq("user_id"), "mystery-box history")
-
-  await wipe("reports", eq("reporter_id"), "reports")
-
-  await wipe("book_highlights", eq("user_id"), "book highlights")
-
-  await wipe("book_bookmarks", eq("user_id"), "book bookmarks")
-
-  await wipe("book_progress", eq("user_id"), "reading progress")
-
-  await wipe("book_favorites", eq("user_id"), "book favorites")
-
-  await wipe("books", eq("owner_id"), "uploaded books")
-
-  await wipe("tasks", eq("user_id"), "tasks")
-
-  await wipe("music_playlist_tracks", eq("user_id"), "playlist memberships")
-
-  await wipe("music_playlists", eq("user_id"), "playlists")
-
-  await wipe("music_tracks", eq("user_id"), "music metadata")
-
-  await wipe("favorites", eq("user_id"), "favorites")
-
-  await wipe("user_progress", eq("user_id"), "progress and coins")
-
-  await wipe("user_settings", eq("user_id"), "settings")
-
-  await wipe("user_state", eq("user_id"), "synced app state")
-
-  await wipe("profiles", (q) => q.eq("id", uid), "profile")
-
-  // Storage: every file under this user's folder, in each app bucket.
 
   try {
     for (const bucketName of [
@@ -361,14 +443,23 @@ export async function deleteMyBackendData() {
         }
       }
 
-      if (!failures.some((f) => f.startsWith("storage:")))
+      // Per-bucket failures are labelled "storage (bucket): …" and the
+      // catch-all below "storage: …" — match the shared prefix, not the
+      // exact legacy string, or a bucket failure never suppresses this.
+      if (!failures.some((f) => f.startsWith("storage")))
         deleted.push(`storage files (${bucketName}, ${paths.length})`)
     }
   } catch (err) {
     failures.push(`storage: ${err?.message || "failed"}`)
   }
 
-  return { ok: failures.length === 0, signedIn: true, deleted, failures }
+  return {
+    ok: failures.length === 0,
+    signedIn: true,
+    atomic,
+    deleted,
+    failures,
+  }
 }
 
 export async function reportUser({ reportedUserId, reasons, details }) {
@@ -1621,18 +1712,15 @@ export function subscribeToConversation({
         ) {
           retried = true
 
-          setTimeout(
-            () => {
-              try {
-                supabase.removeChannel(channel)
-              } catch {
-                /* already gone */
-              }
+          setTimeout(() => {
+            try {
+              supabase.removeChannel(channel)
+            } catch {
+              /* already gone */
+            }
 
-              join()
-            },
-            3500,
-          )
+            join()
+          }, 3500)
         }
       })
   }
@@ -2794,7 +2882,6 @@ export async function cloudGetTechniqueUsage() {
   const uses = {}
 
   const minutes = {}
-
   ;(data || []).forEach((r) => {
     uses[r.technique_id] = r.uses || 0
 
@@ -2996,7 +3083,6 @@ export async function cloudListPlaylists() {
   if (e2) return { data: null, error: e2 }
 
   const byList = {}
-
   ;(links || []).forEach((l) => {
     ;(byList[l.playlist_id] = byList[l.playlist_id] || []).push(l.track_id)
   })
@@ -3941,6 +4027,107 @@ export async function markAllNotificationsRead() {
 
 // legacy rows / no extras — never null (column is NOT NULL default '{}').
 
+// Allow-lists mirror community.js (STORY_FONTS / STORY_TEXT_BGS / …) — kept
+
+// local because the server must never import app code.
+
+const META_FONTS = [
+  "modern",
+  "classic",
+  "elegant",
+  "handwritten",
+  "minimal",
+  "bold",
+  "rounded",
+  "serif",
+  "mono",
+  "display",
+]
+
+const META_BGS = [
+  "aurora",
+  "sunset",
+  "ocean",
+  "lilac",
+  "ember",
+  "mint",
+  "dusk",
+  "forest",
+]
+
+const META_SIZES = ["xs", "sm", "md", "lg", "xl"]
+
+const META_ALIGNS = ["left", "center", "right"]
+
+const META_CASES = ["none", "upper", "lower"]
+
+const META_HEX = /^#[0-9a-fA-F]{3,8}$/
+
+function metaNum(v, min, max, dflt) {
+  const n = Number(v)
+
+  return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : dflt
+}
+
+function cleanStoryElement(e) {
+  if (!e || typeof e !== "object") return null
+
+  const m = {
+    id:
+      typeof e.id === "string"
+        ? e.id.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 32)
+        : "",
+
+    text: typeof e.text === "string" ? e.text.slice(0, 500) : "",
+
+    x: metaNum(e.x, 0, 100, 50),
+
+    y: metaNum(e.y, 0, 100, 50),
+
+    rot: metaNum(e.rot, -180, 180, 0),
+
+    scale: metaNum(e.scale, 0.4, 4, 1),
+
+    size: META_SIZES.includes(e.size) ? e.size : "md",
+
+    font: META_FONTS.includes(e.font) ? e.font : "modern",
+
+    color: META_HEX.test(e.color || "") ? e.color : "#ffffff",
+
+    opacity: metaNum(e.opacity, 0, 1, 1),
+
+    bold: e.bold === true,
+
+    italic: e.italic === true,
+
+    underline: e.underline === true,
+
+    strike: e.strike === true,
+
+    align: META_ALIGNS.includes(e.align) ? e.align : "center",
+
+    mode: META_CASES.includes(e.mode) ? e.mode : "none",
+
+    spacing: metaNum(e.spacing, -0.1, 0.8, 0),
+
+    lineHeight: metaNum(e.lineHeight, 0.8, 2.4, 1.25),
+
+    shadow: e.shadow === true,
+
+    stroke: e.stroke === true,
+
+    pill: e.pill === true,
+  }
+
+  if (META_HEX.test(e.highlight || "")) {
+    m.highlight = e.highlight
+
+    m.hlOpacity = metaNum(e.hlOpacity, 0, 1, 0.45)
+  }
+
+  return m
+}
+
 function cleanStoryMeta(meta) {
   if (!meta || typeof meta !== "object") return {}
 
@@ -3952,7 +4139,7 @@ function cleanStoryMeta(meta) {
 
   const bg = meta.bgStyle
 
-  if (typeof bg === "string" && bg.length <= 32) out.bgStyle = bg
+  if (META_BGS.includes(bg)) out.bgStyle = bg
 
   const al = meta.textAlign
 
@@ -3975,6 +4162,14 @@ function cleanStoryMeta(meta) {
   if (Number.isFinite(vv) && vv >= 0 && vv <= 1)
     out.videoVol = Math.round(vv * 100) / 100
 
+  // Arranged text layers (Part 19/23): cap at 8, drop invalid entries.
+
+  if (Array.isArray(meta.elements)) {
+    const els = meta.elements.slice(0, 8).map(cleanStoryElement).filter(Boolean)
+
+    if (els.length) out.elements = els
+  }
+
   const m = meta.music
 
   if (m && typeof m === "object") {
@@ -3993,7 +4188,15 @@ function cleanStoryMeta(meta) {
         end: Math.max(0, Math.min(Number(m.end) || 0, 3600)),
 
         vol: Math.max(0, Math.min(Number(m.vol ?? 0.7), 1)),
+
+        source: m.source === "device" ? "device" : "library",
       }
+
+      // Imported one-time tracks are tagged so deleteCloudStatus can drop
+
+      // their storage object with the row (Part 26).
+
+      if (m.imported === true) out.music.imported = true
     }
   }
 

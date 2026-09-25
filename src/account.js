@@ -11,6 +11,7 @@ import {
   sicon,
   stripIcon,
   haltPersist,
+  resumePersist,
   pushUserSettings,
   persist,
   notify,
@@ -38,7 +39,7 @@ import { pullRewards } from "./services/rewards-sync.js"
 
 import { pullMusic } from "./services/music-sync.js"
 
-import { syncBooksLibrary } from "./books.js"
+import { syncBooksLibrary, clearBookDatabase } from "./books.js"
 
 import {
   signUpWithEmail,
@@ -927,19 +928,20 @@ function wipeData() {
       goBtn.disabled = false
 
       goBtn.textContent = "Delete Everything"
+
+      // Writers were frozen at the start of this attempt — thaw them so the
+      // app keeps saving normally when the user cancels or retries later.
+
+      try {
+        resumePersist()
+      } catch {
+        /* ignore */
+      }
     }
 
-    try {
-      clearInterval(timerHandle)
-    } catch {
-      /* ignore */
-    }
+    // Stop realtime writers BEFORE the server delete so an incoming event
 
-    try {
-      stopAllLayers()
-    } catch {
-      /* ignore */
-    }
+    // cannot re-insert a row while the wipe is running.
 
     try {
       conversationSubscription?.unsubscribe()
@@ -961,29 +963,69 @@ function wipeData() {
 
     // Backend first: auth is still valid, so ownership rules apply.
 
-    // Nothing local is touched until the server confirms deletion.
+    // Nothing local is touched until the server confirms deletion. Since
+
+    // migration 032 this runs as one transactional RPC: on failure the
+
+    // server rolled back and NOTHING was removed.
+
+    let result = null
 
     try {
-      const result = await deleteMyBackendData()
-
-      if (!result.ok) {
-        return fail(
-          `Could not delete everything: ${result.failures.slice(0, 3).join("; ")}. Nothing was removed — please try again.`,
-        )
-      }
+      result = await deleteMyBackendData()
     } catch (e) {
+      result = {
+        ok: false,
+        atomic: false,
+        failures: [e?.message || "network error"],
+      }
+    }
+
+    if (!result.ok) {
+      const shown = result.failures.slice(0, 3).join("; ")
+
+      const storageOnly = result.failures.every((f) => f.startsWith("storage"))
+
+      if (result.atomic && storageOnly)
+        return fail(
+          `Your records were deleted, but some uploaded files could not be removed (${shown}). Please try again to finish cleaning up.`,
+        )
+
+      if (result.atomic)
+        return fail(
+          `Could not delete everything: ${shown}. Nothing was removed — please try again.`,
+        )
+
       return fail(
-        `Deletion failed before anything was removed (${e?.message || "network error"}). Please try again.`,
+        `Could not delete everything: ${shown}. Some data may already be gone — run Delete Everything again to finish.`,
       )
     }
 
-    // Imported songs live in IndexedDB, outside localStorage.
+    // Server confirmed — now halt local activity (the farewell reload is next).
+
+    try {
+      clearInterval(timerHandle)
+    } catch {
+      /* ignore */
+    }
+
+    try {
+      stopAllLayers()
+    } catch {
+      /* ignore */
+    }
+
+    // Imported songs and cached book files live in IndexedDB, outside
+
+    // localStorage.
 
     try {
       await clearSongDatabase()
+
+      await clearBookDatabase()
     } catch (e) {
       return fail(
-        `Could not clear downloaded songs (${e?.message || "storage error"}). Nothing was removed — please try again.`,
+        `Could not clear downloaded media (${e?.message || "storage error"}). Please try again.`,
       )
     }
 
@@ -1008,6 +1050,15 @@ function wipeData() {
     }
 
     try {
+      // Drop stale boot flags (sf-restored / sf-signed-out) so the post-wipe
+      // reload only shows the confirmation notice.
+
+      for (let i = sessionStorage.length - 1; i >= 0; i--) {
+        const k = sessionStorage.key(i)
+
+        if (k && k.startsWith("sf-")) sessionStorage.removeItem(k)
+      }
+
       sessionStorage.setItem("sf-wiped", "1")
     } catch {
       /* ignore */
@@ -1467,9 +1518,7 @@ function bindAccount(root) {
 
   $("[data-profile-modal]", root)?.addEventListener("click", openProfile)
 
-  $$("[data-complete-profile]", root).forEach(
-    (b) => (b.onclick = openProfile),
-  )
+  $$("[data-complete-profile]", root).forEach((b) => (b.onclick = openProfile))
 
   $("[data-export]", root)?.addEventListener("click", exportData)
 
@@ -2268,9 +2317,7 @@ function bindSettings(root) {
 
       persist()
 
-      notify(
-        box.checked ? "Auto-start on — 5s countdown" : "Auto-start off",
-      )
+      notify(box.checked ? "Auto-start on — 5s countdown" : "Auto-start off")
     }),
   )
 

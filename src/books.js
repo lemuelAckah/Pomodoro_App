@@ -375,6 +375,38 @@ async function bookBlobDelete(key) {
   }
 }
 
+// Drops every locally cached book file — used by "delete all my data",
+// mirroring clearSongDatabase() in audio.js.
+export async function clearBookDatabase() {
+  try {
+    const db = await bookDb()
+    if (db) db.close()
+  } catch {
+    /* ignore */
+  }
+  bookDbPromise = null
+  for (const url of bookUrlCache.values()) {
+    try {
+      URL.revokeObjectURL(url)
+    } catch {
+      /* ignore */
+    }
+  }
+  bookUrlCache.clear()
+  if (typeof indexedDB === "undefined") return true
+  await new Promise((res, rej) => {
+    try {
+      const req = indexedDB.deleteDatabase("studyflow-books")
+      req.onsuccess = () => res(true)
+      req.onerror = () => rej(req.error)
+      req.onblocked = () => res(true)
+    } catch (e) {
+      rej(e)
+    }
+  })
+  return true
+}
+
 const bookUrlCache = new Map()
 function bookObjectUrl(id, blob) {
   let url = bookUrlCache.get(id)

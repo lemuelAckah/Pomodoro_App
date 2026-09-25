@@ -103,7 +103,7 @@ import {
   IMAGE_FORMAT_ERROR,
 } from "./services/backend.js"
 
-import { playChime, songBlobGet } from "./audio.js"
+import { playChime, songBlobGet, validateAudioFile } from "./audio.js"
 
 import { matchTech } from "./techniques.js"
 
@@ -1141,16 +1141,13 @@ function startRingChime() {
     /* silent */
   }
 
-  ringChimeT = setInterval(
-    () => {
-      try {
-        playChime("focus")
-      } catch {
-        /* silent */
-      }
-    },
-    2200,
-  )
+  ringChimeT = setInterval(() => {
+    try {
+      playChime("focus")
+    } catch {
+      /* silent */
+    }
+  }, 2200)
 }
 
 function stopRingChime() {
@@ -1243,28 +1240,24 @@ function updateOngoingCallPill() {
 function startRingPoll() {
   if (ringPollT) return
 
-  ringPollT = setInterval(
-    async () => {
-      if (!backendConfigured || !state.user) return
+  ringPollT = setInterval(async () => {
+    if (!backendConfigured || !state.user) return
 
-      if (state.call || pendingIncomingCall || navigator.onLine === false)
-        return
+    if (state.call || pendingIncomingCall || navigator.onLine === false) return
 
-      try {
-        const { data } = await listMyRingingCalls(state.user.id)
+    try {
+      const { data } = await listMyRingingCalls(state.user.id)
 
-        const row = (data || []).find(
-          (r) =>
-            r?.id && r.status === "ringing" && r.initiator_id !== state.user.id,
-        )
+      const row = (data || []).find(
+        (r) =>
+          r?.id && r.status === "ringing" && r.initiator_id !== state.user.id,
+      )
 
-        if (row) showIncomingCall(row)
-      } catch {
-        /* next tick */
-      }
-    },
-    4500,
-  )
+      if (row) showIncomingCall(row)
+    } catch {
+      /* next tick */
+    }
+  }, 4500)
 }
 
 function callRoomSignalingId(roomId, a, b) {
@@ -2399,43 +2392,40 @@ function ensureActiveVoice() {
 
     id: null,
 
-    raf: setInterval(
-      () => {
-        if (!activeVoice || audio !== activeVoice.audio) return
+    raf: setInterval(() => {
+      if (!activeVoice || audio !== activeVoice.audio) return
 
-        if (audio.paused && !audio.ended) return
+      if (audio.paused && !audio.ended) return
 
-        const widget = liveWidget(activeVoice.id)
+      const widget = liveWidget(activeVoice.id)
 
-        const dur = Number(widget?.dataset.dur) || audio.duration || 1
+      const dur = Number(widget?.dataset.dur) || audio.duration || 1
 
-        if (
-          audio.ended ||
-          (!audio.paused && dur > 0 && audio.currentTime >= dur - 0.05)
-        ) {
-          audio.pause()
+      if (
+        audio.ended ||
+        (!audio.paused && dur > 0 && audio.currentTime >= dur - 0.05)
+      ) {
+        audio.pause()
 
-          try {
-            audio.currentTime = 0
-          } catch {
-            /* ignore */
-          }
-
-          paintVoice(activeVoice.id, 0)
-
-          widget?.classList.remove("playing")
-
-          clearInterval(activeVoice.raf)
-
-          activeVoice = null
-
-          return
+        try {
+          audio.currentTime = 0
+        } catch {
+          /* ignore */
         }
 
-        paintVoice(activeVoice.id, Math.min(1, audio.currentTime / dur))
-      },
-      80,
-    ),
+        paintVoice(activeVoice.id, 0)
+
+        widget?.classList.remove("playing")
+
+        clearInterval(activeVoice.raf)
+
+        activeVoice = null
+
+        return
+      }
+
+      paintVoice(activeVoice.id, Math.min(1, audio.currentTime / dur))
+    }, 80),
   }
 
   return activeVoice
@@ -2556,7 +2546,6 @@ function weekMinutes(wk) {
 
 function progressChallenges(focusedMin) {
   const wk = weekKey(new Date())
-
   ;(state.challenges || []).forEach((c) => {
     sanitizeChallenge(c)
 
@@ -2881,7 +2870,6 @@ function mateChallengeSession(c, announce) {
         sessions: 0,
         minutes: 0,
       }
-
       ;(c.members = c.members || []).push(who)
     }
   }
@@ -3013,7 +3001,6 @@ function ensureSprintTicker() {
       const now = Date.now()
 
       let changed = false
-
       ;(state.sprints || []).forEach((sp) => {
         sanitizeSprint(sp)
 
@@ -3125,7 +3112,6 @@ function ensureSprintTicker() {
       const wk = weekKey(new Date())
 
       let raceNews = false
-
       ;(state.challenges || []).forEach((c) => {
         if (c.weekKey !== wk || c.done || !c.joined) return
 
@@ -3137,7 +3123,6 @@ function ensureSprintTicker() {
       })
 
       // Session invites get answered while you watch.
-
       ;(state.events || []).forEach((e) => {
         if (
           !e ||
@@ -3429,15 +3414,25 @@ function renderCommunity() {
 
             const keepVis = storyEditor.vis
 
-            const keepCaption = storyEditor.caption
+            // Keep the text layers (offline restore path) and visibility,
+
+            // but drop media and music — device music loses its object URL
+
+            // here (Part 26: leaving the editor cleans up transient files).
+
+            const keepEls = storyEditor.elements || []
+
+            clearStoryMusicDevice(storyEditor.music)
+
+            clearStoryEditorMedia()
 
             storyEditor = freshStoryEditor()
 
             storyEditor.vis = keepVis
 
-            storyEditor.caption = keepCaption
+            storyEditor.elements = keepEls
 
-            clearStoryEditorMedia()
+            storyEditor.selectedId = keepEls[0]?.id || null
           }
         }
 
@@ -6347,23 +6342,119 @@ function clearCloudStoryPhoto() {
   cloudStoryPhoto = null
 }
 
-// --- Multi-step story editor (Choose → Customize → Preview → Post) --------------
+// --- Status editor (Type → Edit, live preview) ---------------------------------
 
 // Module-level draft; survives in-page re-renders, cleared on post/cancel.
 
-// Only the plain text field mirrors into state.storyDraft for offline restore.
+// Text lives in storyEditor.elements; the first non-empty layer mirrors into
 
-const STORY_TEXT_BGS = ["aurora", "sunset", "ocean", "lilac", "ember", "mint"]
+// state.storyDraft for offline restore (postCloudStory).
 
-const STORY_CAP_POS = ["bottom", "center", "top"]
+const STORY_TEXT_BGS = [
+  "aurora",
 
-const STORY_TEXT_SIZE = ["sm", "md", "lg"]
+  "sunset",
 
-const STORY_TEXT_STYLE = ["plain", "shadow", "stroke"]
+  "ocean",
+
+  "lilac",
+
+  "ember",
+
+  "mint",
+
+  "dusk",
+
+  "forest",
+]
 
 const STORY_MUSIC_CLIP_MIN = 5
 
 const STORY_MUSIC_CLIP_MAX = 30
+
+// Font stacks — system-installed faces only (no webfont downloads). Keys are
+
+// persisted in meta.elements[].font, so the list is append-only.
+
+const STORY_FONTS = {
+  modern: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+
+  classic: "Georgia, Times New Roman, serif",
+
+  elegant: "Palatino Linotype, Book Antiqua, Palatino, serif",
+
+  handwritten: "Segoe Script, Bradley Hand, Comic Sans MS, cursive",
+
+  minimal: "Helvetica Neue, Arial, sans-serif",
+
+  bold: "Arial Black, Segoe UI, system-ui, sans-serif",
+
+  rounded: "Trebuchet MS, Segoe UI, ui-rounded, sans-serif",
+
+  serif: "Georgia, Times New Roman, serif",
+
+  mono: "ui-monospace, Cascadia Code, Consolas, monospace",
+
+  display: "Impact, Arial Black, sans-serif",
+}
+
+const STORY_FONT_KEYS = Object.keys(STORY_FONTS)
+
+const STORY_SIZES = ["xs", "sm", "md", "lg", "xl"]
+
+const STORY_SIZE_PX = { xs: 14, sm: 17, md: 21, lg: 27, xl: 34 }
+
+const STORY_ALIGNS = ["left", "center", "right"]
+
+const STORY_CASES = ["none", "upper", "lower"]
+
+// Tasteful text-colour presets (Part 16) — the picker still allows any colour.
+
+const STORY_TEXT_COLORS = [
+  "#ffffff",
+
+  "#17221d",
+
+  "#e9ae3f",
+
+  "#e8795b",
+
+  "#47765a",
+
+  "#b8d77c",
+
+  "#7cc4e8",
+
+  "#c792ea",
+]
+
+const STORY_HL_COLORS = [
+  "#e9ae3f",
+
+  "#e8795b",
+
+  "#47765a",
+
+  "#7cc4e8",
+
+  "#c792ea",
+
+  "#ffffff",
+
+  "#17221d",
+
+  "transparent",
+]
+
+// Safe area (Part 12): element centres are clamped to these percentages of
+
+// the canvas so a caption can never be dragged fully out of view — leaves
+
+// head-room for story chrome (top bar) and bottom controls.
+
+const STORY_SAFE = { x: [8, 92], y: [6, 94] }
+
+const STORY_ELEMENT_MAX = 8
 
 let storyEditor = freshStoryEditor()
 
@@ -6375,9 +6466,13 @@ let storyPreviewAudio = null
 
 const storyMusicPathCache = new Map()
 
+// Monotonic counter + suffix for element ids (unique within the draft).
+
+let storyElSeq = 0
+
 function freshStoryEditor() {
   return {
-    step: "choose", // choose | customize | preview
+    step: "choose", // choose | edit
 
     kind: null, // "photo" | "video" | "text"
 
@@ -6385,23 +6480,31 @@ function freshStoryEditor() {
 
     fileUrl: null,
 
-    caption: "",
+    // Text layers (Part 19): the first non-empty one mirrors into the row's
 
-    captionPos: "bottom",
+    // `text` column; all of them persist in meta.elements (Part 23 parity —
 
-    bgStyle: "aurora",
+    // the viewer renders the very same markup).
 
-    textAlign: "center",
+    elements: [],
 
-    textSize: "md",
+    selectedId: null,
 
-    textStyle: "plain",
+    bgStyle: "aurora", // text-status background preset
 
-    emoji: "",
+    // { source: "library"|"device", songId?, file?, fileUrl?, fingerprint?,
 
-    music: null, // { songId, title, artist, start, end, vol, duration }
+    //   title, artist, start, end, vol, duration, path?, imported? }
+
+    music: null,
+
+    videoVol: 1, // original video audio 0..1 (Part 10)
 
     vis: "connections",
+
+    undo: [],
+
+    redo: [],
 
     busy: false,
 
@@ -6409,6 +6512,163 @@ function freshStoryEditor() {
 
     error: "",
   }
+}
+
+// One movable/editable text layer (Parts 15–19). Defaults position media
+
+// captions near the bottom and text-status bodies in the centre.
+
+function storyElement(text = "") {
+  storyElSeq += 1
+
+  return {
+    id: `t${storyElSeq}${Math.random().toString(36).slice(2, 6)}`,
+
+    text,
+
+    x: 50,
+
+    y: storyEditor.kind === "text" ? 50 : 80,
+
+    rot: 0,
+
+    scale: 1,
+
+    size: "md",
+
+    font: "modern",
+
+    color: "#ffffff",
+
+    highlight: "",
+
+    hlOpacity: 0.45,
+
+    opacity: 1,
+
+    bold: false,
+
+    italic: false,
+
+    underline: false,
+
+    strike: false,
+
+    align: "center",
+
+    mode: "none",
+
+    spacing: 0,
+
+    lineHeight: 1.25,
+
+    shadow: true,
+
+    stroke: false,
+
+    pill: false,
+  }
+}
+
+function storySelectedElement() {
+  return (
+    storyEditor.elements.find((e) => e.id === storyEditor.selectedId) || null
+  )
+}
+
+function clampNum(v, min, max, dflt) {
+  const n = Number(v)
+
+  if (!Number.isFinite(n)) return dflt
+
+  return Math.max(min, Math.min(max, n))
+}
+
+// #rgb/#rrggbb → rgba() so the per-layer highlight opacity is usable with
+
+// hex swatches (background-opacity isn't a real CSS property).
+
+function hexToRgba(hex, a) {
+  let h = String(hex || "").replace("#", "")
+
+  if (h.length === 3)
+    h = h
+
+      .split("")
+
+      .map((c) => c + c)
+
+      .join("")
+
+  if (!/^[0-9a-f]{6}$/i.test(h)) return hex
+
+  const n = parseInt(h, 16)
+
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${clampNum(a, 0, 1, 1)})`
+}
+
+// Undo/redo snapshots cover the mutable canvas state (Parts 17). Text typing
+
+// uses a short debounce so a burst of keystrokes is one undo step.
+
+let storyUndoAt = 0
+
+function storySnapshot() {
+  return JSON.stringify({
+    elements: storyEditor.elements,
+
+    selectedId: storyEditor.selectedId,
+
+    bgStyle: storyEditor.bgStyle,
+
+    videoVol: storyEditor.videoVol,
+  })
+}
+
+function pushStoryUndo(force = false) {
+  const now = Date.now()
+
+  if (!force && now - storyUndoAt < 700) return
+
+  storyUndoAt = now
+
+  storyEditor.undo.push(storySnapshot())
+
+  if (storyEditor.undo.length > 40) storyEditor.undo.shift()
+
+  storyEditor.redo.length = 0
+}
+
+function applyStorySnapshot(raw) {
+  try {
+    const snap = JSON.parse(raw)
+
+    storyEditor.elements = Array.isArray(snap.elements) ? snap.elements : []
+
+    storyEditor.selectedId = snap.selectedId || null
+
+    storyEditor.bgStyle = snap.bgStyle || "aurora"
+
+    storyEditor.videoVol = clampNum(snap.videoVol, 0, 1, 1)
+  } catch {
+    /* ignore malformed snapshot */
+  }
+}
+
+function storyUndo() {
+  if (!storyEditor.undo.length) return
+
+  storyEditor.redo.push(storySnapshot())
+
+  applyStorySnapshot(storyEditor.undo.pop())
+}
+
+function storyRedo() {
+  if (!storyEditor.redo.length) return
+
+  storyEditor.undo.push(storySnapshot())
+
+  applyStorySnapshot(storyEditor.redo.pop())
 }
 
 function stopStoryPreviewAudio() {
@@ -6441,28 +6701,41 @@ function clearStoryEditorMedia() {
   storyEditor.fileUrl = null
 }
 
-function resetStoryEditor(keepKind = false) {
+// Device-imported music (Part 6): the file never enters Sound Studio — its
+
+// object URL lives only on this draft and is revoked whenever it is replaced,
+
+// cleared, cancelled, or the draft resets (Parts 24/26).
+
+function clearStoryMusicDevice(music = storyEditor.music) {
+  if (music?.source === "device" && music.fileUrl) {
+    try {
+      URL.revokeObjectURL(music.fileUrl)
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+function resetStoryEditor() {
   stopStoryPreviewAudio()
 
   clearStoryEditorMedia()
+
+  clearStoryMusicDevice()
 
   const vis = storyEditor.vis
 
   storyEditor = freshStoryEditor()
 
   storyEditor.vis = vis
-
-  if (keepKind && storyEditor.kind) {
-    /* kind cleared with fresh state */
-  }
 }
 
 function storyEditorHasContent() {
   return Boolean(
     storyEditor.file ||
-      (storyEditor.caption && storyEditor.caption.trim()) ||
-      storyEditor.music ||
-      storyEditor.emoji,
+      storyEditor.elements.some((e) => (e.text || "").trim()) ||
+      storyEditor.music,
   )
 }
 
@@ -6476,6 +6749,65 @@ async function storyMusicObjectUrl(songId) {
   return URL.createObjectURL(blob)
 }
 
+// Serialise one text layer into its meta.elements[] shape — numbers clamped,
+
+// enums checked, unknown fields dropped (the server re-validates in
+
+// cleanStoryMeta, but keep the payload tight).
+
+function storyElementForMeta(e) {
+  const m = {
+    id: String(e.id || "").slice(0, 32),
+
+    text: String(e.text || "").slice(0, 500),
+
+    x: clampNum(e.x, 0, 100, 50),
+
+    y: clampNum(e.y, 0, 100, 50),
+
+    rot: clampNum(e.rot, -180, 180, 0),
+
+    scale: clampNum(e.scale, 0.4, 4, 1),
+
+    size: STORY_SIZES.includes(e.size) ? e.size : "md",
+
+    font: STORY_FONT_KEYS.includes(e.font) ? e.font : "modern",
+
+    color: /^#[0-9a-f]{3,8}$/i.test(e.color || "") ? e.color : "#ffffff",
+
+    opacity: clampNum(e.opacity, 0, 1, 1),
+
+    bold: !!e.bold,
+
+    italic: !!e.italic,
+
+    underline: !!e.underline,
+
+    strike: !!e.strike,
+
+    align: STORY_ALIGNS.includes(e.align) ? e.align : "center",
+
+    mode: STORY_CASES.includes(e.mode) ? e.mode : "none",
+
+    spacing: clampNum(e.spacing, -0.1, 0.8, 0),
+
+    lineHeight: clampNum(e.lineHeight, 0.8, 2.4, 1.25),
+
+    shadow: !!e.shadow,
+
+    stroke: !!e.stroke,
+
+    pill: !!e.pill,
+  }
+
+  if (e.highlight && /^#[0-9a-f]{3,8}$/i.test(e.highlight))
+    m.highlight = e.highlight
+
+  if (e.highlight) m.hlOpacity = clampNum(e.hlOpacity, 0, 1, 0.45)
+
+  return m
+}
+
 // Build the meta payload stored on the story row (031). Empty {} when the
 
 // editor has no extras — matches legacy rows.
@@ -6483,40 +6815,39 @@ async function storyMusicObjectUrl(songId) {
 function buildStoryMeta(ed) {
   const meta = {}
 
-  if (ed.kind === "photo" || ed.kind === "video") {
-    // Always record the chosen position so viewers don't fall back to
+  const els = (ed.elements || [])
 
-    // bottom after a reload (empty caption still stores nothing extra).
+    .filter((e) => (e.text || "").trim())
 
-    if (ed.captionPos) meta.captionPos = ed.captionPos
-  }
+    .map(storyElementForMeta)
 
-  if (ed.kind === "text") {
-    if (ed.bgStyle) meta.bgStyle = ed.bgStyle
+  if (els.length) meta.elements = els
 
-    if (ed.textAlign) meta.textAlign = ed.textAlign
+  if (ed.kind === "text") meta.bgStyle = ed.bgStyle || "aurora"
 
-    if (ed.textSize) meta.textSize = ed.textSize
+  if (ed.kind === "video" && Number(ed.videoVol) !== 1)
+    meta.videoVol = clampNum(ed.videoVol, 0, 1, 1)
 
-    if (ed.textStyle) meta.textStyle = ed.textStyle
+  if (ed.music) {
+    const mm = {
+      title: String(ed.music.title || "").slice(0, 160),
 
-    if (ed.emoji) meta.emoji = ed.emoji
-  }
+      artist: String(ed.music.artist || "").slice(0, 160),
 
-  if (ed.music?.path) {
-    meta.music = {
-      path: ed.music.path,
+      start: clampNum(ed.music.start, 0, 3600, 0),
 
-      title: ed.music.title || "",
+      end: clampNum(ed.music.end, 0, 3600, 0),
 
-      artist: ed.music.artist || "",
+      vol: clampNum(ed.music.vol, 0, 1, 0.7),
 
-      start: Math.max(0, Number(ed.music.start) || 0),
-
-      end: Math.max(0, Number(ed.music.end) || 0),
-
-      vol: Math.max(0, Math.min(Number(ed.music.vol ?? 0.7), 1)),
+      source: ed.music.source === "device" ? "device" : "library",
     }
+
+    if (ed.music.imported) mm.imported = true
+
+    if (ed.music.path) mm.path = String(ed.music.path).slice(0, 500)
+
+    meta.music = mm
   }
 
   return meta
@@ -6631,15 +6962,19 @@ function storyTextBgClass(s) {
 }
 
 function storyTextSizeClass(s) {
+  // Legacy rows (v1 editor) only ever stored sm/md/lg — the new editor uses
+
+  // meta.elements size keys instead, so keep the old allow-list local.
+
   const sz = s?.meta?.textSize || s?.textSize || "md"
 
-  return STORY_TEXT_SIZE.includes(sz) ? sz : "md"
+  return ["sm", "md", "lg"].includes(sz) ? sz : "md"
 }
 
 function storyTextStyleClass(s) {
   const st = s?.meta?.textStyle || s?.textStyle || "plain"
 
-  return STORY_TEXT_STYLE.includes(st) ? st : "plain"
+  return ["plain", "shadow", "stroke"].includes(st) ? st : "plain"
 }
 
 function storyTextAlignStyle(s) {
@@ -6669,8 +7004,20 @@ async function postCloudStory({
 } = {}) {
   const ed = editor || storyEditor
 
-  const clean = String(text ?? ed.caption ?? "")
+  // The row's text column mirrors the first non-empty text element (Part 23).
+
+  const clean = String(
+    text ??
+      (ed.elements || [])
+
+        .map((e) => e.text || "")
+
+        .find((t) => t.trim()) ??
+      "",
+  )
+
     .trim()
+
     .slice(0, 500)
 
   const visibility = ["public", "connections", "private"].includes(vis)
@@ -6760,6 +7107,14 @@ async function postCloudStory({
 
     let kindOut = "text"
 
+    // Music uploaded during THIS attempt (cleared on row failure so no
+
+    // orphan object outlives a failed post — Part 26).
+
+    let uploadedMusicPath = null
+
+    let uploadedMusicKey = null
+
     if (file) {
       const isVideo =
         mediaKind === "video" || String(file.type || "").startsWith("video/")
@@ -6810,41 +7165,70 @@ async function postCloudStory({
       traceLog("storage-ok", { mediaPath })
     }
 
-    // Attached music: upload library bytes once per songId (stable path),
+    // Attached music: library tracks upload once per songId (stable path,
 
-    // then stamp the path onto meta.music for the row.
+    // cached for the session); device imports (Part 6) upload once per
 
-    if (ed.music?.songId) {
+    // fingerprint under a unique `imp_` path — they are transient and never
+
+    // enter the Sound Studio library. Both stamp the path onto meta.music.
+
+    if (ed.music && (ed.music.songId || ed.music.source === "device")) {
       ed.busyLabel = "Attaching music…"
 
+      const cacheKey =
+        ed.music.source === "device"
+          ? `dev:${ed.music.fingerprint || ""}`
+          : ed.music.songId
+
       const cachedPath =
-        storyMusicPathCache.get(ed.music.songId) ||
-        storyEditor.music?.path ||
+        (cacheKey ? storyMusicPathCache.get(cacheKey) : null) ||
+        ed.music.path ||
         null
 
       let musicPath = cachedPath
 
       if (!musicPath) {
-        const blob = await songBlobGet(ed.music.songId)
+        let blob = null
+
+        if (ed.music.source === "device") {
+          blob = ed.music.file || null
+        } else {
+          blob = await songBlobGet(ed.music.songId)
+        }
 
         if (!blob)
           throw new Error(
-            "That track's audio isn't available on this device — re-import it in Sound studio",
+            ed.music.source === "device"
+              ? "That imported track is no longer on this device — pick it again"
+              : "That track's audio isn't available on this device — re-import it in Sound studio",
           )
+
+        const musicId =
+          ed.music.source === "device"
+            ? `imp_${ed.music.fingerprint || crypto.randomUUID?.() || Date.now()}`
+            : ed.music.songId
 
         const { data: mup, error: merr } = await uploadStoryMusic(
           blob,
-          ed.music.songId,
+
+          musicId,
         )
 
         if (merr) throw merr
 
         musicPath = mup.path
 
-        storyMusicPathCache.set(ed.music.songId, musicPath)
+        if (cacheKey) storyMusicPathCache.set(cacheKey, musicPath)
+
+        uploadedMusicPath = musicPath
+
+        uploadedMusicKey = cacheKey
       }
 
       storyMeta.music = {
+        ...(storyMeta.music || {}),
+
         path: musicPath,
 
         title: ed.music.title || "",
@@ -6856,9 +7240,13 @@ async function postCloudStory({
         end: Math.max(0, Number(ed.music.end) || 0),
 
         vol: Math.max(0, Math.min(Number(ed.music.vol ?? 0.7), 1)),
+
+        source: ed.music.source === "device" ? "device" : "library",
       }
 
-      traceLog("music-ok", { musicPath })
+      if (ed.music.imported) storyMeta.music.imported = true
+
+      traceLog("music-ok", { musicPath, source: storyMeta.music.source })
     }
 
     ed.busyLabel = "Sharing…"
@@ -6874,12 +7262,26 @@ async function postCloudStory({
     if (error) {
       if (mediaPath) await deleteStoryMedia(mediaPath).catch(() => {})
 
+      // Music uploaded in this attempt must not survive a failed row —
+
+      // drop the object and its session cache entry (Part 26).
+
+      if (uploadedMusicPath) {
+        await deleteStoryMedia(uploadedMusicPath).catch(() => {})
+
+        if (uploadedMusicKey) storyMusicPathCache.delete(uploadedMusicKey)
+      }
+
       throw error
     }
 
     traceLog("story-result", { ok: true, storyId: row?.id ?? null })
 
     clearStoryEditorMedia()
+
+    // Device-imported music object URL: the row now owns the storage copy.
+
+    clearStoryMusicDevice(ed.music)
 
     stopStoryPreviewAudio()
 
@@ -7240,24 +7642,356 @@ function renderStatus(body) {
 // --- Story composer: Choose → Customize → Preview → Post ------------------------
 
 function storyStepDots(step) {
-  const steps = ["choose", "customize", "preview"]
+  const steps = ["choose", "edit"]
 
   const labels = {
-    choose: "Choose",
-    customize: "Customize",
-    preview: "Preview",
+    choose: "Type",
+
+    edit: "Edit",
   }
 
   const idx = Math.max(0, steps.indexOf(step))
 
   return `<div class="st-steps" aria-label="Status editor progress">${steps
+
     .map(
       (s, i) => `
     <span class="st-step${i === idx ? " on" : i < idx ? " done" : ""}"><i>${
       i < idx ? "✓" : i + 1
     }</i>${labels[s]}</span>`,
     )
+
     .join('<b class="st-step-line"></b>')}</div>`
+}
+
+// Inline style for one text layer — used by BOTH the editor canvas and the
+
+// cloud viewer (Part 23: what you arrange is exactly what viewers see).
+
+function storyElInline(e) {
+  const px = STORY_SIZE_PX[e.size] || 21
+
+  const parts = [
+    `left:${clampNum(e.x, 0, 100, 50)}%`,
+
+    `top:${clampNum(e.y, 0, 100, 50)}%`,
+
+    `transform:translate(-50%,-50%) rotate(${clampNum(e.rot, -180, 180, 0)}deg) scale(${clampNum(e.scale, 0.4, 4, 1)})`,
+
+    `font-family:${STORY_FONTS[e.font] || STORY_FONTS.modern}`,
+
+    `font-size:${px}px`,
+
+    `color:${/^#[0-9a-f]{3,8}$/i.test(e.color || "") ? e.color : "#ffffff"}`,
+
+    `text-align:${STORY_ALIGNS.includes(e.align) ? e.align : "center"}`,
+
+    `letter-spacing:${clampNum(e.spacing, -0.1, 0.8, 0)}em`,
+
+    `line-height:${clampNum(e.lineHeight, 0.8, 2.4, 1.25)}`,
+
+    `opacity:${clampNum(e.opacity, 0, 1, 1)}`,
+  ]
+
+  if (e.bold) parts.push("font-weight:700")
+
+  if (e.italic) parts.push("font-style:italic")
+
+  const dec = []
+
+  if (e.underline) dec.push("underline")
+
+  if (e.strike) dec.push("line-through")
+
+  if (dec.length) parts.push(`text-decoration:${dec.join(" ")}`)
+
+  if (e.mode === "upper") parts.push("text-transform:uppercase")
+
+  if (e.mode === "lower") parts.push("text-transform:lowercase")
+
+  if (e.shadow && !e.stroke)
+    parts.push(
+      "text-shadow:0 2px 10px rgba(0,0,0,.45),0 1px 2px rgba(0,0,0,.4)",
+    )
+
+  if (e.stroke)
+    parts.push("-webkit-text-stroke:1px rgba(0,0,0,.55)", "paint-order:stroke")
+
+  const hl =
+    e.highlight &&
+    e.highlight !== "transparent" &&
+    /^#[0-9a-f]{3,8}$/i.test(e.highlight)
+      ? e.highlight
+      : ""
+
+  if (hl)
+    parts.push(
+      `background:${hexToRgba(hl, clampNum(e.hlOpacity, 0, 1, 0.45))}`,
+
+      "padding:.1em .38em",
+
+      `border-radius:${e.pill ? "999px" : "6px"}`,
+    )
+  else if (e.pill)
+    parts.push(
+      "background:rgba(255,255,255,.16)",
+
+      "padding:.1em .38em",
+
+      "border-radius:999px",
+    )
+
+  return parts.join(";")
+}
+
+// One layer as markup. In the editor (handles=true) every layer carries
+
+// resize/rotate handles — CSS shows them only on the selected layer, so
+
+// selection can toggle without re-rendering the canvas mid-drag.
+
+function storyElMarkup(e, handles = false) {
+  const sel = handles && storyEditor.selectedId === e.id
+
+  const h = handles
+    ? `<i class="st-el-h st-el-rot" data-el-rot="${e.id}" aria-hidden="true"></i><i class="st-el-h st-el-scale" data-el-scale="${e.id}" aria-hidden="true"></i>`
+    : ""
+
+  const raw = String(e.text || "")
+
+  const body = raw
+    ? esc(raw)
+    : handles
+      ? '<span class="st-el-ghost">Type…</span>'
+      : "&nbsp;"
+
+  return `<span class="st-el${
+    sel ? " sel" : ""
+  }" data-el-id="${e.id}" style="${storyElInline(e)}">${body}${h}</span>`
+}
+
+function storyElementsMarkup(ed, handles = false) {
+  return (ed.elements || []).map((e) => storyElMarkup(e, handles)).join("")
+}
+
+// The live canvas: text card / photo / video with the text layers on top.
+
+// interactive=true renders selection handles and omits native video controls
+
+// (the viewer passes false — pure display).
+
+function storyCanvasMarkup(interactive = false) {
+  const ed = storyEditor
+
+  const layers = storyElementsMarkup(ed, interactive)
+
+  if (ed.kind === "text") {
+    return `<div class="sv-text-card st-bg-${ed.bgStyle || "aurora"} st-el-canvas">${layers}<div class="sv-card-foot"><strong>You</strong><small>now</small></div></div>`
+  }
+
+  if (ed.kind === "video" && ed.fileUrl) {
+    return `<div class="sv-photo-wrap sv-video-wrap st-el-canvas">${layers}<video class="sv-photo sv-video" src="${esc(ed.fileUrl)}" playsinline ${
+      interactive ? "controls" : "controls muted"
+    } data-st-canvas-video aria-label="Video preview"></video></div>`
+  }
+
+  if (ed.kind === "photo" && ed.fileUrl) {
+    return `<div class="sv-photo-wrap st-el-canvas">${layers}<img class="sv-photo" src="${esc(ed.fileUrl)}" alt="Status preview"></div>`
+  }
+
+  // No media yet: pick target inside the canvas (media kinds only).
+
+  const isVideo = ed.kind === "video"
+
+  return `<div class="st-canvas-empty"><button type="button" class="st-media-drop" data-st-pick aria-label="Choose a ${
+    isVideo ? "video" : "photo"
+  }"><span>${sicon(isVideo ? "film" : "camera")}</span><strong>${
+    isVideo ? "Choose a video" : "Choose a photo"
+  }</strong><small>${
+    isVideo
+      ? "MP4, WebM or MOV · max 50 MB"
+      : "JPEG, PNG, WebP or GIF · max 50 MB"
+  }</small></button></div>`
+}
+
+// Tool column: layer manager, formatting toolbar for the selected layer,
+
+// background/volume extras, music row, and the sticky post bar.
+
+function storyToolsMarkup() {
+  const ed = storyEditor
+
+  const draft = state.storyDraft
+
+  const sel = storySelectedElement()
+
+  const parts = []
+
+  // --- layer manager ---
+
+  const layers = ed.elements || []
+
+  parts.push(`<div class="st-tools-row st-tools-head">
+    <button type="button" class="ghost" data-st-el-add${
+      ed.busy || layers.length >= STORY_ELEMENT_MAX ? " disabled" : ""
+    } title="Add a text layer">${sicon("chat")} Add text</button>
+    <span class="st-tools-spacer"></span>
+    <button type="button" class="ghost" data-st-undo aria-label="Undo" title="Undo">↶</button>
+    <button type="button" class="ghost" data-st-redo aria-label="Redo" title="Redo">↷</button>
+  </div>`)
+
+  if (layers.length > 1) {
+    parts.push(
+      `<ul class="st-layers" aria-label="Text layers">${layers
+
+        .map(
+          (e, i) => `<li class="${e.id === ed.selectedId ? "on" : ""}">
+          <button type="button" class="st-layer-pick" data-st-el-pick="${e.id}" title="Select layer">${esc((e.text || "Empty").slice(0, 42))}</button>
+          <span class="st-layer-acts">
+            <button type="button" class="ghost" data-st-el-up="${e.id}" ${
+              i === 0 ? "disabled" : ""
+            } aria-label="Move layer up" title="Bring forward">↑</button>
+            <button type="button" class="ghost" data-st-el-down="${e.id}" ${
+              i === layers.length - 1 ? "disabled" : ""
+            } aria-label="Move layer down" title="Send backward">↓</button>
+            <button type="button" class="ghost" data-st-el-del="${e.id}" aria-label="Delete layer" title="Delete">${sicon("trash")}</button>
+          </span>
+        </li>`,
+        )
+
+        .join("")}</ul>`,
+    )
+  }
+
+  // --- selected layer editor ---
+
+  if (sel) {
+    const fonts = STORY_FONT_KEYS.map(
+      (k) =>
+        `<option value="${k}"${
+          sel.font === k ? " selected" : ""
+        } style="font-family:${STORY_FONTS[k]}">${k[0].toUpperCase() + k.slice(1)}</option>`,
+    ).join("")
+
+    parts.push(`<div class="st-tools-sec" aria-label="Selected text layer">
+      <label class="field-label" for="st-el-text">Text <small class="muted">(${(sel.text || "").length}/500)</small></label>
+      <textarea class="textarea" id="st-el-text" rows="2" maxlength="500" placeholder="Type your caption…" aria-label="Layer text"${
+        ed.busy ? " disabled" : ""
+      }>${esc(sel.text || "")}</textarea>
+      <div class="st-tools-row">
+        <select class="select" id="st-el-font" aria-label="Font family">${fonts}</select>
+        <span class="st-style-group" role="group" aria-label="Text size">${STORY_SIZES.map((z) => `<button type="button" class="ghost st-chip${sel.size === z ? " on" : ""}" data-st-el-size="${z}" aria-pressed="${sel.size === z}" title="Size ${z}">${z.toUpperCase()}</button>`).join("")}</span>
+      </div>
+      <div class="st-tools-row">
+        <span class="st-style-group" role="group" aria-label="Alignment">${STORY_ALIGNS.map((a) => `<button type="button" class="ghost st-chip${sel.align === a ? " on" : ""}" data-st-el-align="${a}" aria-pressed="${sel.align === a}" title="Align ${a}">${a === "left" ? "⇤" : a === "center" ? "⇔" : "⇥"}</button>`).join("")}</span>
+        <span class="st-style-group" role="group" aria-label="Letter case">${STORY_CASES.map((c) => `<button type="button" class="ghost st-chip${sel.mode === c ? " on" : ""}" data-st-el-case="${c}" aria-pressed="${sel.mode === c}" title="${c === "none" ? "Original case" : c === "upper" ? "UPPERCASE" : "lowercase"}">${c === "none" ? "Aa" : c === "upper" ? "AA" : "aa"}</button>`).join("")}</span>
+      </div>
+      <div class="st-tools-row">
+        <span class="st-style-group" role="group" aria-label="Text style">
+          <button type="button" class="ghost st-chip${
+            sel.bold ? " on" : ""
+          }" data-st-el-toggle="bold" aria-pressed="${!!sel.bold}" title="Bold"><b>B</b></button>
+          <button type="button" class="ghost st-chip${
+            sel.italic ? " on" : ""
+          }" data-st-el-toggle="italic" aria-pressed="${!!sel.italic}" title="Italic"><i>I</i></button>
+          <button type="button" class="ghost st-chip${
+            sel.underline ? " on" : ""
+          }" data-st-el-toggle="underline" aria-pressed="${!!sel.underline}" title="Underline"><u>U</u></button>
+          <button type="button" class="ghost st-chip${
+            sel.strike ? " on" : ""
+          }" data-st-el-toggle="strike" aria-pressed="${!!sel.strike}" title="Strikethrough"><s>S</s></button>
+        </span>
+        <span class="st-style-group" role="group" aria-label="Layer effects">
+          <button type="button" class="ghost st-chip${
+            sel.shadow ? " on" : ""
+          }" data-st-el-toggle="shadow" aria-pressed="${!!sel.shadow}" title="Drop shadow">◐</button>
+          <button type="button" class="ghost st-chip${
+            sel.stroke ? " on" : ""
+          }" data-st-el-toggle="stroke" aria-pressed="${!!sel.stroke}" title="Outline">◌</button>
+          <button type="button" class="ghost st-chip${
+            sel.pill ? " on" : ""
+          }" data-st-el-toggle="pill" aria-pressed="${!!sel.pill}" title="Pill background">▢</button>
+        </span>
+      </div>
+      <div class="st-tools-row" role="group" aria-label="Text colour">
+        <span class="st-swatches">${STORY_TEXT_COLORS.map((c) => `<button type="button" class="st-swatch${(sel.color || "").toLowerCase() === c ? " on" : ""}" style="background:${c}" data-st-el-color="${c}" aria-label="Text colour ${c}"></button>`).join("")}<input type="color" class="st-swatch-input" data-st-el-color-input value="${
+          /^#[0-9a-f]{3,8}$/i.test(sel.color || "") ? sel.color : "#ffffff"
+        }" aria-label="Custom text colour"></span>
+      </div>
+      <div class="st-tools-row" role="group" aria-label="Highlight">
+        <span class="muted" style="font-size:11px">Highlight</span><span class="st-swatches">${STORY_HL_COLORS.map((c) => `<button type="button" class="st-swatch${(c === "transparent" ? !sel.highlight : (sel.highlight || "").toLowerCase() === c) ? " on" : ""}" style="background:${c === "transparent" ? "transparent" : c}${c === "transparent" ? ";background-image:linear-gradient(45deg,#ccc 45%,#c66 45%,#c66 55%,#ccc 55%)" : ""}" data-st-el-hl="${c}" aria-label="${c === "transparent" ? "No highlight" : `Highlight ${c}`}"></button>`).join("")}</span>
+      </div>
+      <div class="st-tools-row st-tools-ranges">
+        <label class="st-range-row"><span>Opacity</span><input type="range" min="20" max="100" value="${Math.round(clampNum(sel.opacity, 0, 1, 1) * 100)}" data-st-el-range="opacity" aria-label="Layer opacity"></label>
+        <label class="st-range-row"><span>Spacing</span><input type="range" min="-10" max="80" value="${Math.round(clampNum(sel.spacing, -0.1, 0.8, 0) * 100)}" data-st-el-range="spacing" aria-label="Letter spacing"></label>
+        <label class="st-range-row"><span>Line height</span><input type="range" min="80" max="240" value="${Math.round(clampNum(sel.lineHeight, 0.8, 2.4, 1.25) * 100)}" data-st-el-range="lineHeight" aria-label="Line height"></label>
+      </div>
+      <div class="st-tools-row st-tools-acts">
+        <button type="button" class="ghost" data-st-el-dup${
+          layers.length >= STORY_ELEMENT_MAX ? " disabled" : ""
+        } title="Duplicate layer">${sicon("chat")} Duplicate</button>
+        <button type="button" class="ghost" data-st-el-reset title="Reset formatting">Reset style</button>
+        <button type="button" class="ghost" data-st-el-del="${sel.id}" title="Delete layer">${sicon("trash")} Delete</button>
+      </div>
+    </div>`)
+  } else if (layers.length === 0) {
+    parts.push(
+      `<p class="muted" style="margin:8px 0 0">No text yet — add a caption, then drag it on the canvas.</p>`,
+    )
+  }
+
+  // --- kind-specific extras ---
+
+  if (ed.kind === "text") {
+    parts.push(`<div class="st-tools-sec"><span class="field-label">Background</span>
+      <div class="st-style-grid" role="group" aria-label="Text background">
+        ${STORY_TEXT_BGS.map((bg) => `<button type="button" class="st-bg-swatch st-bg-${bg}${ed.bgStyle === bg ? " on" : ""}" data-st-bg="${bg}" aria-label="Background ${bg}" aria-pressed="${ed.bgStyle === bg}"></button>`).join("")}
+      </div>
+    </div>`)
+  }
+
+  if (ed.kind === "video" && ed.fileUrl) {
+    parts.push(`<div class="st-tools-sec"><label class="st-range-row"><span>${sicon("volume")} Original sound</span><input type="range" min="0" max="100" value="${Math.round(clampNum(ed.videoVol, 0, 1, 1) * 100)}" data-st-video-vol aria-label="Original video sound"></label>
+      <div class="st-tools-row"><button type="button" class="ghost" data-st-pick>${sicon("camera")} Replace video</button><button type="button" class="ghost" data-st-media-remove>Remove</button></div>
+      <input type="file" id="st-file" accept="video/mp4,video/webm,video/quicktime,video/x-m4v" hidden aria-label="Choose a status video">
+    </div>`)
+  }
+
+  if (ed.kind === "photo") {
+    parts.push(`<div class="st-tools-sec"><div class="st-tools-row"><button type="button" class="ghost" data-st-pick>${sicon("camera")} Replace photo</button><button type="button" class="ghost" data-st-media-remove>Remove</button></div>
+      <input type="file" id="st-file" accept="image/jpeg,image/png,image/webp,image/gif" hidden aria-label="Choose a status photo">
+    </div>`)
+  }
+
+  // --- music ---
+
+  parts.push(storyMusicRowMarkup())
+
+  // --- post bar ---
+
+  parts.push(`<div class="st-post-bar">
+    <button type="button" class="ghost" data-st-back${
+      ed.busy ? " disabled" : ""
+    } aria-label="Back to type picker" title="Back to type">← Type</button>
+    <span class="muted st-post-note">24h${draft?.text ? " · draft" : ""}</span>
+    <select class="select" id="st-vis" aria-label="Status visibility"${
+      ed.busy ? " disabled" : ""
+    }><option value="connections"${
+      ed.vis === "connections" ? " selected" : ""
+    }>Connections</option><option value="private"${
+      ed.vis === "private" ? " selected" : ""
+    }>Only me</option></select>
+    <button type="button" class="primary" id="st-post"${
+      ed.busy ? " disabled" : ""
+    }>${ed.busy ? esc(ed.busyLabel || "Posting…") : "Post"}</button>
+  </div>
+  ${
+    ed.busy
+      ? `<p class="muted" style="margin:6px 0 0" aria-live="polite">${esc(ed.busyLabel || "Working…")}</p>`
+      : ""
+  }`)
+
+  return parts.join("")
 }
 
 function storyComposerMarkup() {
@@ -7266,171 +8000,56 @@ function storyComposerMarkup() {
   const draft = state.storyDraft
 
   const head = `<div class="section-row"><h2>New status</h2><span class="tag">${
-    ed.step === "choose"
-      ? "1 · type"
-      : ed.step === "customize"
-        ? "2 · edit"
-        : "3 · preview"
+    ed.step === "choose" ? "1 · type" : "2 · edit"
   }${
     ed.music ? ` · ${sicon("music")}` : ""
   }</span></div>${storyStepDots(ed.step)}`
 
-  const visSelect = (id) =>
-    `<select class="select" id="${id}" aria-label="Status visibility"${
-      ed.busy ? " disabled" : ""
-    }><option value="connections"${
-      ed.vis === "connections" ? " selected" : ""
-    }>Connections</option><option value="private"${
-      ed.vis === "private" ? " selected" : ""
-    }>Only me</option></select>`
-
   if (ed.step === "choose") {
     return `<div class="card st-editor" style="margin-bottom:18px">${head}
       <div class="st-choose" role="radiogroup" aria-label="Status type">
-        <button type="button" class="st-choose-card" data-st-kind="photo" role="radio" aria-checked="false" aria-label="Photo status"><span class="st-choose-ico">${sicon("camera")}</span><strong>Photo</strong><small>Still image + caption</small></button>
+        <button type="button" class="st-choose-card" data-st-kind="photo" role="radio" aria-checked="false" aria-label="Photo status"><span class="st-choose-ico">${sicon("camera")}</span><strong>Photo</strong><small>Still image + text</small></button>
         <button type="button" class="st-choose-card" data-st-kind="video" role="radio" aria-checked="false" aria-label="Video status"><span class="st-choose-ico">${sicon("film")}</span><strong>Video</strong><small>Clip up to 50 MB</small></button>
         <button type="button" class="st-choose-card" data-st-kind="text" role="radio" aria-checked="false" aria-label="Text status"><span class="st-choose-ico">${sicon("chat")}</span><strong>Text</strong><small>Styled words on a background</small></button>
       </div>
-      <div class="st-composer-meta"><span>24h · expires automatically</span><span class="st-composer-actions">${visSelect("st-vis")}</span></div>
+      <div class="st-composer-meta"><span>24h · expires automatically</span><span class="st-composer-actions"><select class="select" id="st-vis" aria-label="Status visibility"${
+        ed.busy ? " disabled" : ""
+      }><option value="connections"${
+        ed.vis === "connections" ? " selected" : ""
+      }>Connections</option><option value="private"${
+        ed.vis === "private" ? " selected" : ""
+      }>Only me</option></select></span></div>
       ${
         draft?.text
-          ? `<p class="muted" style="margin:6px 0 0">Draft restored — pick a type to continue, or switch to Text.</p>`
+          ? `<p class="muted" style="margin:6px 0 0">Draft restored — pick a type to continue.</p>`
           : ""
       }
     </div>`
   }
 
-  if (ed.step === "customize" && ed.kind === "text") {
-    const bgPreview = `st-bg-${storyTextBgClass({ bgStyle: ed.bgStyle })}`
+  // edit step: split canvas + tools (live preview replaces the old
 
-    return `<div class="card st-editor" style="margin-bottom:18px">${head}
-      <label class="field-label" for="st-text">Your status</label>
-      <textarea class="textarea" id="st-text" rows="4" maxlength="500" placeholder="What's on your mind?" aria-label="Write a status"${
-        ed.busy ? " disabled" : ""
-      }>${esc(ed.caption || draft?.text || "")}</textarea>
-      <div class="st-composer-meta"><span><span data-st-count>0</span>/500 · text</span><span class="st-composer-actions">${visSelect("st-vis")}</span></div>
-      <div class="st-style-grid" role="group" aria-label="Text background">
-        ${STORY_TEXT_BGS.map((bg) => `<button type="button" class="st-bg-swatch st-bg-${bg}${ed.bgStyle === bg ? " on" : ""}" data-st-bg="${bg}" aria-label="Background ${bg}" aria-pressed="${ed.bgStyle === bg}"></button>`).join("")}
-      </div>
-      <div class="st-style-row">
-        <div class="st-style-group" role="group" aria-label="Alignment">
-          ${["left", "center", "right"].map((a) => `<button type="button" class="ghost st-chip${ed.textAlign === a ? " on" : ""}" data-st-align="${a}" aria-pressed="${ed.textAlign === a}" title="Align ${a}">${a === "left" ? "⇤" : a === "center" ? "⇔" : "⇥"}</button>`).join("")}
+  // separate Preview step — Part 9).
+
+  return `<div class="card st-editor st-editor-edit" style="margin-bottom:18px">${head}
+    <div class="st-edit-grid">
+      <div class="st-edit-canvas-col">
+        <div class="st-preview-frame st-canvas" role="img" aria-label="Live status preview">
+          <div class="sv-progress st-preview-bars"><span class="sv-bar now"><i style="width:100%"></i></span></div>
+          <div class="sv-top"><span class="status-avatar sm" style="--sv-accent:${svAccent(state.profile.handle)}">${avatarMarkup(state.profile.photo, state.profile.avatar)}</span><span class="sv-who"><strong>My Status</strong><small>now · ${esc(ed.vis === "private" ? "Only me" : "Connections")}</small></span></div>
+          <div class="sv-stage">${storyCanvasMarkup(true)}</div>
+          <div class="sv-foot"><span class="muted">Live preview</span>${
+            ed.music
+              ? `<span class="st-music-pill st-music-pill-static">${sicon("music")} ${esc(ed.music.title || "Track")}${
+                  ed.music.artist ? ` · ${esc(ed.music.artist)}` : ""
+                }</span>`
+              : ""
+          }</div>
         </div>
-        <div class="st-style-group" role="group" aria-label="Text size">
-          ${STORY_TEXT_SIZE.map((z) => `<button type="button" class="ghost st-chip${ed.textSize === z ? " on" : ""}" data-st-size="${z}" aria-pressed="${ed.textSize === z}" title="Size ${z}">${z === "sm" ? "A" : z === "md" ? "A+" : "A++"}</button>`).join("")}
-        </div>
-        <div class="st-style-group" role="group" aria-label="Text style">
-          ${STORY_TEXT_STYLE.map((t) => `<button type="button" class="ghost st-chip${ed.textStyle === t ? " on" : ""}" data-st-tstyle="${t}" aria-pressed="${ed.textStyle === t}" title="Style ${t}">${t === "plain" ? "Ab" : t === "shadow" ? "A̸" : "Ạ"}</button>`).join("")}
-        </div>
-        <label class="st-emoji-lab" title="Optional emoji prefix">🙂<input type="text" id="st-emoji" class="input st-emoji-input" maxlength="8" value="${esc(ed.emoji || "")}" placeholder="✨" aria-label="Emoji prefix"></label>
+        <p class="muted st-canvas-hint">Tap text to edit · drag to move · corner handles resize & rotate</p>
       </div>
-      ${storyMusicRowMarkup()}
-      <div class="st-preview-box ${bgPreview} st-tsz-${storyTextSizeClass({ textSize: ed.textSize })} st-tst-${storyTextStyleClass({ textStyle: ed.textStyle })}" style="text-align:${storyTextAlignStyle({ textAlign: ed.textAlign })}" aria-hidden="true">
-        <p>${
-          ed.emoji ? esc(ed.emoji) + " " : ""
-        }${esc(ed.caption || draft?.text || "Your words will appear here…")}</p>
-      </div>
-      <div class="st-composer-meta" style="margin-top:12px"><span></span><span class="st-composer-actions">
-        <button type="button" class="ghost" data-st-back${
-          ed.busy ? " disabled" : ""
-        }>← Type</button>
-        <button type="button" class="primary" data-st-preview${
-          ed.busy || !(ed.caption || draft?.text || "").trim()
-            ? " disabled"
-            : ""
-        }>Preview</button>
-      </span></div>
-    </div>`
-  }
-
-  if (ed.step === "customize") {
-    // photo | video customize
-
-    const isVideo = ed.kind === "video"
-
-    const accept = isVideo
-      ? "video/mp4,video/webm,video/quicktime,video/x-m4v"
-      : "image/jpeg,image/png,image/webp,image/gif"
-
-    const media = ed.fileUrl
-      ? isVideo
-        ? `<video class="st-media-preview" src="${esc(ed.fileUrl)}" muted playsinline controls aria-label="Video preview"></video>`
-        : `<img src="${esc(ed.fileUrl)}" class="st-media-preview" alt="Status photo preview">`
-      : `<button type="button" class="st-media-drop" data-st-pick aria-label="Choose a ${
-          isVideo ? "video" : "photo"
-        }"><span>${sicon(isVideo ? "film" : "camera")}</span><strong>${
-          isVideo ? "Choose a video" : "Choose a photo"
-        }</strong><small>${
-          isVideo
-            ? "MP4, WebM or MOV · max 50 MB"
-            : "JPEG, PNG, WebP or GIF · max 50 MB"
-        }</small></button>`
-
-    return `<div class="card st-editor" style="margin-bottom:18px">${head}
-      <div class="st-media-stage">${media}${
-        ed.file
-          ? `<div class="st-media-tools"><button type="button" class="ghost" data-st-pick>${sicon("camera")} Replace</button><button type="button" class="ghost" data-st-media-remove>Remove</button></div>`
-          : ""
-      }</div>
-      <input type="file" id="st-file" accept="${accept}" hidden aria-label="Choose a status ${
-        isVideo ? "video" : "photo"
-      }">
-      <label class="field-label" for="st-text">Caption</label>
-      <textarea class="textarea" id="st-text" rows="2" maxlength="500" placeholder="Add a caption…" aria-label="Status caption"${
-        ed.busy ? " disabled" : ""
-      }>${esc(ed.caption || draft?.text || "")}</textarea>
-      <div class="st-composer-meta"><span><span data-st-count>0</span>/500 · ${
-        isVideo ? "video" : "photo"
-      }</span><span class="st-composer-actions">${visSelect("st-vis")}</span></div>
-      <div class="st-style-row" role="group" aria-label="Caption position">
-        <span class="muted" style="font-size:12px">Caption</span>
-        ${STORY_CAP_POS.map((p) => `<button type="button" class="ghost st-chip${ed.captionPos === p ? " on" : ""}" data-st-cap="${p}" aria-pressed="${ed.captionPos === p}">${p[0].toUpperCase() + p.slice(1)}</button>`).join("")}
-      </div>
-      ${storyMusicRowMarkup()}
-      <div class="st-composer-meta" style="margin-top:12px"><span></span><span class="st-composer-actions">
-        <button type="button" class="ghost" data-st-back${
-          ed.busy ? " disabled" : ""
-        }>← Type</button>
-        <button type="button" class="primary" data-st-preview${
-          ed.busy || !ed.file ? " disabled" : ""
-        }>Preview</button>
-      </span></div>
-      ${
-        ed.busy
-          ? `<p class="muted" style="margin:8px 0 0" aria-live="polite">${esc(ed.busyLabel || "Working…")}</p>`
-          : ""
-      }
-    </div>`
-  }
-
-  // preview step
-
-  return `<div class="card st-editor" style="margin-bottom:18px">${head}
-    <div class="st-preview-frame" role="img" aria-label="Status preview">
-      <div class="sv-progress st-preview-bars"><span class="sv-bar now"><i style="width:100%"></i></span></div>
-      <div class="sv-top"><span class="status-avatar sm" style="--sv-accent:${svAccent(state.profile.handle)}">${avatarMarkup(state.profile.photo, state.profile.avatar)}</span><span class="sv-who"><strong>My Status</strong><small>now · ${esc(ed.vis)}</small></span></div>
-      <div class="sv-stage">${storyPreviewStageMarkup()}</div>
-      <div class="sv-foot"><span class="muted">Preview</span>${
-        ed.music
-          ? `<span class="st-music-pill st-music-pill-static">${sicon("music")} ${esc(ed.music.title || "Track")}${
-              ed.music.artist ? ` · ${esc(ed.music.artist)}` : ""
-            }</span>`
-          : ""
-      }</div>
+      <div class="st-edit-tools">${storyToolsMarkup()}</div>
     </div>
-    <div class="st-composer-meta" style="margin-top:12px"><span>Live for 24h · ${esc(ed.vis === "private" ? "Only me" : "Connections")}</span><span class="st-composer-actions">
-      <button type="button" class="ghost" data-st-back${
-        ed.busy ? " disabled" : ""
-      }>← Edit</button>
-      <button type="button" class="primary" id="st-post"${
-        ed.busy ? " disabled" : ""
-      }>${ed.busy ? esc(ed.busyLabel || "Posting…") : "Post"}</button>
-    </span></div>
-    ${
-      ed.busy
-        ? `<p class="muted" style="margin:8px 0 0" aria-live="polite">${esc(ed.busyLabel || "Sharing…")}</p>`
-        : ""
-    }
   </div>`
 }
 
@@ -7438,7 +8057,7 @@ function storyMusicRowMarkup() {
   const ed = storyEditor
 
   if (!ed.music) {
-    return `<div class="st-music-row"><button type="button" class="ghost" data-st-music aria-label="Add music to this status">${sicon("music")} Add music</button><span class="muted">Optional · from your library</span></div>`
+    return `<div class="st-music-row"><button type="button" class="ghost" data-st-music aria-label="Add music to this status">${sicon("music")} Add music</button><span class="muted">Optional · library or device</span></div>`
   }
 
   const m = ed.music
@@ -7448,45 +8067,14 @@ function storyMusicRowMarkup() {
   return `<div class="st-music-row st-music-on">
     <span class="st-music-pill">${sicon("music")} <strong>${esc(m.title || "Track")}</strong>${
       m.artist ? ` · ${esc(m.artist)}` : ""
-    } <small>${span}s · ${Math.round((m.vol ?? 0.7) * 100)}%</small></span>
+    } <small>${span}s · ${Math.round((m.vol ?? 0.7) * 100)}%${
+      m.source === "device" ? " · imported" : ""
+    }</small></span>
     <span class="st-composer-actions">
       <button type="button" class="ghost" data-st-music aria-label="Change music">${sicon("music")} Change</button>
       <button type="button" class="ghost" data-st-music-clear aria-label="Remove music">Remove</button>
     </span>
   </div>`
-}
-
-function storyPreviewStageMarkup() {
-  const ed = storyEditor
-
-  if (ed.kind === "text") {
-    const bg = storyTextBgClass({ bgStyle: ed.bgStyle })
-
-    const al = storyTextAlignStyle({ textAlign: ed.textAlign })
-
-    return `<div class="sv-text-card st-bg-${bg} st-tsz-${storyTextSizeClass({ textSize: ed.textSize })} st-tst-${storyTextStyleClass({ textStyle: ed.textStyle })}" style="text-align:${al}">
-      <p>${
-        ed.emoji ? esc(ed.emoji) + " " : ""
-      }${esc(ed.caption || "Your words…")}</p>
-      <div class="sv-card-foot"><strong>You</strong><small>now</small></div>
-    </div>`
-  }
-
-  const capPos = storyCaptionClass(ed.captionPos)
-
-  const overlay = ed.caption
-    ? `<div class="sv-cap ${capPos}"><p>${esc(ed.caption)}</p></div>`
-    : ""
-
-  if (ed.kind === "video" && ed.fileUrl) {
-    return `<div class="sv-photo-wrap sv-video-wrap">${overlay}<video class="sv-photo sv-video" src="${esc(ed.fileUrl)}" muted playsinline controls aria-label="Video preview"></video></div>`
-  }
-
-  if (ed.fileUrl) {
-    return `<div class="sv-photo-wrap">${overlay}<img class="sv-photo" src="${esc(ed.fileUrl)}" alt="Status preview"></div>`
-  }
-
-  return `<div class="sv-text-card"><p>No media</p></div>`
 }
 
 function bindStatusHome(body) {
@@ -7520,28 +8108,20 @@ function bindStatusHome(body) {
 
       if (!["photo", "video", "text"].includes(kind)) return
 
-      // Switching type drops media (wrong shape) but keeps caption, music,
+      // Switching type drops media (wrong shape) but keeps text layers,
 
-      // visibility, and any offline draft so the user doesn't retype.
+      // music, visibility, and any offline draft so the user doesn't retype.
 
       const keep = {
-        caption: storyEditor.caption || state.storyDraft?.text || "",
+        elements: storyEditor.elements?.length ? storyEditor.elements : [],
 
         music: storyEditor.music,
 
         vis: storyEditor.vis || state.storyDraft?.vis || "connections",
 
-        captionPos: storyEditor.captionPos,
-
         bgStyle: storyEditor.bgStyle,
 
-        textAlign: storyEditor.textAlign,
-
-        textSize: storyEditor.textSize,
-
-        textStyle: storyEditor.textStyle,
-
-        emoji: storyEditor.emoji,
+        videoVol: storyEditor.videoVol,
       }
 
       stopStoryPreviewAudio()
@@ -7556,99 +8136,380 @@ function bindStatusHome(body) {
 
       storyEditor.kind = kind
 
-      storyEditor.step = "customize"
+      storyEditor.step = "edit"
+
+      if (!storyEditor.elements.length) {
+        // First entry: seed from the offline draft so restored words land
+
+        // straight on the canvas (Part 9).
+
+        const seed = state.storyDraft?.text || ""
+
+        const el = storyElement(seed)
+
+        storyEditor.elements = [el]
+
+        storyEditor.selectedId = el.id
+      } else {
+        storyEditor.selectedId = storyEditor.elements[0]?.id || null
+      }
 
       renderCommunity()
     }
   })
 
-  // --- editor: customize controls ---
+  bindStoryTools(body)
 
-  const text = $("#st-text", body)
+  bindStoryCanvas(body)
 
-  if (text) {
-    const count = $("[data-st-count]", body)
+  // Offline draft hint on choose step already rendered; tools hold the
 
-    const paint = () => {
-      storyEditor.caption = text.value
+  // media picker, music, visibility, and Post bindings.
+}
 
-      if (count) count.textContent = String(text.value.length)
+// Tool-column bindings. Called on every status render and AGAIN after a
 
-      // Live light preview updates (text step box).
+// tools re-render (layer pick / style chips swap the column in place), so
 
-      const box = $(".st-preview-box p", body)
+// it only binds nodes that exist right now.
 
-      if (box)
-        box.textContent =
-          (storyEditor.emoji ? storyEditor.emoji + " " : "") +
-          (text.value || "Your words will appear here…")
+function bindStoryTools(body) {
+  // --- undo / redo ---
+
+  $("[data-st-undo]", body)?.addEventListener("click", () => {
+    storyUndo()
+
+    renderCommunity()
+  })
+
+  $("[data-st-redo]", body)?.addEventListener("click", () => {
+    storyRedo()
+
+    renderCommunity()
+  })
+
+  // --- layer management ---
+
+  $("[data-st-el-add]", body)?.addEventListener("click", () => {
+    if (storyEditor.elements.length >= STORY_ELEMENT_MAX) return
+
+    pushStoryUndo(true)
+
+    const el = storyElement("")
+
+    storyEditor.elements.push(el)
+
+    storyEditor.selectedId = el.id
+
+    renderCommunity()
+
+    requestAnimationFrame(() => $("#st-el-text")?.focus())
+  })
+
+  $$("[data-st-el-pick]", body).forEach((b) => {
+    b.onclick = () => {
+      storyEditor.selectedId = b.dataset.stElPick
+
+      renderCommunity()
+
+      requestAnimationFrame(() => $("#st-el-text")?.focus())
+    }
+  })
+
+  $$("[data-st-el-del]", body).forEach((b) => {
+    b.onclick = () => {
+      const id = b.dataset.stElDel
+
+      pushStoryUndo(true)
+
+      storyEditor.elements = storyEditor.elements.filter((e) => e.id !== id)
+
+      if (storyEditor.selectedId === id)
+        storyEditor.selectedId = storyEditor.elements[0]?.id || null
+
+      renderCommunity()
+    }
+  })
+
+  $("[data-st-el-dup]", body)?.addEventListener("click", () => {
+    const src = storySelectedElement()
+
+    if (!src || storyEditor.elements.length >= STORY_ELEMENT_MAX) return
+
+    pushStoryUndo(true)
+
+    const copy = {
+      ...src,
+
+      id: `t${++storyElSeq}${Math.random().toString(36).slice(2, 6)}`,
+
+      y: clampNum(
+        src.y + 7,
+
+        STORY_SAFE.y[0],
+
+        STORY_SAFE.y[1],
+
+        src.y,
+      ),
     }
 
-    text.addEventListener("input", paint)
+    storyEditor.elements.push(copy)
 
-    paint()
+    storyEditor.selectedId = copy.id
+
+    renderCommunity()
+
+    requestAnimationFrame(() => $("#st-el-text")?.focus())
+  })
+
+  const moveLayer = (id, dir) => {
+    const i = storyEditor.elements.findIndex((e) => e.id === id)
+
+    const j = i + dir
+
+    if (i < 0 || j < 0 || j >= storyEditor.elements.length) return
+
+    pushStoryUndo(true)
+
+    const arr = storyEditor.elements
+
+    const tmp = arr[i]
+
+    arr[i] = arr[j]
+
+    arr[j] = tmp
+
+    renderCommunity()
   }
 
-  const emoji = $("#st-emoji", body)
+  $$("[data-st-el-up]", body).forEach((b) => {
+    b.onclick = () => moveLayer(b.dataset.stElUp, -1)
+  })
 
-  if (emoji) {
-    emoji.addEventListener("input", () => {
-      storyEditor.emoji = emoji.value.slice(0, 8)
+  $$("[data-st-el-down]", body).forEach((b) => {
+    b.onclick = () => moveLayer(b.dataset.stElDown, 1)
+  })
 
-      const box = $(".st-preview-box p", body)
+  // --- formatting for the selected layer ---
 
-      if (box)
-        box.textContent =
-          (storyEditor.emoji ? storyEditor.emoji + " " : "") +
-          (storyEditor.caption || "Your words will appear here…")
+  const paintEl = (el) => {
+    const span = body.querySelector(`[data-el-id="${el.id}"]`)
+
+    if (span) span.setAttribute("style", storyElInline(el))
+  }
+
+  const applyToSel = (fn, rerender = true) => {
+    const el = storySelectedElement()
+
+    if (!el) return
+
+    pushStoryUndo(true)
+
+    fn(el)
+
+    if (rerender) renderCommunity()
+    else paintEl(el)
+  }
+
+  $$("[data-st-el-size]", body).forEach((b) => {
+    b.onclick = () => applyToSel((el) => (el.size = b.dataset.stElSize))
+  })
+
+  $$("[data-st-el-align]", body).forEach((b) => {
+    b.onclick = () => applyToSel((el) => (el.align = b.dataset.stElAlign))
+  })
+
+  $$("[data-st-el-case]", body).forEach((b) => {
+    b.onclick = () => applyToSel((el) => (el.mode = b.dataset.stElCase))
+  })
+
+  $$("[data-st-el-toggle]", body).forEach((b) => {
+    b.onclick = () =>
+      applyToSel((el) => {
+        const f = b.dataset.stElToggle
+
+        el[f] = !el[f]
+      })
+  })
+
+  $$("[data-st-el-color]", body).forEach((b) => {
+    b.onclick = () => applyToSel((el) => (el.color = b.dataset.stElColor))
+  })
+
+  $$("[data-st-el-hl]", body).forEach((b) => {
+    b.onclick = () =>
+      applyToSel(
+        (el) =>
+          (el.highlight =
+            b.dataset.stElHl === "transparent" ? "" : b.dataset.stElHl),
+      )
+  })
+
+  $("#st-el-font", body)?.addEventListener("change", (ev) =>
+    applyToSel((el) => (el.font = ev.target.value)),
+  )
+
+  // Free colour: live-paint the canvas, full re-render on commit so the
+
+  // swatch states catch up (input keeps focus during the colour-drag).
+
+  $("[data-st-el-color-input]", body)?.addEventListener("input", (ev) => {
+    const el = storySelectedElement()
+
+    if (!el) return
+
+    pushStoryUndo()
+
+    el.color = ev.target.value
+
+    paintEl(el)
+  })
+
+  $("[data-st-el-color-input]", body)?.addEventListener("change", () =>
+    renderCommunity(),
+  )
+
+  // Text: live-update the canvas layer; re-render on commit to refresh the
+
+  // layer list labels (keeps the caret while typing — Part 13).
+
+  const tsel = $("#st-el-text", body)
+
+  if (tsel) {
+    tsel.addEventListener("input", () => {
+      const el = storySelectedElement()
+
+      if (!el) return
+
+      pushStoryUndo()
+
+      el.text = tsel.value.slice(0, 500)
+
+      const span = body.querySelector(`[data-el-id="${el.id}"]`)
+
+      if (span) {
+        const h = `<i class="st-el-h st-el-rot" data-el-rot="${el.id}" aria-hidden="true"></i><i class="st-el-h st-el-scale" data-el-scale="${el.id}" aria-hidden="true"></i>`
+
+        span.innerHTML = `${
+          el.text ? esc(el.text) : '<span class="st-el-ghost">Type…</span>'
+        }${h}`
+      }
+
+      const lab = tsel.closest(".st-tools-sec")?.querySelector("small.muted")
+
+      if (lab) lab.textContent = `(${el.text.length}/500)`
     })
+
+    tsel.addEventListener("change", () => renderCommunity())
+  }
+
+  // Sliders: live canvas paint only (no re-render — the slider keeps focus).
+
+  $$("[data-st-el-range]", body).forEach((inp) => {
+    inp.addEventListener("input", () => {
+      const el = storySelectedElement()
+
+      if (!el) return
+
+      pushStoryUndo()
+
+      const v = Number(inp.value)
+
+      if (inp.dataset.stElRange === "opacity") el.opacity = v / 100
+      else if (inp.dataset.stElRange === "spacing") el.spacing = v / 100
+      else if (inp.dataset.stElRange === "lineHeight") el.lineHeight = v / 100
+
+      paintEl(el)
+    })
+  })
+
+  $("[data-st-el-reset]", body)?.addEventListener("click", () => {
+    applyToSel((el) => {
+      el.size = "md"
+
+      el.font = "modern"
+
+      el.color = "#ffffff"
+
+      el.highlight = ""
+
+      el.opacity = 1
+
+      el.bold = false
+
+      el.italic = false
+
+      el.underline = false
+
+      el.strike = false
+
+      el.align = "center"
+
+      el.mode = "none"
+
+      el.spacing = 0
+
+      el.lineHeight = 1.25
+
+      el.shadow = true
+
+      el.stroke = false
+
+      el.pill = false
+
+      el.rot = 0
+
+      el.scale = 1
+    })
+  })
+
+  // --- kind extras ---
+
+  // Canvas video starts at the composed level (Part 10).
+
+  const cv = $("[data-st-canvas-video]", body)
+
+  if (cv) {
+    try {
+      cv.volume = clampNum(storyEditor.videoVol, 0, 1, 1)
+    } catch {
+      /* ignore */
+    }
   }
 
   $$("[data-st-bg]", body).forEach((b) => {
     b.onclick = () => {
+      pushStoryUndo(true)
+
       storyEditor.bgStyle = b.dataset.stBg
+
       renderCommunity()
     }
   })
 
-  $$("[data-st-align]", body).forEach((b) => {
-    b.onclick = () => {
-      storyEditor.textAlign = b.dataset.stAlign
-      renderCommunity()
+  $("[data-st-video-vol]", body)?.addEventListener("input", (ev) => {
+    pushStoryUndo()
+
+    storyEditor.videoVol = clampNum(Number(ev.target.value) / 100, 0, 1, 1)
+
+    const v = $("[data-st-canvas-video]", body)
+
+    if (v) {
+      try {
+        v.volume = storyEditor.videoVol
+      } catch {
+        /* ignore */
+      }
     }
   })
 
-  $$("[data-st-size]", body).forEach((b) => {
-    b.onclick = () => {
-      storyEditor.textSize = b.dataset.stSize
-      renderCommunity()
-    }
-  })
-
-  $$("[data-st-tstyle]", body).forEach((b) => {
-    b.onclick = () => {
-      storyEditor.textStyle = b.dataset.stTstyle
-      renderCommunity()
-    }
-  })
-
-  $$("[data-st-cap]", body).forEach((b) => {
-    b.onclick = () => {
-      storyEditor.captionPos = b.dataset.stCap
-      renderCommunity()
-    }
-  })
+  // --- media picker ---
 
   const file = $("#st-file", body)
 
-  const pickMedia = async () => {
-    if (!file) return
-
-    file.click()
-  }
-
   $$("[data-st-pick]", body).forEach((b) => {
-    b.onclick = pickMedia
+    b.onclick = () => file?.click()
   })
 
   file?.addEventListener("change", async () => {
@@ -7678,7 +8539,9 @@ function bindStatusHome(body) {
     } else {
       const bad = await validateImageFile(
         picked,
+
         50 * 1024 * 1024,
+
         "status-composer",
       )
 
@@ -7697,6 +8560,16 @@ function bindStatusHome(body) {
 
     cloudStoryPhoto = { file: picked, url: storyEditor.fileUrl }
 
+    // Entering media always has at least the default caption layer.
+
+    if (!storyEditor.elements.length) {
+      const el = storyElement("")
+
+      storyEditor.elements = [el]
+
+      storyEditor.selectedId = el.id
+    }
+
     renderCommunity()
   })
 
@@ -7708,56 +8581,21 @@ function bindStatusHome(body) {
     renderCommunity()
   })
 
-  // --- navigation ---
+  // --- navigation / visibility / music / post ---
 
   $("[data-st-back]", body)?.addEventListener("click", () => {
     if (storyEditor.busy) return
 
-    if (storyEditor.step === "preview") storyEditor.step = "customize"
-    else if (storyEditor.step === "customize") {
-      // Keep caption/media when bouncing back to type picker? Type change
-
-      // clears via reset — going back just returns to choose with content held
-
-      // until a new type is picked (reset happens on kind pick).
-
-      storyEditor.step = "choose"
-    } else return
+    if (storyEditor.step === "edit") storyEditor.step = "choose"
 
     renderCommunity()
   })
 
-  $("[data-st-preview]", body)?.addEventListener("click", () => {
-    if (storyEditor.busy) return
-
-    if (text) storyEditor.caption = text.value
-
-    const vis = $("#st-vis", body)
-
-    if (vis) storyEditor.vis = vis.value
-
-    if (
-      !storyEditor.file &&
-      storyEditor.kind !== "text" &&
-      !(storyEditor.caption || "").trim()
-    )
-      return
-
-    if (storyEditor.kind === "text" && !(storyEditor.caption || "").trim())
-      return
-
-    storyEditor.step = "preview"
+  $("#st-vis", body)?.addEventListener("change", (ev) => {
+    storyEditor.vis = ev.target.value
 
     renderCommunity()
   })
-
-  const visEl = $("#st-vis", body)
-
-  visEl?.addEventListener("change", () => {
-    storyEditor.vis = visEl.value
-  })
-
-  // --- music picker ---
 
   $("[data-st-music]", body)?.addEventListener("click", () =>
     openStoryMusicPicker(),
@@ -7766,21 +8604,17 @@ function bindStatusHome(body) {
   $("[data-st-music-clear]", body)?.addEventListener("click", () => {
     stopStoryPreviewAudio()
 
+    clearStoryMusicDevice(storyEditor.music)
+
     storyEditor.music = null
 
     renderCommunity()
   })
 
-  // --- post ---
-
   $("#st-post", body)?.addEventListener("click", (e) => {
-    if (text) storyEditor.caption = text.value
-
     const vis = $("#st-vis", body) || null
 
     postCloudStory({
-      text: storyEditor.caption,
-
       vis: storyEditor.vis || vis?.value || "connections",
 
       file: storyEditor.file || null,
@@ -7799,16 +8633,461 @@ function bindStatusHome(body) {
       btn: e.currentTarget,
     })
   })
+}
 
-  // Offline draft hint on choose step already rendered; nothing else to bind.
+// Canvas bindings: tap-to-select, free drag inside the safe area, corner
+
+// handle resize/rotate, and two-pointer pinch (Parts 11–12).
+
+function bindStoryCanvas(body) {
+  const canvas = $(".st-canvas", body)
+
+  const stage = canvas ? $(".sv-stage", canvas) : null
+
+  if (!canvas || !stage) return
+
+  const retools = () => {
+    const holder = $(".st-edit-tools", body)
+
+    if (!holder) return
+
+    holder.innerHTML = storyToolsMarkup()
+
+    bindStoryTools(body)
+  }
+
+  const paintEl = (el) => {
+    const span = stage.querySelector(`[data-el-id="${el.id}"]`)
+
+    if (span) span.setAttribute("style", storyElInline(el))
+  }
+
+  const selectEl = (id) => {
+    if (storyEditor.selectedId === id) return
+
+    storyEditor.selectedId = id
+
+    stage
+      .querySelectorAll(".st-el")
+      .forEach((n) => n.classList.toggle("sel", n.dataset.elId === id))
+
+    retools()
+  }
+
+  let drag = null // { id, sx, sy, ox, oy, moved, snap }
+
+  let handleDrag = null // { mode, id, ...geometry }
+
+  let pinch = null // { id, d0, a0, scale0, rot0, cx, cy }
+
+  const pointers = new Map() // pointerId → { x, y, elId }
+
+  const stageRect = () => stage.getBoundingClientRect()
+
+  const stagePos = (ev) => {
+    const r = stageRect()
+
+    return {
+      x: ((ev.clientX - r.left) / r.width) * 100,
+
+      y: ((ev.clientY - r.top) / r.height) * 100,
+    }
+  }
+
+  const pushDragUndo = () => {
+    if (drag && !drag.moved) {
+      storyEditor.undo.push(drag.snap)
+
+      if (storyEditor.undo.length > 40) storyEditor.undo.shift()
+
+      storyEditor.redo.length = 0
+
+      drag.moved = true
+    }
+  }
+
+  const startPinch = () => {
+    // Both pointers must sit on the same layer; take the two most recent.
+
+    const elId = [...pointers.values()].slice(-2).map((p) => p.elId)
+
+    if (elId.length < 2 || !elId[0] || elId[0] !== elId[1]) return false
+
+    const [a, b] = [...pointers.values()].slice(-2)
+
+    const d0 = Math.hypot(b.x - a.x, b.y - a.y)
+
+    if (d0 < 8) return false
+
+    const el = storyEditor.elements.find((e) => e.id === elId[0])
+
+    if (!el) return false
+
+    pinch = {
+      id: elId[0],
+
+      d0,
+
+      a0: (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI,
+
+      scale0: el.scale,
+
+      rot0: el.rot,
+    }
+
+    drag = null
+
+    handleDrag = null
+
+    return true
+  }
+
+  const endAll = () => {
+    drag = null
+
+    handleDrag = null
+
+    pinch = null
+  }
+
+  stage.addEventListener("pointerdown", (ev) => {
+    if (storyEditor.busy) return
+
+    pointers.set(ev.pointerId, {
+      x: ev.clientX,
+
+      y: ev.clientY,
+
+      elId: ev.target?.closest?.("[data-el-id]")?.dataset.elId || null,
+    })
+
+    try {
+      stage.setPointerCapture(ev.pointerId)
+    } catch {
+      /* ignore */
+    }
+
+    const scaleH = ev.target?.closest?.("[data-el-scale]")
+
+    const rotH = ev.target?.closest?.("[data-el-rot]")
+
+    const span = ev.target?.closest?.("[data-el-id]")
+
+    // Native video controls / pick button: leave them alone.
+
+    if (
+      !span &&
+      (ev.target?.closest?.("video") || ev.target?.closest?.("[data-st-pick]"))
+    )
+      return
+
+    if (pointers.size >= 2 && span) {
+      const id = span.dataset.elId
+
+      if (pinch && pinch.id !== id) pinch = null
+
+      if (!pinch) {
+        const made = startPinch()
+
+        if (made) {
+          const el = storyEditor.elements.find((e) => e.id === pinch.id)
+
+          if (el) {
+            pushStoryUndo(true)
+
+            selectEl(pinch.id)
+          }
+        }
+      }
+
+      return
+    }
+
+    if (scaleH || rotH) {
+      const id = (scaleH || rotH).getAttribute(
+        scaleH ? "data-el-scale" : "data-el-rot",
+      )
+
+      const el = storyEditor.elements.find((e) => e.id === id)
+
+      if (!el || !span) return
+
+      ev.preventDefault()
+
+      ev.stopPropagation()
+
+      selectEl(id)
+
+      const sr = span.getBoundingClientRect()
+
+      const cx = sr.left + sr.width / 2
+
+      const cy = sr.top + sr.height / 2
+
+      handleDrag = {
+        mode: scaleH ? "scale" : "rot",
+
+        id,
+
+        sx: ev.clientX,
+
+        sy: ev.clientY,
+
+        cx,
+
+        cy,
+
+        startDist: Math.hypot(ev.clientX - cx, ev.clientY - cy) || 1,
+
+        startAngle:
+          (Math.atan2(ev.clientY - cy, ev.clientX - cx) * 180) / Math.PI,
+
+        startScale: el.scale,
+
+        startRot: el.rot,
+
+        snap: storySnapshot(),
+
+        moved: false,
+      }
+
+      return
+    }
+
+    if (span) {
+      const id = span.dataset.elId
+
+      const el = storyEditor.elements.find((e) => e.id === id)
+
+      if (!el) return
+
+      ev.preventDefault()
+
+      const wasSelected = storyEditor.selectedId === id
+
+      selectEl(id)
+
+      const pos = stagePos(ev)
+
+      drag = {
+        id,
+
+        sx: pos.x,
+
+        sy: pos.y,
+
+        ox: el.x,
+
+        oy: el.y,
+
+        moved: false,
+
+        snap: storySnapshot(),
+
+        wasSelected,
+      }
+
+      return
+    }
+
+    // Tap on empty canvas: deselect (tools return to the layer list head).
+
+    if (storyEditor.selectedId) {
+      storyEditor.selectedId = null
+
+      stage
+
+        .querySelectorAll(".st-el.sel")
+
+        .forEach((n) => n.classList.remove("sel"))
+
+      retools()
+    }
+  })
+
+  stage.addEventListener("pointermove", (ev) => {
+    if (pointers.has(ev.pointerId))
+      pointers.set(ev.pointerId, {
+        x: ev.clientX,
+
+        y: ev.clientY,
+
+        elId: pointers.get(ev.pointerId).elId,
+      })
+
+    if (pinch && pointers.size >= 2) {
+      const pts = [...pointers.values()].slice(-2)
+
+      if (
+        pts.length === 2 &&
+        pts[0].elId === pinch.id &&
+        pts[1].elId === pinch.id
+      ) {
+        const el = storyEditor.elements.find((e) => e.id === pinch.id)
+
+        if (el) {
+          const d = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y)
+
+          const a =
+            (Math.atan2(pts[1].y - pts[0].y, pts[1].x - pts[0].x) * 180) /
+            Math.PI
+
+          el.scale = clampNum(pinch.scale0 * (d / pinch.d0), 0.4, 4, 1)
+
+          el.rot =
+            ((((pinch.rot0 + (a - pinch.a0) + 180) % 360) + 360) % 360) - 180
+
+          paintEl(el)
+        }
+      }
+
+      return
+    }
+
+    if (handleDrag) {
+      const el = storyEditor.elements.find((e) => e.id === handleDrag.id)
+
+      if (!el) return
+
+      if (!handleDrag.moved) {
+        storyEditor.undo.push(handleDrag.snap)
+
+        if (storyEditor.undo.length > 40) storyEditor.undo.shift()
+
+        storyEditor.redo.length = 0
+
+        handleDrag.moved = true
+      }
+
+      if (handleDrag.mode === "scale") {
+        const d = Math.hypot(
+          ev.clientX - handleDrag.cx,
+          ev.clientY - handleDrag.cy,
+        )
+
+        el.scale = clampNum(
+          handleDrag.startScale * (d / handleDrag.startDist),
+
+          0.4,
+
+          4,
+
+          1,
+        )
+      } else {
+        const a =
+          (Math.atan2(ev.clientY - handleDrag.cy, ev.clientX - handleDrag.cx) *
+            180) /
+          Math.PI
+
+        el.rot = Math.max(
+          -180,
+
+          Math.min(180, handleDrag.startRot + (a - handleDrag.startAngle)),
+        )
+      }
+
+      paintEl(el)
+
+      return
+    }
+
+    if (drag) {
+      const el = storyEditor.elements.find((e) => e.id === drag.id)
+
+      if (!el) return
+
+      const pos = stagePos(ev)
+
+      const dx = pos.x - drag.sx
+
+      const dy = pos.y - drag.sy
+
+      if (!drag.moved && Math.hypot(dx, dy) < 1.5) return
+
+      pushDragUndo()
+
+      el.x = Math.max(STORY_SAFE.x[0], Math.min(STORY_SAFE.x[1], drag.ox + dx))
+
+      el.y = Math.max(STORY_SAFE.y[0], Math.min(STORY_SAFE.y[1], drag.oy + dy))
+
+      paintEl(el)
+    }
+  })
+
+  const finishPointer = (ev) => {
+    pointers.delete(ev.pointerId)
+
+    if (pinch && pointers.size < 2) {
+      // Single leftover finger: drop the gesture (selection stays put).
+
+      pinch = null
+    }
+
+    if (drag && !drag.moved && drag.wasSelected) {
+      // Tap on an already-selected layer: focus the text field for editing.
+
+      requestAnimationFrame(() => $("#st-el-text")?.focus())
+    }
+
+    drag = null
+
+    handleDrag = null
+  }
+
+  stage.addEventListener("pointerup", finishPointer)
+
+  stage.addEventListener("pointercancel", finishPointer)
+
+  // Wheel (desktop): scale the selected layer — handy beside the handles.
+
+  stage.addEventListener(
+    "wheel",
+
+    (ev) => {
+      const span = ev.target?.closest?.("[data-el-id]")
+
+      if (!span) return
+
+      const el = storyEditor.elements.find((e) => e.id === span.dataset.elId)
+
+      if (!el) return
+
+      ev.preventDefault()
+
+      pushStoryUndo()
+
+      el.scale = clampNum(el.scale * (ev.deltaY < 0 ? 1.05 : 0.95), 0.4, 4, 1)
+
+      paintEl(el)
+    },
+
+    { passive: false },
+  )
 }
 
 // --- Music picker (library only — search, audition, clip range, volume) ---------
 
 let storyMusicPickerEl = null
 
+// Preview object URL for a device-imported file auditioned inside the
+
+// picker — revoked whenever the picker closes (Part 24: no orphan URLs).
+
+let storyPickerDeviceUrl = null
+
 function closeStoryMusicPicker() {
   stopStoryPreviewAudio()
+
+  if (storyPickerDeviceUrl) {
+    try {
+      URL.revokeObjectURL(storyPickerDeviceUrl)
+    } catch {
+      /* ignore */
+    }
+
+    storyPickerDeviceUrl = null
+  }
 
   if (storyMusicPickerEl) storyMusicPickerEl.remove()
 
@@ -7821,42 +9100,233 @@ function storyMusicPickerKey(e) {
   if (e.key === "Escape") closeStoryMusicPicker()
 }
 
+// Deterministic stand-in waveform when decodeAudioData isn't available —
+// keeps the trim UI usable everywhere without shipping an audio decoder.
+
+function storyProceduralPeaks(seedStr, n = 120) {
+  let h = 2166136261
+  const s = String(seedStr || "track")
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  const rnd = () => {
+    h ^= h << 13
+    h ^= h >>> 17
+    h ^= h << 5
+    return ((h >>> 0) % 10000) / 10000
+  }
+  return Array.from({ length: n }, (_, i) =>
+    Math.max(
+      0.08,
+      0.35 +
+        0.6 * Math.abs(Math.sin(i / 9 + rnd() * 3)) * (0.55 + 0.45 * rnd()),
+    ),
+  )
+}
+
+// One pass: peaks (via decodeAudioData) + duration; graceful fallbacks to a
+// metadata probe and procedural peaks so trimming always has a timeline.
+
+async function storyAnalyzeAudio(blob, seed) {
+  const out = { peaks: storyProceduralPeaks(seed), duration: 0, decoded: false }
+
+  if (blob) {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext
+      if (AC) {
+        const ac = new AC()
+        const buf = await ac.decodeAudioData(await blob.arrayBuffer())
+        out.duration = Number(buf.duration) || 0
+        const n = out.peaks.length
+        const ch = buf.getChannelData(0)
+        const step = Math.max(1, Math.floor(ch.length / n))
+        let max = 0.0001
+        const raw = []
+        for (let i = 0; i < n; i++) {
+          let m = 0
+          const s0 = i * step
+          for (let j = 0; j < step; j += 4) {
+            const v = Math.abs(ch[s0 + j] || 0)
+            if (v > m) m = v
+          }
+          if (m > max) max = m
+          raw.push(m)
+        }
+        out.peaks = raw.map((v) => Math.max(0.05, v / max))
+        out.decoded = true
+        try {
+          ac.close()
+        } catch {
+          /* ignore */
+        }
+      }
+    } catch {
+      /* decode unsupported/corrupt — procedural peaks stand */
+    }
+  }
+
+  if (!out.duration && blob) {
+    out.duration = await new Promise((resolve) => {
+      let done = false
+      let url = ""
+      try {
+        url = URL.createObjectURL(blob)
+      } catch {
+        resolve(0)
+        return
+      }
+      const a = new Audio()
+      const fin = (v) => {
+        if (done) return
+        done = true
+        try {
+          URL.revokeObjectURL(url)
+        } catch {
+          /* ignore */
+        }
+        resolve(v)
+      }
+      a.addEventListener("loadedmetadata", () => fin(Number(a.duration) || 0))
+      a.addEventListener("error", () => fin(0))
+      setTimeout(() => fin(Number(a.duration) || 0), 4000)
+      a.src = url
+    })
+  }
+
+  return out
+}
+
+// Stable per-file key used for the session upload cache and the storage
+// path seed (sanitised here, backend sanitises again).
+
+function storyMusicFingerprint(file) {
+  const base = String(file?.name || "track").replace(/\.[^.]+$/, "")
+  return `${base.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 40)}_${file?.size || 0}_${file?.lastModified || 0}`
+}
+
 function openStoryMusicPicker() {
   closeStoryMusicPicker()
 
-  const songs = (state.songs || []).filter((s) => !s.missing)
+  // Library rows are sorted A→Z by title (Part 7: search AND sort).
+
+  const songs = (state.songs || [])
+
+    .filter((s) => !s.missing)
+
+    .sort((a, b) =>
+      String(a.title || a.fileName || "").localeCompare(
+        String(b.title || b.fileName || ""),
+
+        undefined,
+
+        { sensitivity: "base" },
+      ),
+    )
 
   const ed = storyEditor
 
-  const draft = ed.music
-    ? { ...ed.music }
-    : {
-        songId: null,
-        title: "",
-        artist: "",
-        start: 0,
-        end: Math.min(STORY_MUSIC_CLIP_MAX, 15),
-        vol: 0.7,
-        duration: 0,
+  const attached = ed.music ? { ...ed.music } : null
+
+  // Selection: { source: "library"|"device", id?/file?, title, artist,
+  // duration, fingerprint? } — `sel` null until a track is chosen.
+  let sel = null
+
+  let cur = {
+    start: 0,
+    end: Math.min(STORY_MUSIC_CLIP_MAX, 15),
+    vol: Number.isFinite(attached?.vol) ? attached.vol : 0.7,
+  }
+
+  let peaks = null
+
+  let analyzing = false
+
+  // Restore the attached clip when reopening.
+  if (attached?.source === "library" && attached.songId) {
+    const s = songs.find((x) => x.id === attached.songId) || null
+    if (s) {
+      sel = {
+        source: "library",
+        id: s.id,
+        title: s.title || "",
+        artist: s.artist || "",
+        duration: Number(s.duration) || 0,
       }
+      cur.start = Math.max(0, Number(attached.start) || 0)
+      cur.end = Math.max(
+        cur.start + STORY_MUSIC_CLIP_MIN,
+        Number(attached.end) || 0,
+      )
+      if (sel.duration) cur.end = Math.min(cur.end, sel.duration)
+    }
+  } else if (attached?.source === "device" && attached.file) {
+    sel = {
+      source: "device",
+      file: attached.file,
+      fingerprint: attached.fingerprint || storyMusicFingerprint(attached.file),
+      title: attached.title || attached.file.name || "",
+      artist: attached.artist || "",
+      duration: Number(attached.duration) || 0,
+    }
+    cur.start = Math.max(0, Number(attached.start) || 0)
+    cur.end = Math.max(
+      cur.start + STORY_MUSIC_CLIP_MIN,
+      Number(attached.end) || 0,
+    )
+  }
+
+  let tab = sel?.source === "device" ? "import" : "library"
 
   const ov = document.createElement("div")
 
   ov.className = "st-music-ov"
 
-  ov.innerHTML = `<div class="st-music-modal" role="dialog" aria-label="Add music">
-    <div class="st-music-head"><h3>${sicon("music")} Add music</h3><button type="button" class="ghost" data-smp-close aria-label="Close music picker">✕</button></div>
-    <div class="song-search"><span class="song-search-ico" aria-hidden="true">${sicon("search")}</span><input class="input" data-smp-q placeholder="Search your songs…" aria-label="Search your songs" autocomplete="off"></div>
-    <div class="st-music-list" data-smp-list role="listbox" aria-label="Your songs">${
-      songs.length
-        ? songs.map((s) => musicPickRow(s, draft.songId === s.id)).join("")
-        : `<p class="muted" style="padding:16px">No songs yet — import tracks in Sound studio first.</p>`
-    }</div>
-    <div class="st-music-clip" data-smp-clip hidden>
-      <div class="st-music-now"><strong data-smp-title>Select a track</strong><button type="button" class="ghost" data-smp-play aria-label="Preview selected track">${sicon("play")} Preview</button></div>
-      <label class="field-label">Clip start <span data-smp-start-lab>0s</span><input type="range" data-smp-start min="0" max="0" value="0" aria-label="Clip start second"></label>
-      <label class="field-label">Clip length <span data-smp-len-lab>15s</span><input type="range" data-smp-len min="5" max="30" value="15" aria-label="Clip length seconds"></label>
-      <label class="field-label">Volume <span data-smp-vol-lab>70%</span><input type="range" data-smp-vol min="0" max="100" value="70" aria-label="Music volume percent"></label>
+  ov.innerHTML = `<div class="st-music-modal" role="dialog" aria-modal="true" aria-label="Add music">
+    <div class="st-music-head"><h3>${sicon("music")} Add music</h3><button type="button" class="ghost" data-smp-close aria-label="Close music picker">${sicon("x")}</button></div>
+    <div class="st-music-tabs" role="tablist" aria-label="Music source">
+      <button type="button" class="st-music-tab" role="tab" data-smp-tab="library" aria-selected="false">Library</button>
+      <button type="button" class="st-music-tab" role="tab" data-smp-tab="import" aria-selected="false">Import</button>
+    </div>
+    <div class="st-music-body">
+      <div class="st-music-pane" data-smp-pane="library">
+        <div class="song-search"><span class="song-search-ico" aria-hidden="true">${sicon("search")}</span><input class="input" data-smp-q placeholder="Search your songs…" aria-label="Search your songs" autocomplete="off"></div>
+        <div class="st-music-list" data-smp-list role="listbox" aria-label="Your songs">${
+          songs.length
+            ? songs
+                .map((s) =>
+                  musicPickRow(s, sel?.source === "library" && sel.id === s.id),
+                )
+                .join("")
+            : `<p class="muted" style="padding:16px">No songs yet — import tracks in Sound studio, or use the Import tab.</p>`
+        }</div>
+      </div>
+      <div class="st-music-pane" data-smp-pane="import" hidden>
+        <div class="st-import-zone" data-smp-import-zone>
+          ${
+            sel?.source === "device"
+              ? `<div class="st-import-file"><span class="st-music-ico">${sicon("music")}</span><span class="st-music-meta"><strong>${esc(sel.file?.name || "Track")}</strong><small>${Math.max(1, Math.round((sel.file?.size || 0) / 1024))} KB · one-time use</small></span><button type="button" class="ghost" data-smp-import-change>Change</button><button type="button" class="ghost" data-smp-import-clear>Remove</button></div>`
+              : `<button type="button" class="st-media-drop" data-smp-import-pick><span>${sicon("music")}</span><strong>Choose an audio file</strong><small>MP3, WAV, OGG, M4A, FLAC · max 30 MB</small></button>`
+          }
+        </div>
+        <input type="file" data-smp-file hidden accept="audio/*,.mp3,.wav,.ogg,.oga,.m4a,.aac,.flac,.opus,.webm" aria-label="Choose an audio file">
+        <p class="muted st-import-note">One-time use — played only on this status. The file never enters your Sound studio library.</p>
+      </div>
+      <div class="st-music-clip" data-smp-clip hidden>
+        <div class="st-music-now">
+          <strong data-smp-title>Select a track</strong>
+          <span class="st-music-now-ctl"><span class="muted" data-smp-clock>0:00 – 0:15</span><button type="button" class="ghost" data-smp-play aria-label="Preview selected track">${sicon("play")} Preview</button></span>
+        </div>
+        <div class="smp-wave" data-smp-wave aria-label="Clip range">
+          <div class="smp-wave-bars" data-smp-bars aria-hidden="true"></div>
+          <div class="smp-wave-sel" data-smp-sel aria-hidden="true"></div>
+          <div class="smp-wave-play" data-smp-playhead hidden aria-hidden="true"></div>
+          <i class="smp-wave-h s" data-smp-hs role="slider" tabindex="0" aria-label="Clip start handle"></i>
+          <i class="smp-wave-h e" data-smp-he role="slider" tabindex="0" aria-label="Clip end handle"></i>
+        </div>
+        <div class="smp-wave-labs"><span data-smp-lstart>0:00</span><span data-smp-lend>0:15</span></div>
+        <label class="st-range-row"><span>Volume</span><input type="range" data-smp-vol min="0" max="100" value="${Math.round(cur.vol * 100)}" aria-label="Music volume percent"></label>
+      </div>
     </div>
     <div class="st-music-foot">
       <button type="button" class="ghost" data-smp-cancel>Cancel</button>
@@ -7878,136 +9348,185 @@ function openStoryMusicPicker() {
 
   const titleEl = ov.querySelector("[data-smp-title]")
 
-  const startIn = ov.querySelector("[data-smp-start]")
+  const clockEl = ov.querySelector("[data-smp-clock]")
 
-  const lenIn = ov.querySelector("[data-smp-len]")
+  const wave = ov.querySelector("[data-smp-wave]")
+
+  const bars = ov.querySelector("[data-smp-bars]")
+
+  const selBox = ov.querySelector("[data-smp-sel]")
+
+  const playhead = ov.querySelector("[data-smp-playhead]")
+
+  const hs = ov.querySelector("[data-smp-hs]")
+
+  const he = ov.querySelector("[data-smp-he]")
+
+  const labStart = ov.querySelector("[data-smp-lstart]")
+
+  const labEnd = ov.querySelector("[data-smp-lend]")
 
   const volIn = ov.querySelector("[data-smp-vol]")
 
-  const startLab = ov.querySelector("[data-smp-start-lab]")
-
-  const lenLab = ov.querySelector("[data-smp-len-lab]")
-
-  const volLab = ov.querySelector("[data-smp-vol-lab]")
-
   const playBtn = ov.querySelector("[data-smp-play]")
 
-  let sel = draft.songId
-    ? songs.find((s) => s.id === draft.songId) || null
-    : null
+  const fileIn = ov.querySelector("[data-smp-file]")
 
-  let cur = { ...draft }
+  const paneLib = ov.querySelector('[data-smp-pane="library"]')
 
-  const paintClip = () => {
-    if (!sel) {
-      clip.hidden = true
+  const paneImp = ov.querySelector('[data-smp-pane="import"]')
 
-      attachBtn.disabled = true
+  const tabBtns = [...ov.querySelectorAll("[data-smp-tab]")]
 
-      return
-    }
+  // Clip window: 5–30 s, always inside the timeline (unknown duration maps
+  // the timeline to the 30 s horizon so handles still work).
 
-    clip.hidden = false
+  const timeline = () => sel?.duration || STORY_MUSIC_CLIP_MAX
 
-    attachBtn.disabled = false
-
-    titleEl.textContent = sel.title || "Track"
-
-    const dur = Math.max(
-      Number(sel.duration) || 0,
-      cur.start + STORY_MUSIC_CLIP_MIN,
-      1,
+  const clampClip = () => {
+    const d = timeline()
+    const minLen = Math.min(STORY_MUSIC_CLIP_MIN, d)
+    cur.start = Math.max(0, Math.min(cur.start, Math.max(0, d - minLen)))
+    let len = cur.end - cur.start
+    len = Math.max(
+      minLen,
+      Math.min(Math.min(STORY_MUSIC_CLIP_MAX, d - cur.start), len || minLen),
     )
-
-    startIn.max = String(Math.max(0, Math.floor(dur - STORY_MUSIC_CLIP_MIN)))
-
-    if (Number(startIn.value) > Number(startIn.max)) startIn.value = startIn.max
-
-    cur.start = Number(startIn.value) || 0
-
-    lenIn.min = String(STORY_MUSIC_CLIP_MIN)
-
-    lenIn.max = String(
-      Math.min(
-        STORY_MUSIC_CLIP_MAX,
-        Math.max(STORY_MUSIC_CLIP_MIN, Math.floor(dur - cur.start)),
-      ),
-    )
-
-    if (Number(lenIn.value) > Number(lenIn.max)) lenIn.value = lenIn.max
-
-    cur.end = cur.start + (Number(lenIn.value) || STORY_MUSIC_CLIP_MIN)
-
-    cur.vol = (Number(volIn.value) || 70) / 100
-
-    startLab.textContent = `${cur.start}s`
-
-    lenLab.textContent = `${cur.end - cur.start}s`
-
-    volLab.textContent = `${Math.round(cur.vol * 100)}%`
-
-    startIn.setAttribute("aria-valuetext", `${cur.start} seconds`)
-
-    lenIn.setAttribute("aria-valuetext", `${cur.end - cur.start} seconds`)
-
-    volIn.setAttribute("aria-valuetext", `${Math.round(cur.vol * 100)} percent`)
+    if (d - cur.start < STORY_MUSIC_CLIP_MAX) len = Math.min(len, d - cur.start)
+    cur.end = cur.start + Math.max(minLen, len)
+    if (cur.end > d) cur.end = d
+    if (cur.end - cur.start < minLen) cur.start = Math.max(0, cur.end - minLen)
   }
 
-  const selectSong = async (song) => {
+  const resetPreview = () => {
     stopStoryPreviewAudio()
-
-    sel = song
-
-    cur = {
-      songId: song.id,
-
-      title: song.title || "",
-
-      artist: song.artist || "",
-
-      start: 0,
-
-      end: Math.min(
-        STORY_MUSIC_CLIP_MAX,
-        Math.max(STORY_MUSIC_CLIP_MIN, Number(song.duration) || 15),
-      ),
-
-      vol: cur.vol ?? 0.7,
-
-      duration: Number(song.duration) || 0,
+    if (storyPickerDeviceUrl) {
+      try {
+        URL.revokeObjectURL(storyPickerDeviceUrl)
+      } catch {
+        /* ignore */
+      }
+      storyPickerDeviceUrl = null
     }
+    playBtn.innerHTML = `${sicon("play")} Preview`
+    playhead.hidden = true
+  }
 
-    startIn.value = "0"
+  const paintBars = () => {
+    const p = peaks || storyProceduralPeaks(sel?.title || sel?.id || "x")
+    bars.innerHTML = p
+      .map((v) => `<i style="height:${(v * 100).toFixed(1)}%"></i>`)
+      .join("")
+  }
 
-    lenIn.value = String(cur.end - cur.start)
-
+  const paintWave = () => {
+    if (!sel) {
+      clip.hidden = true
+      attachBtn.disabled = true
+      return
+    }
+    clip.hidden = false
+    attachBtn.disabled = analyzing
+    titleEl.textContent = sel.title || sel.file?.name || "Track"
+    clampClip()
+    const d = timeline()
+    const sPct = (cur.start / d) * 100
+    const ePct = (cur.end / d) * 100
+    selBox.style.left = `${sPct}%`
+    selBox.style.width = `${Math.max(1, ePct - sPct)}%`
+    hs.style.left = `${sPct}%`
+    he.style.left = `${ePct}%`
+    labStart.textContent = fmtClock(cur.start)
+    labEnd.textContent = fmtClock(cur.end)
+    clockEl.textContent = `${fmtClock(cur.start)} – ${fmtClock(cur.end)}`
+    hs.setAttribute("aria-valuetext", `starts ${fmtClock(cur.start)}`)
+    he.setAttribute("aria-valuetext", `ends ${fmtClock(cur.end)}`)
     volIn.value = String(Math.round(cur.vol * 100))
+    if (analyzing) titleEl.textContent = `${sel.title || "Track"} · analyzing…`
+  }
 
-    paintClip()
+  const loadWave = async () => {
+    if (!sel) return
+    analyzing = true
+    paintWave()
+    let blob = null
+    if (sel.source === "library")
+      blob = await songBlobGet(sel.id).catch(() => null)
+    else blob = sel.file || null
+    const an = await storyAnalyzeAudio(
+      blob,
+      sel.title || sel.id || sel.fingerprint || "",
+    )
+    // Selection may have moved on while decoding.
+    if (!sel) return
+    if (sel.source === "library" && !sel.duration)
+      sel.duration =
+        Number(songs.find((s) => s.id === sel.id)?.duration) || an.duration
+    else sel.duration = sel.duration || an.duration
+    peaks = an.peaks
+    analyzing = false
+    paintBars()
+    paintWave()
+  }
 
+  const selectTrack = (next) => {
+    resetPreview()
+    sel = next
+    peaks = null
+    cur.start = 0
+    cur.end = Math.min(
+      STORY_MUSIC_CLIP_MAX,
+      Math.max(STORY_MUSIC_CLIP_MIN, next.duration || 15),
+    )
     $$("[data-smp-song]", list).forEach((r) => {
-      const on = r.dataset.smpSong === song.id
-
+      const on = next.source === "library" && r.dataset.smpSong === next.id
       r.classList.toggle("on", on)
-
       r.setAttribute("aria-selected", on ? "true" : "false")
     })
+    importZonePaint()
+    paintWave()
+    loadWave()
+  }
+
+  const importZonePaint = () => {
+    const zone = ov.querySelector("[data-smp-import-zone]")
+    if (!zone) return
+    if (sel?.source === "device") {
+      zone.innerHTML = `<div class="st-import-file"><span class="st-music-ico">${sicon("music")}</span><span class="st-music-meta"><strong>${esc(sel.file?.name || "Track")}</strong><small>${Math.max(1, Math.round((sel.file?.size || 0) / 1024))} KB · one-time use</small></span><button type="button" class="ghost" data-smp-import-change>Change</button><button type="button" class="ghost" data-smp-import-clear>Remove</button></div>`
+      zone.querySelector("[data-smp-import-change]").onclick = () =>
+        fileIn.click()
+      zone.querySelector("[data-smp-import-clear]").onclick = () => {
+        resetPreview()
+        sel = null
+        peaks = null
+        fileIn.value = ""
+        importZonePaint()
+        paintWave()
+      }
+    } else {
+      zone.innerHTML = `<button type="button" class="st-media-drop" data-smp-import-pick><span>${sicon("music")}</span><strong>Choose an audio file</strong><small>MP3, WAV, OGG, M4A, FLAC · max 30 MB</small></button>`
+      zone.querySelector("[data-smp-import-pick]").onclick = () =>
+        fileIn.click()
+    }
   }
 
   const playPreview = async () => {
     if (!sel) return
 
     if (storyPreviewAudio && !storyPreviewAudio.paused) {
-      stopStoryPreviewAudio()
-
-      playBtn.innerHTML = `${sicon("play")} Preview`
-
+      resetPreview()
       return
     }
 
-    const url = await storyMusicObjectUrl(sel.id)
+    let url = null
+    if (sel.source === "library") url = await storyMusicObjectUrl(sel.id)
+    else {
+      if (!storyPickerDeviceUrl && sel.file)
+        storyPickerDeviceUrl = URL.createObjectURL(sel.file)
+      url = storyPickerDeviceUrl
+    }
 
-    if (!url) return notify("That track's audio isn't on this device")
+    if (!url) return notify("That track's audio isn't available on this device")
 
     stopStoryPreviewAudio()
 
@@ -8019,73 +9538,72 @@ function openStoryMusicPicker() {
 
     audio.currentTime = cur.start || 0
 
+    const d = timeline()
+
     const stopAt = () => {
+      playhead.hidden = false
+      playhead.style.left = `${Math.min(100, (audio.currentTime / d) * 100)}%`
       if (audio.currentTime >= (cur.end || cur.start + 15)) {
         audio.pause()
-
         playBtn.innerHTML = `${sicon("play")} Preview`
       }
     }
 
     audio.addEventListener("timeupdate", stopAt)
 
-    audio.addEventListener("ended", () => {
+    const resetBtn = () => {
       playBtn.innerHTML = `${sicon("play")} Preview`
-    })
+    }
+
+    audio.addEventListener("ended", resetBtn)
+    audio.addEventListener("pause", resetBtn)
 
     try {
       await audio.play()
-
       playBtn.innerHTML = `${sicon("pause")} Playing…`
     } catch {
-      playBtn.innerHTML = `${sicon("play")} Preview`
+      resetBtn()
     }
   }
 
-  ov.querySelector("[data-smp-close]").onclick = closeStoryMusicPicker
+  // --- tabs ---
 
-  ov.querySelector("[data-smp-cancel]").onclick = closeStoryMusicPicker
-
-  ov.addEventListener("click", (e) => {
-    if (e.target === ov) closeStoryMusicPicker()
-  })
-
-  attachBtn.onclick = () => {
-    if (!sel) return
-
-    paintClip()
-
-    stopStoryPreviewAudio()
-
-    storyEditor.music = {
-      ...cur,
-      songId: sel.id,
-      title: sel.title || "",
-      artist: sel.artist || "",
-    }
-
-    closeStoryMusicPicker()
-
-    renderCommunity()
+  const setTab = (next) => {
+    tab = next === "import" ? "import" : "library"
+    tabBtns.forEach((b) => {
+      const on = b.dataset.smpTab === tab
+      b.classList.toggle("on", on)
+      b.setAttribute("aria-selected", on ? "true" : "false")
+    })
+    paneLib.hidden = tab !== "library"
+    paneImp.hidden = tab !== "import"
+    if (tab === "library") ov.querySelector("[data-smp-q]")?.focus()
   }
 
-  playBtn.onclick = playPreview
+  tabBtns.forEach((b) => (b.onclick = () => setTab(b.dataset.smpTab)))
 
-  startIn.oninput = paintClip
+  // --- library list ---
 
-  lenIn.oninput = paintClip
-
-  volIn.oninput = () => {
-    paintClip()
-
-    if (storyPreviewAudio) storyPreviewAudio.volume = cur.vol ?? 0.7
+  const bindRows = () => {
+    $$("[data-smp-song]", list).forEach((row) => {
+      row.onclick = () => {
+        const song = songs.find((s) => s.id === row.dataset.smpSong)
+        if (!song) return
+        selectTrack({
+          source: "library",
+          id: song.id,
+          title: song.title || "",
+          artist: song.artist || "",
+          duration: Number(song.duration) || 0,
+        })
+      }
+    })
   }
 
   const q = ov.querySelector("[data-smp-q]")
 
   q.addEventListener("input", () => {
     const term = q.value.trim().toLowerCase()
-
     const hits = songs.filter(
       (s) =>
         !term ||
@@ -8099,32 +9617,207 @@ function openStoryMusicPicker() {
           .toLowerCase()
           .includes(term),
     )
-
     list.innerHTML = hits.length
-      ? hits.map((s) => musicPickRow(s, sel?.id === s.id)).join("")
+      ? hits
+          .map((s) =>
+            musicPickRow(s, sel?.source === "library" && sel.id === s.id),
+          )
+          .join("")
       : `<p class="muted" style="padding:16px">No matches.</p>`
+    bindRows()
+  })
 
-    $$("[data-smp-song]", list).forEach((row) => {
-      row.onclick = () => {
-        const song = songs.find((s) => s.id === row.dataset.smpSong)
+  bindRows()
 
-        if (song) selectSong(song)
-      }
+  // --- device import ---
+
+  fileIn.addEventListener("change", () => {
+    const picked = fileIn.files?.[0]
+    fileIn.value = ""
+    if (!picked) return
+    const problem = validateAudioFile(picked)
+    if (problem) return notify(problem)
+    selectTrack({
+      source: "device",
+      file: picked,
+      fingerprint: storyMusicFingerprint(picked),
+      title: String(picked.name || "").replace(/\.[^.]+$/, ""),
+      artist: "",
+      duration: 0,
     })
   })
 
-  $$("[data-smp-song]", list).forEach((row) => {
-    row.onclick = () => {
-      const song = songs.find((s) => s.id === row.dataset.smpSong)
+  importZonePaint()
 
-      if (song) selectSong(song)
+  // --- waveform trim ---
+
+  let hMode = null // "s" | "e"
+
+  const timeFromX = (clientX) => {
+    const r = wave.getBoundingClientRect()
+    const pct = r.width ? (clientX - r.left) / r.width : 0
+    return Math.max(0, Math.min(1, pct)) * timeline()
+  }
+
+  const moveHandle = (clientX) => {
+    if (!sel) return
+    const d = timeline()
+    const minLen = Math.min(STORY_MUSIC_CLIP_MIN, d)
+    const t = timeFromX(clientX)
+    if (hMode === "s") {
+      cur.start = Math.max(0, Math.min(t, cur.end - minLen))
+      cur.start = Math.min(cur.start, Math.max(0, d - minLen))
+      if (cur.end - cur.start > STORY_MUSIC_CLIP_MAX)
+        cur.start = cur.end - STORY_MUSIC_CLIP_MAX
+    } else if (hMode === "e") {
+      cur.end = Math.max(t, cur.start + minLen)
+      cur.end = Math.min(cur.end, d, cur.start + STORY_MUSIC_CLIP_MAX)
     }
+    paintWave()
+  }
+
+  hs.addEventListener("pointerdown", (e) => {
+    hMode = "s"
+    try {
+      hs.setPointerCapture(e.pointerId)
+    } catch {
+      /* ignore */
+    }
+    e.preventDefault()
+  })
+  he.addEventListener("pointerdown", (e) => {
+    hMode = "e"
+    try {
+      he.setPointerCapture(e.pointerId)
+    } catch {
+      /* ignore */
+    }
+    e.preventDefault()
+  })
+  hs.addEventListener(
+    "pointermove",
+    (e) => hMode === "s" && moveHandle(e.clientX),
+  )
+  he.addEventListener(
+    "pointermove",
+    (e) => hMode === "e" && moveHandle(e.clientX),
+  )
+  hs.addEventListener("pointerup", () => (hMode = null))
+  he.addEventListener("pointerup", () => (hMode = null))
+  hs.addEventListener("pointercancel", () => (hMode = null))
+  he.addEventListener("pointercancel", () => (hMode = null))
+
+  // Tap the bars to scrub the audition inside the clip.
+  wave.addEventListener("pointerdown", (e) => {
+    if (e.target === hs || e.target === he) return
+    if (!storyPreviewAudio) return
+    const t = timeFromX(e.clientX)
+    storyPreviewAudio.currentTime = Math.max(cur.start, Math.min(cur.end, t))
+    playhead.hidden = false
+    playhead.style.left = `${(t / timeline()) * 100}%`
   })
 
-  if (sel) selectSong(sel)
-  else paintClip()
+  // Keyboard trim (Part 15: clip controls stay accessible).
+  const nudge = (which, delta) => {
+    if (!sel) return
+    const d = timeline()
+    const minLen = Math.min(STORY_MUSIC_CLIP_MIN, d)
+    if (which === "s")
+      cur.start = Math.max(0, Math.min(cur.start + delta, cur.end - minLen))
+    else cur.end = Math.max(cur.start + minLen, Math.min(cur.end + delta, d))
+    paintWave()
+  }
+  hs.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowLeft") nudge("s", -1)
+    else if (e.key === "ArrowRight") nudge("s", 1)
+    else return
+    e.preventDefault()
+  })
+  he.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowLeft") nudge("e", -1)
+    else if (e.key === "ArrowRight") nudge("e", 1)
+    else return
+    e.preventDefault()
+  })
 
-  q.focus()
+  volIn.addEventListener("input", () => {
+    cur.vol = (Number(volIn.value) || 0) / 100
+    if (storyPreviewAudio) storyPreviewAudio.volume = cur.vol
+  })
+
+  // --- chrome ---
+
+  ov.querySelector("[data-smp-close]").onclick = closeStoryMusicPicker
+
+  ov.querySelector("[data-smp-cancel]").onclick = closeStoryMusicPicker
+
+  ov.addEventListener("click", (e) => {
+    if (e.target === ov) closeStoryMusicPicker()
+  })
+
+  playBtn.onclick = playPreview
+
+  attachBtn.onclick = () => {
+    if (!sel || analyzing) return
+
+    clampClip()
+
+    resetPreview()
+
+    const prev = storyEditor.music
+
+    const next = {
+      source: sel.source,
+      start: Math.round(cur.start * 10) / 10,
+      end: Math.round(cur.end * 10) / 10,
+      vol: cur.vol,
+      title: sel.title || "",
+      artist: sel.artist || "",
+      duration: sel.duration || 0,
+    }
+
+    if (sel.source === "library") {
+      next.songId = sel.id
+      // Keep an already-uploaded storage path for the same track.
+      if (prev?.source === "library" && prev.songId === sel.id && prev.path)
+        next.path = prev.path
+    } else {
+      // Replacing a different device file? Its object URL dies here (24).
+      if (prev && prev.source === "device" && prev.file !== sel.file)
+        clearStoryMusicDevice(prev)
+      next.file = sel.file
+      next.fingerprint = sel.fingerprint
+      next.imported = true
+      next.fileUrl =
+        prev &&
+        prev.source === "device" &&
+        prev.file === sel.file &&
+        prev.fileUrl
+          ? prev.fileUrl
+          : URL.createObjectURL(sel.file)
+      if (prev && prev.source === "device" && prev.file === sel.file) {
+        // Same file — the old URL was revoked above only if files differ.
+        if (!next.fileUrl) next.fileUrl = URL.createObjectURL(sel.file)
+      }
+    }
+
+    storyEditor.music = next
+
+    closeStoryMusicPicker()
+
+    renderCommunity()
+  }
+
+  // Initial paint: existing selection (with tabs/restore), else library tab.
+  setTab(tab)
+  if (sel) {
+    paintBars()
+    paintWave()
+    loadWave()
+  } else {
+    paintWave()
+    q.focus()
+  }
 }
 
 function musicPickRow(s, on) {
@@ -8307,6 +10000,17 @@ async function deleteCloudStatus(item) {
   await deleteStory(item.id).catch(() => {})
 
   if (item.mediaPath) await deleteStoryMedia(item.mediaPath).catch(() => {})
+
+  // Imported one-time music: its storage object belongs to this status only
+
+  // — remove it with the row (Part 26). Library tracks are shared cache
+
+  // paths and stay (other statuses/future posts may reference them).
+
+  const m = item.meta?.music
+
+  if (m?.path && (m.imported || m.source === "device"))
+    await deleteStoryMedia(m.path).catch(() => {})
 
   cloudStories = cloudStories.filter((x) => x.id !== item.id)
 }
@@ -8592,6 +10296,20 @@ function openStoryViewer(items, startIdx) {
 
     const capPos = storyCaptionClass(meta.captionPos || "bottom")
 
+    // Arranged text layers (meta.elements) render exactly as composed —
+
+    // same storyElInline as the editor (Part 23). Legacy rows fall back to
+
+    // the single caption / card body below.
+
+    const layerEls = Array.isArray(meta.elements)
+      ? meta.elements.filter((e) => e && typeof e === "object")
+      : []
+
+    const layersHtml = layerEls.length
+      ? storyElementsMarkup({ elements: layerEls }, false)
+      : ""
+
     const music = cloudStoryMusic(item)
 
     // Attached music: load signed URL, play the chosen clip alongside the
@@ -8708,16 +10426,30 @@ function openStoryViewer(items, startIdx) {
     if ((item.kind === "image" || item.kind === "video") && item.mediaPath) {
       const isVideo = item.kind === "video" || meta.kind === "video"
 
-      const captionHtml = capText
-        ? `<div class="sv-cap ${capPos}"><p>${esc(capText)}</p></div>`
-        : ""
+      const captionHtml = layerEls.length
+        ? ""
+        : capText
+          ? `<div class="sv-cap ${capPos}"><p>${esc(capText)}</p></div>`
+          : ""
 
       if (isVideo) {
-        box.innerHTML = `<div class="sv-photo-wrap sv-video-wrap">${captionHtml}<video class="sv-photo sv-video" playsinline controls preload="metadata" aria-label="Status video"></video></div>`
+        box.innerHTML = `<div class="sv-photo-wrap sv-video-wrap">${layersHtml}${captionHtml}<video class="sv-photo sv-video" playsinline controls preload="metadata" aria-label="Status video"></video></div>`
 
         const vid = box.querySelector("video")
 
         mediaVideo = vid
+
+        // Original sound level composed in the editor (Part 10).
+
+        const vvol = clampNum(meta.videoVol, 0, 1, 1)
+
+        try {
+          vid.volume = vvol
+
+          if (vvol === 0) vid.muted = true
+        } catch {
+          /* ignore */
+        }
 
         const gen = st.gen
 
@@ -8767,7 +10499,7 @@ function openStoryViewer(items, startIdx) {
 
         setTimeout(() => beginIfCurrent(12000), 12000)
       } else {
-        box.innerHTML = `<div class="sv-photo-wrap">${captionHtml}<img class="sv-photo" alt="Status photo"></div>`
+        box.innerHTML = `<div class="sv-photo-wrap">${layersHtml}${captionHtml}<img class="sv-photo" alt="Status photo"></div>`
 
         const img = box.querySelector("img")
 
@@ -8834,13 +10566,21 @@ function openStoryViewer(items, startIdx) {
 
       const useTheme = !meta.bgStyle // legacy rows keep the hashed gradient
 
+      // Arranged layers replace the plain paragraph visually; the text
+
+      // column stays available to screen readers (Part 23).
+
+      const cardInner = layersHtml
+        ? `<p class="sv-el-sr">${esc(body)}</p>${layersHtml}`
+        : `<p>${esc(body)}</p>`
+
       box.innerHTML = `<div class="sv-text-card${
-        useTheme ? "" : ` st-bg-${bg}`
-      } st-tsz-${sz} st-tst-${tst}"${
+        layersHtml ? " st-el-canvas" : ""
+      }${useTheme ? "" : ` st-bg-${bg}`} st-tsz-${sz} st-tst-${tst}"${
         useTheme
           ? ` style="background:${svTheme(item.id)};text-align:${al}"`
           : ` style="text-align:${al}"`
-      }><p>${esc(body)}</p><div class="sv-card-foot"><strong>${esc(item.mine ? "You" : "@" + item.handle)}</strong><small>${relTime(item.createdAt)}</small></div></div>`
+      }>${cardInner}<div class="sv-card-foot"><strong>${esc(item.mine ? "You" : "@" + item.handle)}</strong><small>${relTime(item.createdAt)}</small></div></div>`
 
       schedule(5000)
     }
@@ -14845,7 +16585,6 @@ function bindChat(root, id) {
         if (!msg) return
 
         const text = messageText(msg)
-
         ;(navigator.clipboard?.writeText(text) || Promise.reject())
 
           .then(() => toast("Message copied"))
@@ -17364,9 +19103,7 @@ function subscribePresenceFor(id) {
     { user_id: state.user.id, handle: state.profile.handle },
 
     (users) => {
-      const others = (users || []).filter(
-        (u) => u.user_id !== state.user.id,
-      )
+      const others = (users || []).filter((u) => u.user_id !== state.user.id)
 
       // Presence syncs fire on every track — including our own resubscribe
 
@@ -19185,9 +20922,7 @@ function renderCall() {
     }
   }
 
-  $$("[data-end]", call).forEach(
-    (b) => (b.onclick = () => teardownCall(true)),
-  )
+  $$("[data-end]", call).forEach((b) => (b.onclick = () => teardownCall(true)))
 
   $("[data-call-chat]", call).onclick = () => {
     if (!state.call) return

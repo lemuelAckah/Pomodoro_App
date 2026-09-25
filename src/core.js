@@ -656,6 +656,16 @@ function haltPersist() {
   persistHalted = true
 }
 
+// A failed "delete all my data" attempt must thaw writers again — otherwise
+
+// every later local save is silently dropped until the next reload while the
+
+// user is still signed in and using the app.
+
+function resumePersist() {
+  persistHalted = false
+}
+
 function isPersistHalted() {
   return persistHalted
 }
@@ -899,7 +909,6 @@ function refreshCoinDisplays() {
 function updateBarPadding() {
   try {
     let pad = 0
-
     ;["#now-playing", "#np-mini", ".mini-timer"].forEach((sel) => {
       const el = document.querySelector(sel)
 
@@ -2302,20 +2311,17 @@ function toast(text) {
 
     toastTimers.set(
       msg,
-      setTimeout(
-        () => {
-          toastTimers.delete(msg)
+      setTimeout(() => {
+        toastTimers.delete(msg)
 
-          try {
-            el.classList.add("toast-out")
+        try {
+          el.classList.add("toast-out")
 
-            setTimeout(() => el.remove(), 300)
-          } catch {
-            /* ignore */
-          }
-        },
-        2800,
-      ),
+          setTimeout(() => el.remove(), 300)
+        } catch {
+          /* ignore */
+        }
+      }, 2800),
     )
   } catch {
     /* non-DOM environment */
@@ -2376,18 +2382,15 @@ function setSyncStatus(mode) {
 
     pill.innerHTML = `<span class="sync-dot"></span><span>Synced</span>`
 
-    syncHideT = setTimeout(
-      () => {
-        try {
-          const p = document.querySelector("#sync-status")
+    syncHideT = setTimeout(() => {
+      try {
+        const p = document.querySelector("#sync-status")
 
-          if (p) p.hidden = true
-        } catch {
-          /* ignore */
-        }
-      },
-      2200,
-    )
+        if (p) p.hidden = true
+      } catch {
+        /* ignore */
+      }
+    }, 2200)
 
     return
   }
@@ -2415,22 +2418,19 @@ function setSyncStatus(mode) {
 
       // leave a stale "syncing" pill if nothing reports back.
 
-      syncHideT = setTimeout(
-        () => {
-          if (syncMode === "syncing") {
-            syncMode = "online"
+      syncHideT = setTimeout(() => {
+        if (syncMode === "syncing") {
+          syncMode = "online"
 
-            try {
-              const p = document.querySelector("#sync-status")
+          try {
+            const p = document.querySelector("#sync-status")
 
-              if (p) p.hidden = true
-            } catch {
-              /* ignore */
-            }
+            if (p) p.hidden = true
+          } catch {
+            /* ignore */
           }
-        },
-        4000,
-      )
+        }
+      }, 4000)
     }
   } catch {
     /* non-DOM environment */
@@ -2766,7 +2766,6 @@ function checkReminder() {
 
   try {
     let touched = false
-
     ;(state.events || []).forEach((e) => {
       if (!e.mine || e.reminded) return
 
@@ -2935,13 +2934,11 @@ function applyEquippedTheme() {
 
     root.dataset.night = night ? "1" : ""
   }
-
   ;["paper", "panel", "ink", "muted", "line"].forEach((k) => {
     if (nightBase) root.style.setProperty("--" + k, nightBase[k])
     else if (skin && skin[k]) root.style.setProperty("--" + k, skin[k])
     else root.style.removeProperty("--" + k)
   })
-
   ;["sage", "coral", "gold"].forEach((k) => {
     if (skin && skin[k]) root.style.setProperty("--" + k, skin[k])
     else root.style.removeProperty("--" + k)
@@ -3180,7 +3177,6 @@ function openWhatsNew() {
   overlay.id = "whatsnew-modal"
 
   overlay.innerHTML = `<div class="modal"><div class="eyebrow">What's new · v${WHATS_NEW.v}</div><h2>${WHATS_NEW.title}</h2><ul class="detail-steps">${WHATS_NEW.items.map((i) => `<li>${i}</li>`).join("")}</ul><div class="modal-actions" style="margin-top:16px"><button type="button" class="primary" data-whatsnew-close>Let's go</button></div></div>`
-
   ;($("#modal-root") || document.body).append(overlay)
 
   $("[data-whatsnew-close]", overlay).onclick = () => {
@@ -3605,6 +3601,7 @@ export {
   sicon,
   stripIcon,
   haltPersist,
+  resumePersist,
   isPersistHalted,
   collectUserSettings,
   applyUserSettings,
