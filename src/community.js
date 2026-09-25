@@ -6452,7 +6452,7 @@ const STORY_HL_COLORS = [
 
 // head-room for story chrome (top bar) and bottom controls.
 
-const STORY_SAFE = { x: [8, 92], y: [6, 94] }
+const STORY_SAFE = { x: [0, 100], y: [0, 100] }
 
 const STORY_ELEMENT_MAX = 8
 
@@ -6945,6 +6945,22 @@ function cloudStoryMusic(s) {
   const m = s?.meta?.music
 
   return m && m.path ? m : null
+}
+
+// Length of the chosen music section in ms (editor clips are 5–30s;
+
+// legacy rows are clamped to 3–60s). The viewer uses this as the status
+
+// dwell so the section plays to the very end before the status advances.
+
+function musicClipMs(m) {
+  const start = Math.max(0, Number(m?.start) || 0)
+
+  const raw = Number(m?.end)
+
+  const end = Number.isFinite(raw) && raw > start ? raw : start + 15
+
+  return Math.round(Math.min(Math.max(end - start, 3), 60) * 1000)
 }
 
 function storyCaptionClass(pos) {
@@ -8243,15 +8259,7 @@ function bindStoryTools(body) {
 
       id: `t${++storyElSeq}${Math.random().toString(36).slice(2, 6)}`,
 
-      y: clampNum(
-        src.y + 7,
-
-        STORY_SAFE.y[0],
-
-        STORY_SAFE.y[1],
-
-        src.y,
-      ),
+      y: clampNum(src.y + 7, STORY_SAFE.y[0], 93, src.y),
     }
 
     storyEditor.elements.push(copy)
@@ -8869,6 +8877,18 @@ function bindStoryCanvas(body) {
 
       const pos = stagePos(ev)
 
+      // Layer is center-anchored: keep its own box fully inside the canvas
+
+      // (letterbox/black areas included — the wrap spans the whole stage).
+
+      const rr = stageRect()
+
+      const sb = span.getBoundingClientRect()
+
+      const hw = rr.width > 0 ? Math.min((sb.width / rr.width) * 50, 49) : 0
+
+      const hh = rr.height > 0 ? Math.min((sb.height / rr.height) * 50, 49) : 0
+
       drag = {
         id,
 
@@ -8879,6 +8899,10 @@ function bindStoryCanvas(body) {
         ox: el.x,
 
         oy: el.y,
+
+        hw,
+
+        hh,
 
         moved: false,
 
@@ -9007,9 +9031,13 @@ function bindStoryCanvas(body) {
 
       pushDragUndo()
 
-      el.x = Math.max(STORY_SAFE.x[0], Math.min(STORY_SAFE.x[1], drag.ox + dx))
+      const hw = drag.hw || 0
 
-      el.y = Math.max(STORY_SAFE.y[0], Math.min(STORY_SAFE.y[1], drag.oy + dy))
+      const hh = drag.hh || 0
+
+      el.x = Math.max(hw, Math.min(100 - hw, drag.ox + dx))
+
+      el.y = Math.max(hh, Math.min(100 - hh, drag.oy + dy))
 
       paintEl(el)
     }
@@ -10100,6 +10128,30 @@ function openStoryViewer(items, startIdx) {
 
   ov.__svStopMedia = stopItemMedia
 
+  // Keep the footer music pill's icon in step with the whole-status
+
+  // pause/resume (the pill and the hold gesture share one state).
+
+  const syncMusicPill = () => {
+    const tgl = ov.querySelector("[data-sv-music-toggle]")
+
+    if (!tgl) return
+
+    const playing = !st.paused && !!mediaAudio && !mediaAudio.paused
+
+    const label = `${tgl.dataset.title || "Music"}${
+      tgl.dataset.artist ? ` · ${tgl.dataset.artist}` : ""
+    }`
+
+    tgl.innerHTML = `${sicon(playing ? "pause" : "play")} <span>${esc(label)}</span>`
+
+    tgl.setAttribute(
+      "aria-label",
+
+      playing ? "Pause status music" : "Play status music",
+    )
+  }
+
   const bar = () => ov.querySelector("[data-sv-progress]")
 
   const stage = () => ov.querySelector("[data-sv-stage]")
@@ -10189,6 +10241,8 @@ function openStoryViewer(items, startIdx) {
     } catch {
       /* ignore */
     }
+
+    syncMusicPill()
   }
 
   function resume() {
@@ -10219,6 +10273,8 @@ function openStoryViewer(items, startIdx) {
     } catch {
       /* ignore */
     }
+
+    syncMusicPill()
   }
 
   function markSeen(item) {
@@ -10312,6 +10368,114 @@ function openStoryViewer(items, startIdx) {
 
     const music = cloudStoryMusic(item)
 
+    // --- dwell gate: the chosen music section sets the status length ----
+
+    //
+
+    // When attached music has a clip, the status stays on screen until that
+
+    // section has played to its very end: photo/text dwell = clip length,
+
+    // video = the longer of video and clip so nothing gets cut off. Without
+
+    // music (or when it never starts) the plain timing applies — photo 7s,
+
+    // text 5s, video → media duration. The dwell is only armed once BOTH
+
+    // the media is ready and the clip has actually begun, so the selected
+
+    // section always plays in full, and the progress bar runs at exactly
+
+    // that speed.
+
+    const showGen = st.gen
+
+    const kindIsVideo = item.kind === "video" || meta.kind === "video"
+
+    const clipMs = music && signedIn() ? musicClipMs(music) : 0
+
+    let mediaReady = false
+
+    let mediaBaseMs = 0
+
+    let clipStarted = false
+
+    let clipFailed = false
+
+    let clipDone = !clipMs
+
+    let videoDone = !kindIsVideo
+
+    let clipWaitTimer = 0
+
+    let dwellArmed = false
+
+    const armDwell = () => {
+      if (dwellArmed || st.gen !== showGen || !mediaReady) return
+
+      if (!document.body.contains(ov)) return
+
+      if (clipMs && !clipDone && !clipStarted && !clipFailed) return
+
+      dwellArmed = true
+
+      if (clipWaitTimer) clearTimeout(clipWaitTimer)
+
+      let ms = mediaBaseMs
+
+      if (clipMs && !clipFailed)
+        ms = kindIsVideo
+          ? Math.max(videoDone ? 0 : mediaBaseMs, clipMs)
+          : clipMs
+
+      const wasPaused = st.paused
+
+      schedule(ms)
+
+      if (wasPaused) pause()
+    }
+
+    const mediaBegin = (ms) => {
+      if (st.gen !== showGen) return
+
+      mediaReady = true
+
+      mediaBaseMs = ms
+
+      armDwell()
+    }
+
+    const maybeAdvance = () => {
+      if (st.gen !== showGen || !mediaReady) return
+
+      if (!clipDone || !videoDone) return
+
+      clearTimer() // the clip/video finish beat the dwell timer
+
+      advance(1, true)
+    }
+
+    const clipGaveUp = () => {
+      if (st.gen !== showGen || clipStarted || clipFailed) return
+
+      if (!document.body.contains(ov)) return
+
+      clipFailed = true
+
+      clipDone = true
+
+      armDwell()
+    }
+
+    // Failsafe: if the clip never begins (slow URL, blocked autoplay,
+
+    // decode error), fall back to the plain dwell instead of stalling.
+
+    if (clipMs)
+      clipWaitTimer = setTimeout(() => {
+        if (st.gen === showGen && !clipStarted && !clipFailed) clipGaveUp()
+      }, 6000)
+
     // Attached music: load signed URL, play the chosen clip alongside the
 
     // photo/video/text card. Failures never block the story itself.
@@ -10321,14 +10485,14 @@ function openStoryViewer(items, startIdx) {
     if (musicPill) musicPill.innerHTML = ""
 
     if (music?.path && signedIn()) {
-      const clipMs = Math.max(
-        1000,
-        ((Number(music.end) || 0) - (Number(music.start) || 0)) * 1000,
-      )
-
       getStoryMediaUrl(music.path)
+
         .then(({ data, error } = {}) => {
-          if (error || !data?.signedUrl || !document.body.contains(ov)) return
+          if (error || !data?.signedUrl || !document.body.contains(ov)) {
+            clipGaveUp()
+
+            return
+          }
 
           if (st.items[st.idx]?.id !== item.id) return
 
@@ -10347,6 +10511,7 @@ function openStoryViewer(items, startIdx) {
               if (Number.isFinite(audio.duration) && audio.duration > 0)
                 audio.currentTime = Math.min(
                   start,
+
                   Math.max(0, audio.duration - 0.1),
                 )
               else audio.currentTime = start
@@ -10358,29 +10523,56 @@ function openStoryViewer(items, startIdx) {
           if (audio.readyState >= 1) seek()
           else audio.addEventListener("loadedmetadata", seek, { once: true })
 
+          const clipStartedNow = () => {
+            if (st.gen !== showGen || clipStarted || clipFailed) return
+
+            clipStarted = true
+
+            armDwell()
+
+            syncMusicPill()
+          }
+
+          audio.addEventListener("playing", clipStartedNow, { once: true })
+
+          audio.addEventListener("error", clipGaveUp, { once: true })
+
           const tick = () => {
+            if (st.gen !== showGen) return
+
             if (audio.currentTime >= end) {
+              // The chosen section played to its very end — hold the status
+
+              // there. Photo/text finish now; a longer video keeps going and
+
+              // maybeAdvance fires again when it ends.
+
+              clipDone = true
+
               try {
-                audio.currentTime = start
-                audio.play().catch(() => {})
+                audio.pause()
               } catch {
                 /* ignore */
               }
+
+              syncMusicPill()
+
+              maybeAdvance()
             }
           }
 
           audio.addEventListener("timeupdate", tick)
 
-          audio.play().catch(() => {
-            /* autoplay blocked — pill still shows */
-          })
+          audio.play().catch(clipGaveUp)
 
           if (
             musicPill &&
             document.body.contains(ov) &&
             st.items[st.idx]?.id === item.id
           ) {
-            musicPill.innerHTML = `<button type="button" class="sv-music-pill" data-sv-music-toggle aria-label="Pause status music" title="Pause music">${sicon("pause")} <span>${esc(music.title || "Music")}${
+            musicPill.innerHTML = `<button type="button" class="sv-music-pill" data-sv-music-toggle data-title="${esc(music.title || "Music")}"${
+              music.artist ? ` data-artist="${esc(music.artist)}"` : ""
+            } aria-label="Pause status music" title="Toggle status music">${sicon("pause")} <span>${esc(music.title || "Music")}${
               music.artist ? ` · ${esc(music.artist)}` : ""
             }</span></button>`
 
@@ -10392,36 +10584,23 @@ function openStoryViewer(items, startIdx) {
 
                 if (!mediaAudio) return
 
-                if (mediaAudio.paused) {
-                  mediaAudio.play().catch(() => {})
+                if (!mediaAudio.paused)
+                  pause() // playing → pause status + music
+                else if (st.paused)
+                  resume() // held → resume both
+                else mediaAudio.play().catch(() => {}) // blocked → start music only
 
-                  tgl.innerHTML = `${sicon("pause")} <span>${esc(music.title || "Music")}${
-                    music.artist ? ` · ${esc(music.artist)}` : ""
-                  }</span>`
-
-                  tgl.setAttribute("aria-label", "Pause status music")
-                } else {
-                  mediaAudio.pause()
-
-                  tgl.innerHTML = `${sicon("play")} <span>${esc(music.title || "Music")}${
-                    music.artist ? ` · ${esc(music.artist)}` : ""
-                  }</span>`
-
-                  tgl.setAttribute("aria-label", "Play status music")
-                }
+                syncMusicPill()
               }
           }
         })
-        .catch(() => {
-          /* ignore */
-        })
 
-      void clipMs
+        .catch(() => clipGaveUp())
     }
 
-    // Base dwell: photo 7s, text 5s, video → media duration (capped). Music
+    // Media dwell feeds the gate above: each branch reports its own timing
 
-    // clip never shortens the visual dwell below the media's own timing.
+    // (photo 7s, text 5s, video duration capped) and the gate schedules it.
 
     if ((item.kind === "image" || item.kind === "video") && item.mediaPath) {
       const isVideo = item.kind === "video" || meta.kind === "video"
@@ -10464,7 +10643,7 @@ function openStoryViewer(items, startIdx) {
 
           started = true
 
-          schedule(ms)
+          mediaBegin(ms)
         }
 
         vid.addEventListener("loadedmetadata", () => {
@@ -10479,7 +10658,11 @@ function openStoryViewer(items, startIdx) {
         })
 
         vid.addEventListener("ended", () => {
-          if (st.gen === gen) advance(1, true)
+          if (st.gen !== gen) return
+
+          videoDone = true
+
+          maybeAdvance()
         })
 
         vid.addEventListener("error", () => beginIfCurrent(5000))
@@ -10520,7 +10703,7 @@ function openStoryViewer(items, startIdx) {
 
           started = true
 
-          schedule(ms)
+          mediaBegin(ms)
         }
 
         img.addEventListener("load", () => beginIfCurrent(7000))
@@ -10582,7 +10765,7 @@ function openStoryViewer(items, startIdx) {
           : ` style="text-align:${al}"`
       }>${cardInner}<div class="sv-card-foot"><strong>${esc(item.mine ? "You" : "@" + item.handle)}</strong><small>${relTime(item.createdAt)}</small></div></div>`
 
-      schedule(5000)
+      mediaBegin(5000)
     }
 
     const prevBtns = [ov.querySelector("[data-sv-prev]")]

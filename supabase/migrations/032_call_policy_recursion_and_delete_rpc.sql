@@ -214,7 +214,7 @@ declare
   uid uuid := auth.uid();
   counts jsonb := '{}'::jsonb;
   n integer := 0;
-  step text[];
+  i integer := 0;
   steps text[][] := array[
     -- Children first. Scope per table mirrors the caller's own DELETE
     -- policies: creator/owner/initiator rows, self rows, and either side
@@ -264,13 +264,16 @@ begin
     return jsonb_build_object('ok', false, 'error', 'Not signed in');
   end if;
 
-  foreach step in array steps loop
+  -- Indexed loop (FOREACH rejects an array-typed loop variable, which
+  -- "step text[]" was — the whole RPC failed with "FOREACH loop variable
+  -- must not be of an array type" before deleting anything).
+  for i in 1 .. coalesce(array_length(steps, 1), 0) loop
     -- to_regclass guard keeps the wipe working on databases where a later
     -- table was never provisioned (statement is never planned when missing).
-    if to_regclass('public.' || step[1]) is not null then
-      execute format('delete from public.%I where %s', step[1], step[2]);
+    if to_regclass('public.' || steps[i][1]) is not null then
+      execute format('delete from public.%I where %s', steps[i][1], steps[i][2]);
       get diagnostics n = row_count;
-      counts := counts || jsonb_build_object(step[1], n);
+      counts := counts || jsonb_build_object(steps[i][1], n);
     end if;
   end loop;
 
