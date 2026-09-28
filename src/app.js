@@ -58,45 +58,20 @@ import {
   openFocusView,
 } from "./timer.js"
 
-import {
-  renderTechniques,
-  renderFavorites,
-  openTechniqueGuide,
-  techniques,
-  TECH_DETAILS,
-} from "./techniques.js"
+import { techniques, openTechniqueGuide } from "./tech-catalog.js"
 
 import { renderSounds } from "./audio.js"
 
-import {
-  renderCommunity,
-  renderCall,
-  pruneExpiredStories,
-  openStatus,
-  allGroups,
-  askDeleteStatus,
-  ensureIncomingCallSubscription,
-} from "./community.js"
+import { storeItems, normItem, migrateOwned, equippedAvatarEmoji } from "./store-catalog.js"
 
-import {
-  renderStore,
-  migrateOwned,
-  shopItems,
-  normItem,
-  storeItems,
-  closeGiftCenter,
-  equippedAvatarEmoji,
-} from "./store.js"
+import { syncBooksLibrary } from "./services/books-sync.js"
 
-import { renderLibrary, searchBooks, syncBooksLibrary } from "./books.js"
+import { renderFavorites } from "./tech-catalog.js"
 
 import {
   renderLanding,
   renderAccount,
   renderSettings,
-  openProfile,
-  openNotifications,
-  startTour,
 } from "./account.js"
 
 let searchHits = []
@@ -153,7 +128,7 @@ function closeSearch() {
   $("#search-palette")?.remove()
 }
 
-function collectSearch(q) {
+async function collectSearch(q) {
   const hits = []
   ;(state.tasks || []).forEach((t) => {
     if (!q || t.text.toLowerCase().includes(q))
@@ -185,30 +160,36 @@ function collectSearch(q) {
       })
   })
 
-  allGroups().forEach((g) => {
-    if (
-      !q ||
-      `${g.name} ${(g.tags || []).join(" ")}`.toLowerCase().includes(q)
-    ) {
-      const joined = get("sf-joined", []).includes(g.id)
+  // Groups live in the lazy community chunk — search degrades gracefully
+  // to the rest of the index while it loads (or if the load fails).
+  const communityMod = await import("./community.js").catch(() => null)
 
-      hits.push({
-        icon: g.emoji,
+  if (communityMod) {
+    communityMod.allGroups().forEach((g) => {
+      if (
+        !q ||
+        `${g.name} ${(g.tags || []).join(" ")}`.toLowerCase().includes(q)
+      ) {
+        const joined = get("sf-joined", []).includes(g.id)
 
-        title: g.name,
+        hits.push({
+          icon: g.emoji,
 
-        sub: joined ? "Group · open chat" : "Group · join",
+          title: g.name,
 
-        run: () => {
-          state.tab = "community"
+          sub: joined ? "Group · open chat" : "Group · join",
 
-          state.activeChat = joined ? g.id : null
+          run: () => {
+            state.tab = "community"
 
-          state.subtab = joined ? "messages" : "discover"
-        },
-      })
-    }
-  })
+            state.activeChat = joined ? g.id : null
+
+            state.subtab = joined ? "messages" : "discover"
+          },
+        })
+      }
+    })
+  }
   ;(state.friends || []).forEach((f) => {
     if (!q || f.username.toLowerCase().includes(q))
       hits.push({
@@ -247,53 +228,71 @@ function collectSearch(q) {
       })
   })
 
-  searchBooks(q).forEach((b) => {
-    hits.push({
-      icon: sicon("book"),
+  const booksMod = await import("./books.js").catch(() => null)
 
-      title: b.title,
+  if (booksMod) {
+    booksMod.searchBooks(q).forEach((b) => {
+      hits.push({
+        icon: sicon("book"),
 
-      sub: `Book · ${b.author || "Unknown author"}`,
+        title: b.title,
 
-      run: () => {
-        state.tab = "books"
+        sub: `Book · ${b.author || "Unknown author"}`,
 
-        state.bookView = { name: "details", id: b.id }
-      },
+        run: () => {
+          state.tab = "books"
+
+          state.bookView = { name: "details", id: b.id }
+        },
+      })
     })
-  })
+  }
 
   return hits.slice(0, 9)
 }
+
+let searchTick = 0
 
 function renderSearchResults(q) {
   const box = $("#search-results")
 
   if (!box) return
 
-  searchHits = collectSearch(q)
+  // collectSearch awaits lazy chunks; a token drops stale results if the
+  // user keeps typing or closes the palette mid-search.
+  const tick = ++searchTick
 
-  box.innerHTML = searchHits.length
-    ? searchHits
+  collectSearch(q).then((hits) => {
+    if (tick !== searchTick) return
 
-        .map(
-          (h, i) =>
-            `<button type="button" class="search-row" data-hit="${i}"><span class="search-ico">${h.icon}</span><span class="search-txt"><strong>${esc(h.title)}</strong><small>${esc(h.sub)}</small></span></button>`,
-        )
+    const live = $("#search-results")
 
-        .join("")
-    : '<p class="muted">Nothing found. Try “focus”, a subject, or a friend’s name.</p>'
+    if (!live) return
 
-  $$("[data-hit]", box).forEach(
-    (b) =>
-      (b.onclick = () => {
-        const hit = searchHits[+b.dataset.hit]
+    searchHits = hits
 
-        closeSearch()
+    live.innerHTML = hits.length
+      ? hits
 
-        if (hit) runSearchHit(hit)
-      }),
-  )
+          .map(
+            (h, i) =>
+              `<button type="button" class="search-row" data-hit="${i}"><span class="search-ico">${h.icon}</span><span class="search-txt"><strong>${esc(h.title)}</strong><small>${esc(h.sub)}</small></span></button>`,
+          )
+
+          .join("")
+      : '<p class="muted">Nothing found. Try “focus”, a subject, or a friend’s name.</p>'
+
+    $$("[data-hit]", live).forEach(
+      (b) =>
+        (b.onclick = () => {
+          const hit = searchHits[+b.dataset.hit]
+
+          closeSearch()
+
+          if (hit) runSearchHit(hit)
+        }),
+    )
+  })
 }
 
 function runSearchHit(hit) {
@@ -442,11 +441,13 @@ function bindShell() {
       }),
   )
 
-  $("[data-profile]").onclick = openProfile
+  $("[data-profile]").onclick = () =>
+    import("./account.js").then((m) => m.openProfile())
 
   $("[data-search]").onclick = openSearch
 
-  $("[data-notifications]").onclick = openNotifications
+  $("[data-notifications]").onclick = () =>
+    import("./account.js").then((m) => m.openNotifications())
 
   $("[data-theme-toggle]").onclick = toggleNight
 
@@ -473,6 +474,8 @@ function bindShell() {
   syncThemeToggle()
 }
 
+let renderToken = 0
+
 function render() {
   const view = $("#view")
 
@@ -480,18 +483,12 @@ function render() {
 
   view.innerHTML = `${["timer", "techniques", "sounds", "community", "books", "store", "favorites", "account", "settings"].map((tab) => `<section id="tab-${tab}" class="tab-panel ${state.tab === tab ? "active" : ""}"></section>`).join("")}`
 
-  const views = {
+  // Eager views render synchronously; the four heavy features are lazy
+  // route chunks pulled on first visit (and preloaded after boot).
+  const syncViews = {
     timer: renderTimer,
 
-    techniques: renderTechniques,
-
     sounds: renderSounds,
-
-    community: renderCommunity,
-
-    books: renderLibrary,
-
-    store: renderStore,
 
     favorites: renderFavorites,
 
@@ -500,33 +497,89 @@ function render() {
     settings: renderSettings,
   }
 
-  try {
-    ;(views[state.tab] || renderTimer)()
-  } catch (err) {
-    // One broken tab must never take down the whole app.
+  const lazyViews = {
+    techniques: () => import("./techniques.js").then((m) => m.renderTechniques),
 
-    console.error(`[studyflow] tab "${state.tab}" failed to render:`, err)
+    community: () => import("./community.js").then((m) => m.renderCommunity),
 
-    const panel = $(`#tab-${state.tab}`)
+    books: () => import("./books.js").then((m) => m.renderLibrary),
 
-    if (panel) {
-      panel.innerHTML = `<div class="card empty-state"><div class="emoji">${sicon("warn")}</div><h3>This section hit a snag</h3><p class="muted">${esc(err?.message || "Something went wrong here. The rest of the app is fine.")}</p><div style="display:flex;gap:8px;justify-content:center"><button type="button" class="ghost" data-tab-retry>Try again</button><button type="button" class="primary" data-tab-home>Back to Focus</button></div></div>`
+    store: () => import("./store.js").then((m) => m.renderStore),
+  }
 
-      $("[data-tab-retry]", panel).onclick = () => render()
+  const paintOverlays = () => {
+    if (state.call) {
+      import("./community.js")
+        .then((m) => m.renderCall())
+        .catch(() => {})
+    }
 
-      $("[data-tab-home]", panel).onclick = () => {
-        state.tab = "timer"
+    renderNowPlaying()
+  }
 
-        persist()
+  const runView = (draw) => {
+    try {
+      draw()
+    } catch (err) {
+      // One broken tab must never take down the whole app.
 
-        shell()
+      console.error(`[studyflow] tab "${state.tab}" failed to render:`, err)
+
+      const panel = $(`#tab-${state.tab}`)
+
+      if (panel) {
+        panel.innerHTML = `<div class="card empty-state"><div class="emoji">${sicon("warn")}</div><h3>This section hit a snag</h3><p class="muted">${esc(err?.message || "Something went wrong here. The rest of the app is fine.")}</p><div style="display:flex;gap:8px;justify-content:center"><button type="button" class="ghost" data-tab-retry>Try again</button><button type="button" class="primary" data-tab-home>Back to Focus</button></div></div>`
+
+        $("[data-tab-retry]", panel).onclick = () => render()
+
+        $("[data-tab-home]", panel).onclick = () => {
+          state.tab = "timer"
+
+          persist()
+
+          shell()
+        }
       }
     }
   }
 
-  if (state.call) renderCall()
+  const sync = syncViews[state.tab]
 
-  renderNowPlaying()
+  if (sync) {
+    runView(sync)
+
+    paintOverlays()
+
+    return
+  }
+
+  const token = ++renderToken
+
+  // Paint a shimmering placeholder synchronously so the panel is never
+  // blank while the chunk streams in (first visit only — afterwards the
+  // module is cached and this frame is swapped out within milliseconds).
+  const skelPanel = $(`#tab-${state.tab}`)
+
+  if (skelPanel) {
+    skelPanel.innerHTML = `<div class="route-skeleton" aria-hidden="true"><div class="sk-line sk-title"></div><div class="sk-line sk-sub"></div><div class="sk-grid">${`<div class="sk-line sk-card"></div>`.repeat(6)}</div></div>`
+  }
+
+  ;(lazyViews[state.tab] || (() => Promise.resolve(renderTimer)))()
+    .then((draw) => {
+      // The user may have switched tabs while the chunk was in flight.
+      if (token !== renderToken || !$("#view")) return
+
+      runView(draw)
+
+      paintOverlays()
+    })
+    .catch((err) => {
+      if (token !== renderToken) return
+
+      runView(() => {
+        throw err
+      })
+    })
 }
 
 /* Layer contract (see styles): page popups (tooltips, dropdowns, chat menus)
@@ -609,7 +662,7 @@ if (!window.__sfKeysBound) {
 
     if (e.key === "Escape") {
       if ($("#gift-center")) {
-        closeGiftCenter()
+        $("#gift-center")?.remove()
 
         return
       }
@@ -694,7 +747,9 @@ if (!window.__sfStatusBound) {
         : null
 
     if (t && !document.querySelector("#status-viewer"))
-      openStatus(t.dataset.statusOpen || undefined)
+      import("./community.js")
+        .then((m) => m.openStatus(t.dataset.statusOpen || undefined))
+        .catch(() => {})
   })
 
   // Right-click your own status chip to delete it — no need to open the viewer.
@@ -709,11 +764,15 @@ if (!window.__sfStatusBound) {
 
     e.preventDefault()
 
-    askDeleteStatus({
-      id: chip.dataset.storyView,
-      key: "story:" + chip.dataset.storyView,
-      type: "story",
-    })
+    import("./community.js")
+      .then((m) =>
+        m.askDeleteStatus({
+          id: chip.dataset.storyView,
+          key: "story:" + chip.dataset.storyView,
+          type: "story",
+        }),
+      )
+      .catch(() => {})
   })
 }
 
@@ -735,12 +794,19 @@ if (!state.deviceId) {
 
 refreshServerTime()
 
-pruneExpiredStories()
+// Stories pruning lives in the lazy community chunk.
+import("./community.js")
+  .then((m) => m.pruneExpiredStories())
+  .catch(() => {})
 
 if (!state.entered) {
   renderLanding()
+
+  preloadFeatureChunks()
 } else {
   shell()
+
+  preloadFeatureChunks()
 
   checkReminder()
 
@@ -748,7 +814,10 @@ if (!state.entered) {
 
   if (!state.toured)
     setTimeout(() => {
-      if (state.entered && !state.toured) startTour()
+      if (state.entered && !state.toured)
+        import("./account.js")
+          .then((m) => m.startTour())
+          .catch(() => {})
     }, 1400)
 }
 
@@ -779,6 +848,65 @@ try {
   }
 } catch {
   /* ignore */
+}
+
+// Warm the lazy route chunks once the shell is interactive — first visits
+// then resolve instantly, and the network fetch happens off the critical
+// path. (Literal specifiers only: Vite must see them to emit the chunks.)
+function preloadFeatureChunks() {
+  const kick = () => {
+    // Fire the imports, then hand the service worker every hashed asset
+    // the boot has touched — by then the four route chunks are listed too.
+    Promise.allSettled([
+      import("./techniques.js"),
+
+      import("./community.js"),
+
+      import("./books.js"),
+
+      import("./store.js"),
+    ]).then(() => sendPrecacheManifest())
+  }
+
+  if ("requestIdleCallback" in window)
+    requestIdleCallback(kick, { timeout: 3000 })
+  else setTimeout(kick, 1200)
+}
+
+// Hand the service worker the hashed asset URLs seen so far (lazy route
+// chunks, CSS). It fetches and caches anything missing, so offline
+// navigation between tabs works even for tabs never opened online.
+function sendPrecacheManifest(worker) {
+  if (!("serviceWorker" in navigator)) return
+
+  // navigator.serviceWorker.controller is null on the very first load
+  // (the worker is still installing) — callers can pass reg.active from
+  // serviceWorker.ready instead so the manifest still reaches it.
+  worker = worker || navigator.serviceWorker.controller
+
+  if (!worker) return
+
+  try {
+    const urls = new Set()
+
+    performance.getEntriesByType("resource").forEach((e) => {
+      if (!e.name) return
+
+      const path = new URL(e.name, location.href).pathname
+
+      if (path.startsWith("/assets/")) urls.add(path)
+    })
+
+    if (!urls.size) return
+
+    worker.postMessage({
+      type: "PRECACHE",
+
+      urls: [...urls],
+    })
+  } catch {
+    /* ignore */
+  }
 }
 
 function showUpdateToast(reg) {
@@ -829,6 +957,30 @@ if (
             }
           })
         })
+      })
+
+      .catch(() => {})
+
+    // Wait for an ACTIVE worker — on the first load the registration
+    // promise can resolve while the worker is still installing.
+    navigator.serviceWorker.ready
+
+      .then((reg) => {
+        // Deliver only once the controller IS the fresh active worker: on a
+        // first-ever load the controller is still null, and right after a
+        // version bump it is the outgoing worker whose cache gets purged.
+        const deliver = () => {
+          if (navigator.serviceWorker.controller === reg.active) {
+            sendPrecacheManifest(reg.active)
+
+            return true
+          }
+
+          return false
+        }
+
+        if (!deliver())
+          navigator.serviceWorker.addEventListener("controllerchange", deliver)
       })
 
       .catch(() => {})
@@ -988,7 +1140,9 @@ onAuthStateChange((user) => {
 
         // state.user) is live so incoming 1:1 calls actually ring.
 
-        ensureIncomingCallSubscription()
+        import("./community.js")
+          .then((m) => m.ensureIncomingCallSubscription())
+          .catch(() => {})
       })
   }
 

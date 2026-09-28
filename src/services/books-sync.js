@@ -188,3 +188,21 @@ export async function syncBooks(adopt) {
   await pushAllBooks()
   return pullBooks(adopt)
 }
+
+/* Eager wrapper: kicks a library sync without pulling the whole books
+   feature into the initial bundle — the books chunk streams in on demand. */
+export async function syncBooksLibrary() {
+  const books = await import("../books.js")
+
+  try {
+    await books.migrateBookIds()
+  } catch {
+    /* local library stands */
+  }
+
+  try {
+    return await books.pullBooks(books.adoptCloudTwin)
+  } catch {
+    return { ok: false }
+  }
+}

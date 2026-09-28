@@ -645,7 +645,10 @@
 
 .skin-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* Fit the columns to the card: the Account profile card is wide (3
+     columns as before), but the Settings card shares this markup at half
+     the width — fixed 3 columns there crushed the labels to a few px. */
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 10px;
   margin-top: 12px;
 }

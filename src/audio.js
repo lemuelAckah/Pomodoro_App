@@ -23,7 +23,6 @@ import {
   makeDraggable,
   dragLock,
 } from "./core.js"
-import { renderFavorites } from "./techniques.js"
 import {
   getPlayerState,
   savePlayerState,

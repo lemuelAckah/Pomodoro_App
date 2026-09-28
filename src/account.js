@@ -39,7 +39,7 @@ import { pullRewards } from "./services/rewards-sync.js"
 
 import { pullMusic } from "./services/music-sync.js"
 
-import { syncBooksLibrary, clearBookDatabase } from "./books.js"
+import { syncBooksLibrary } from "./services/books-sync.js"
 
 import {
   signUpWithEmail,
@@ -73,7 +73,7 @@ import {
   timerHandle,
 } from "./timer.js"
 
-import { startTechCheck, techInfo, enterApp } from "./techniques.js"
+import { techInfo } from "./tech-catalog.js"
 
 import {
   equippedAvatarEmoji,
@@ -81,13 +81,7 @@ import {
   showcasedBadgeIds,
   toggleShowcaseBadge,
   ownedBadges,
-} from "./store.js"
-
-import {
-  disconnectRealtime,
-  conversationSubscription,
-  presenceSub,
-} from "./community.js"
+} from "./store-catalog.js"
 
 import { shell } from "./app.js"
 
@@ -943,8 +937,11 @@ function wipeData() {
 
     // cannot re-insert a row while the wipe is running.
 
+    // Realtime teardown lives in the lazy community chunk.
+    const community = await import("./community.js").catch(() => null)
+
     try {
-      conversationSubscription?.unsubscribe()
+      community?.conversationSubscription?.unsubscribe()
     } catch {
       /* ignore */
     }
@@ -956,7 +953,7 @@ function wipeData() {
     }
 
     try {
-      if (presenceSub) presenceSub.untrack()
+      community?.presenceSub?.untrack()
     } catch {
       /* ignore */
     }
@@ -1022,6 +1019,8 @@ function wipeData() {
     try {
       await clearSongDatabase()
 
+      const { clearBookDatabase } = await import("./books.js")
+
       await clearBookDatabase()
     } catch (e) {
       return fail(
@@ -1084,8 +1083,13 @@ function renderLanding() {
 
     persist()
 
-    if (state.techCheck && state.techCheck.done) enterApp()
-    else startTechCheck("onboard")
+    // Onboarding lives in the lazy techniques chunk — pull it on demand.
+    import("./techniques.js")
+      .then((tech) => {
+        if (state.techCheck && state.techCheck.done) tech.enterApp()
+        else tech.startTechCheck("onboard")
+      })
+      .catch(() => notify("Could not open the setup check — try again"))
   }
 
   $("[data-landing-how]").onclick = () => {
@@ -2090,11 +2094,11 @@ function bindSettings(root) {
       }),
   )
   $("[data-tc-start]", root)?.addEventListener("click", () =>
-    startTechCheck("settings"),
+    import("./techniques.js").then((m) => m.startTechCheck("settings")),
   )
 
   $("[data-tc-retake]", root)?.addEventListener("click", () =>
-    startTechCheck("settings"),
+    import("./techniques.js").then((m) => m.startTechCheck("settings")),
   )
 
   $("[data-save-durations]", root)?.addEventListener("click", () => {

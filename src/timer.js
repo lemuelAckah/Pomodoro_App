@@ -36,26 +36,51 @@ import {
   warmAudio,
 } from "./audio.js"
 
-import {
-  techniques,
-  TECH_DETAILS,
-  matchTech,
-  totalDue,
-  openTechniqueGuide,
-} from "./techniques.js"
+import { techniques, TECH_DETAILS, openTechniqueGuide } from "./tech-catalog.js"
 
 import {
   logFocusDay,
   progressChallenges,
-  missionDeskMarkup,
-  bindMissionDesk,
   challengeLock,
   challengeLockBanner,
   leaveChallenge,
   paceSec,
-} from "./community.js"
+} from "./challenges.js"
 
 import { shell } from "./app.js"
+
+// The mission desk belongs to the lazy community route. Until that chunk
+// loads once, the Focus desk renders this lightweight stand-in — same
+// markup contract, no sprint data.
+let missionDesk = {
+  markup: () =>
+    `<div class="card mission-desk idle"><div class="mission-top"><span class="mission-eyebrow">${sicon("bolt")} Live mission</span><button type="button" class="ghost" data-mission-goto>Open Sprints</button></div><p class="muted">Open the Community tab once to bring your sprints and challenges onto this desk.</p></div>`,
+  bind: (root) => {
+    $$("[data-mission-goto]", root).forEach(
+      (b) =>
+        (b.onclick = () => {
+          state.tab = "community"
+
+          state.subtab = "sprints"
+
+          persist()
+
+          shell()
+        }),
+    )
+  },
+}
+
+// Community calls this once its chunk evaluates, swapping the stand-in for
+// the real mission desk (markup + binder).
+export function registerMissionDesk(next) {
+  if (
+    next &&
+    typeof next.markup === "function" &&
+    typeof next.bind === "function"
+  )
+    missionDesk = next
+}
 
 import {
   mirrorTasks,
@@ -514,7 +539,7 @@ function renderTimer() {
     state.tasks.length
       ? state.tasks.map(taskRow).join("")
       : '<p class="muted" style="padding:25px 0">Your task list is clear. Add one small next step.</p>'
-  }</div></div></div><div class="grid four stats"><div class="card stat"><span>Sessions</span><strong>${state.sessions}</strong><span>all time</span></div><div class="card stat"><span>Coins</span><strong data-coin="stat">${state.coins}</strong><span>available to spend</span></div><div class="card stat"><span>Tasks</span><strong>${state.tasks.filter((t) => t.done).length}</strong><span>completed</span></div><div class="card stat"><span>Focus streak</span><strong>${state.streak.count}</strong>${streakDots()}<span>day streak</span></div></div>${missionDeskMarkup()}${techOfDayMarkup()}${gardenMarkup()}${recordsMarkup()}${achievementsCabinetMarkup()}${masteryLadderMarkup()}`
+  }</div></div></div><div class="grid four stats"><div class="card stat"><span>Sessions</span><strong>${state.sessions}</strong><span>all time</span></div><div class="card stat"><span>Coins</span><strong data-coin="stat">${state.coins}</strong><span>available to spend</span></div><div class="card stat"><span>Tasks</span><strong>${state.tasks.filter((t) => t.done).length}</strong><span>completed</span></div><div class="card stat"><span>Focus streak</span><strong>${state.streak.count}</strong>${streakDots()}<span>day streak</span></div></div>${missionDesk.markup()}${techOfDayMarkup()}${gardenMarkup()}${recordsMarkup()}${achievementsCabinetMarkup()}${masteryLadderMarkup()}`
 
   $$("[data-mode]", target).forEach(
     (b) =>
@@ -585,7 +610,7 @@ function renderTimer() {
 
   bindWinActions(target)
 
-  bindMissionDesk(target)
+  missionDesk.bind(target)
 
   try {
     if (challengeLock()) {
