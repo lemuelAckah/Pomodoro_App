@@ -19,3 +19,8 @@ supabase/.temp/
 # beside it.
 /.plugins/
 /.opencode-skills/
+
+# Freebuff agent state: downloaded headless browsers, browser profiles
+# (their cache files are exclusively locked by live browser processes, so
+# git add fails on them), logs and scratch dirs. Never project source.
+/.freebuff/
