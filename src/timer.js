@@ -540,7 +540,7 @@ function renderTimer() {
       "",
     )}</div><div class="template-row">${TIMER_TEMPLATES.map((p) => `<button type="button" class="template-chip" data-template="${p.id}" title="Focus ${p.focus}:${String(p.focusSec ?? 0).padStart(2, "0")} · break ${p.short}:${String(p.shortSec ?? 0).padStart(2, "0")}">${p.name}</button>`).join("")}</div><div class="dur-row"><label class="field-label">Minutes<input class="input dur-input" id="dur-min" type="number" min="0" max="180" step="1" value="${Math.floor(durations[state.mode] / 60)}" aria-label="Custom minutes"></label><label class="field-label">Seconds<input class="input dur-input" id="dur-sec" type="number" min="0" max="59" step="1" value="${durations[state.mode] % 60}" aria-label="Custom seconds"></label><button type="button" class="ghost" data-set-dur title="Apply to ${modeLabels[state.mode]}">Set duration</button></div>${challengeLockBanner()}<div class="focus-live off" data-focus-live><span class="live-dot"></span>Focus live — leaving this page resets the session</div>${techTagMarkup()}<div class="timer-ring" style="--progress:${(state.time / durations[state.mode]) * 360}deg"><div><div class="time">${fmt(state.time)}</div><div class="timer-label">${modeLabels[state.mode]}</div></div></div><div class="timer-actions"><button type="button" class="icon-btn" data-reset title="Reset">↻</button><button type="button" class="primary" data-toggle>${
     state.running ? "Pause" : "Start session"
-  }</button><button type="button" class="icon-btn" data-focusview title="Focus mode — just the timer">${sicon("expand")}</button></div><div class="muted" style="margin-top:36px">${state.sessions % 4}/4 sessions until a long break</div></div><div class="card tasks-card"><div class="section-row"><h2>Today’s tasks</h2><span class="tag" data-task-count>${state.tasks.filter((t) => t.done).length}/${state.tasks.length} complete</span><span class="sync-pill" data-sync-pill hidden></span></div><div class="input-row"><input class="input" id="task-input" placeholder="What are you working on?"><button type="button" class="primary" data-add-task>+</button></div><div class="task-progress" data-task-progress><div class="tp-text"><span><span class="tp-num" data-tp-done>${doneCount}</span> of <span class="tp-num" data-tp-total>${totalCount}</span> tasks complete</span><span class="tp-num" data-tp-pct>${donePct}%</span></div><div class="tp-bar"><div class="tp-fill${totalCount > 0 && doneCount === totalCount ? " full" : ""}" data-tp-fill style="width:${donePct}%"></div></div><div class="tp-caption" data-tp-caption>${taskProgressCaption(doneCount, totalCount)}</div></div><div class="task-groups"><div class="task-group" data-group-open><div class="tg-head"><span class="tg-title">To do</span><span class="tg-count" data-tp-open-count>${totalCount - doneCount}</span></div><div class="tg-list" data-list-open>${
+  }</button><button type="button" class="icon-btn" data-focusview title="Focus mode — just the timer">${sicon("expand")}</button></div><div class="muted" style="margin-top:36px">${state.sessions % 4}/4 sessions until a long break</div></div><div class="card tasks-card"><div class="section-row"><h2>Today’s tasks</h2><span class="tag" data-task-count>${state.tasks.filter((t) => t.done).length}/${state.tasks.length} complete</span><span class="sync-pill" data-sync-pill hidden></span></div><div class="input-row"><input class="input" id="task-input" placeholder="What are you working on?"><button type="button" class="primary" data-add-task>+</button></div><div class="task-progress" data-task-progress><div class="tp-text"><span><span class="tp-num" data-tp-done>${doneCount}</span> of <span class="tp-num" data-tp-total>${totalCount}</span> tasks complete</span><span class="tp-num" data-tp-pct>${donePct}%</span></div><div class="tp-bar"><div class="tp-fill${totalCount > 0 && doneCount === totalCount ? " full" : ""}" data-tp-fill style="width:${donePct}%"></div></div><div class="tp-caption" data-tp-caption>${taskProgressCaption(doneCount, totalCount)}</div><div data-task-history>${taskHistoryMarkup()}</div></div><div class="task-groups"><div class="task-group" data-group-open><div class="tg-head"><span class="tg-title">To do</span><span class="tg-count" data-tp-open-count>${totalCount - doneCount}</span></div><div class="tg-list" data-list-open>${
     state.tasks.some((t) => !t.done)
       ? state.tasks.filter((t) => !t.done).map(taskRow).join("")
       : '<p class="task-empty">Nothing waiting — add your next small step.</p>'
@@ -766,6 +766,8 @@ function renderTimer() {
 
         t.updated = Date.now()
 
+        bumpTaskLog(t.done ? 1 : -1)
+
         persist()
 
         mirrorTasks()
@@ -840,7 +842,14 @@ function renderTimer() {
           () => {
             const id = b.dataset.deleteTask
 
+            const removed = state.tasks.find((t) => t.id === id)
+
             state.tasks = state.tasks.filter((t) => t.id !== id)
+
+            if (removed && removed.done) {
+              // Deleting a completed task lowers today's history tally.
+              bumpTaskLog(-1)
+            }
 
             persist()
 
@@ -2303,6 +2312,85 @@ function renderMiniTimer() {
 
 // ---- Today's-tasks progress + completed group helpers -------------------
 
+// Daily completion tallies (last 14 days) for the 7-day history strip.
+// Local-day keys via dayKey(); cloud members' history mirrors their local
+// record — the database stays authoritative for streaks/rewards only.
+function bumpTaskLog(delta) {
+  if (!Array.isArray(state.taskLog)) state.taskLog = []
+
+  const key = dayKey(new Date())
+
+  const entry = state.taskLog.find((e) => e.d === key)
+
+  if (entry) entry.n = Math.max(0, (entry.n || 0) + delta)
+  else if (delta > 0) state.taskLog.push({ d: key, n: delta })
+
+  // Keep a small rolling window; drop zero-days from old dates only.
+  const cutoff = dayKey(new Date(Date.now() - 14 * 864e5))
+
+  state.taskLog = state.taskLog.filter(
+    (e) => e.d >= cutoff && (e.n > 0 || e.d === key),
+  )
+}
+
+function lastNDays(n) {
+  const out = []
+
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(Date.now() - i * 864e5)
+
+    out.push({ key: dayKey(d), date: d })
+  }
+
+  return out
+}
+
+function taskHistoryMarkup() {
+  const days = lastNDays(7)
+
+  const counts = days.map((day) => {
+    const e = (state.taskLog || []).find((x) => x.d === day.key)
+
+    return e ? e.n || 0 : 0
+  })
+
+  const max = Math.max(...counts, 1)
+
+  const DOW = ["S", "M", "T", "W", "T", "F", "S"]
+
+  const bars = days
+    .map((day, i) => {
+      const n = counts[i]
+
+      const isToday = i === days.length - 1
+
+      return `<div class="th-day${isToday ? " today" : ""}${n ? " has" : ""}" title="${
+        n ? `${n} completed` : "No completions"
+      } ${day.date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}"><span class="th-n">${n || ""}</span><span class="th-bar"><span class="th-fill" style="height:${Math.round(
+        (n / max) * 100,
+      )}%"></span></span><span class="th-dow">${DOW[day.date.getDay()]}</span></div>`
+    })
+    .join("")
+
+  const week = counts.reduce((a, b) => a + b, 0)
+
+  return `<div class="task-history"><div class="th-head"><span class="th-title">Last 7 days</span><span class="th-total"><span class="th-week">${week}</span> completed</span></div><div class="th-days">${bars}</div></div>`
+}
+
+function syncTaskHistory(scope) {
+  const wrap = $("[data-task-history]", scope)
+
+  if (!wrap) return
+
+  const fresh = taskHistoryMarkup()
+
+  const tpl = document.createElement("template")
+
+  tpl.innerHTML = fresh.trim()
+
+  wrap.replaceChildren(tpl.content.firstElementChild)
+}
+
 function taskProgressCaption(done, total) {
   if (!total) return "Add your first task to get started."
 
@@ -2345,6 +2433,8 @@ function syncTaskProgress(scope) {
   }
 
   if (capEl) capEl.textContent = taskProgressCaption(done, total)
+
+  syncTaskHistory(scope)
 
   // The group badges live in the group headers, outside the progress card.
   const doneCount = $("[data-tp-done-count]", scope)

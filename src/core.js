@@ -374,6 +374,10 @@ const state = {
 
   tasks: get("sf-tasks", []),
 
+  // Daily task-completion tallies: [{ d: "YYYY-MM-DD", n: count }, …]
+  // (last 14 days). Powers the 7-day history strip on the Focus Desk.
+  taskLog: get("sf-tasklog", []),
+
   techCheck: get("sf-techcheck", null),
 
   favorites: get("sf-favorites", []),
@@ -696,6 +700,8 @@ function persistNow() {
   save("sf-coins", state.coins)
 
   save("sf-tasks", state.tasks)
+
+  save("sf-tasklog", state.taskLog || [])
 
   save("sf-techcheck", state.techCheck)
 
@@ -1716,6 +1722,8 @@ async function hydrateCloudState(user) {
 
     save("sf-tasks", state.tasks)
 
+    save("sf-tasklog", state.taskLog || [])
+
     save("sf-coins", state.coins)
 
     save("sf-sessions", state.sessions)
@@ -1856,6 +1864,8 @@ async function hydrateCloudState(user) {
     save("sf-streak", state.streak)
 
     save("sf-tasks", state.tasks)
+
+    save("sf-tasklog", state.taskLog || [])
 
     save("sf-coins", state.coins)
 

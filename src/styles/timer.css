@@ -133,6 +133,103 @@
   color: var(--muted);
 }
 
+/* ---- 7-day completion history strip ---- */
+.task-history {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+
+.th-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.th-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+}
+
+.th-total {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.th-week {
+  font-family: "Space Mono", monospace;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--sage);
+}
+
+.th-days {
+  display: flex;
+  gap: 6px;
+  align-items: flex-end;
+}
+
+.th-day {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+.th-n {
+  font-family: "Space Mono", monospace;
+  font-size: 10.5px;
+  line-height: 1;
+  color: var(--sage);
+  min-height: 11px;
+  font-weight: 700;
+}
+
+.th-bar {
+  width: 100%;
+  max-width: 34px;
+  height: 38px;
+  border-radius: 6px;
+  background: var(--line);
+  display: flex;
+  align-items: flex-end;
+  overflow: hidden;
+}
+
+.th-fill {
+  width: 100%;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #6a9a7e, var(--sage));
+  min-height: 0;
+  transition: height 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.th-day.today .th-fill {
+  background: linear-gradient(180deg, var(--lime), var(--sage));
+  border-radius: 6px 6px 2px 2px;
+}
+
+.th-day.today .th-dow {
+  color: var(--sage);
+  font-weight: 700;
+}
+
+.th-dow {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.th-day:not(.has) .th-fill {
+  background: transparent;
+}
+
+
 .tg-head {
   display: flex;
   align-items: center;
