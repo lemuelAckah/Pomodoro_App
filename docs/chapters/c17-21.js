@@ -77,7 +77,7 @@ export function ch18() {
 
     h2("18.2 Technical Limitations"),
     ...bullets([
-      "**Free-tier ceilings.** Supabase's free tier bounds database size, storage, bandwidth and realtime connections; Paystack requires an account the maintainer must configure; TURN relay credentials are not provisioned by default, so some networks fall back to failing calls.",
+      "**Free-tier ceilings.** Supabase's free tier bounds database size, storage, bandwidth and realtime connections; Moolre requires an account the maintainer must configure; TURN relay credentials are not provisioned by default, so some networks fall back to failing calls.",
       "**No automated frontend tests.** Verification is manual and phase-based (Chapter Sixteen); regressions can slip through.",
       "**No native apps.** Browser-only: no push notifications on all platforms, no background audio guarantees, iOS Safari constraints on installability and storage eviction.",
       "**Storage eviction.** Local-only (guest) data lives in localStorage, which browsers may clear under pressure; guests are warned but data loss is possible.",

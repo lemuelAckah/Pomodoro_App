@@ -318,7 +318,7 @@ export function ch4() {
         ["FR-11", "Post expiring status updates (text, image, video) with music", "Stories (community.js, backend.js)"],
         ["FR-12", "Conduct one-to-one voice and video calls", "Calls (community.js, WebRTC)"],
         ["FR-13", "Earn coins, unlock achievements, open mystery boxes, buy rewards", "Rewards (store.js, backend.js)"],
-        ["FR-14", "Purchase coin packs via mobile money (Paystack)", "Store top-up flow"],
+        ["FR-14", "Purchase coin packs via mobile money (Moolre)", "Store top-up flow"],
         ["FR-15", "Sync study state, productivity and media across devices when signed in", "services/*-sync.js"],
         ["FR-16", "Operate fully without a backend, falling back to localStorage", "backendConfigured guard"],
         ["FR-17", "Notify the user of messages, calls and session events, batched and dismissible", "Notifications panel"],
@@ -429,7 +429,7 @@ export function ch5() {
       ["Service", "Role", "Client-side integration"],
       [
         ["Supabase (Auth, PostgreSQL, Storage, Realtime)", "Accounts, data, media, live events", "@supabase/supabase-js"],
-        ["Paystack", "Coin-pack purchases via mobile money (MTN, Telecel, AirtelTigo)", "Inline popup, public key only"],
+        ["Moolre", "Coin-pack purchases via mobile money (MTN, Telecel, AirtelTigo)", "Hosted checkout, public credentials only"],
         ["Google Fonts", "Typography (DM Sans, Fraunces, Space Mono)", "Stylesheet link; system-font fallback offline"],
         ["Google OAuth (via Supabase)", "One-tap sign-in", "signInWithOAuth redirect"],
         ["TURN relay (optional, self-hosted credentials)", "WebRTC fallback when direct peer connection fails", "ICE server configuration from env vars"],

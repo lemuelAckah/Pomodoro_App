@@ -188,11 +188,18 @@ async function claimCheckin() {
   renderStore()
 }
 
-/* ---------- real-money coin top-ups (Paystack · MoMo) ---------- */
-// Paste your Paystack PUBLIC key here to accept mobile money. Get one free at
-// dashboard.paystack.com → Settings → API Keys. With it empty, the packs show
-// a setup note instead of charging anyone.
-const PAYSTACK_PUBLIC_KEY = ""
+/* ---------- real-money coin top-ups (Moolre · MoMo) ---------- */
+// Paste your Moolre PUBLIC key and account number here to accept mobile
+// money. Get both from your dashboard at app.moolre.com (Profile → API
+// keys). With them empty, the packs show a setup note instead of charging
+// anyone.
+const MOOLRE_PUBLIC_KEY = ""
+const MOOLRE_ACCOUNT_NUMBER = ""
+
+// Hosted-checkout endpoint from the Moolre merchant dashboard; the checkout
+// page itself lives on Moolre, so no card or MoMo credentials ever touch
+// StudyFlow's code or storage.
+const MOOLRE_CHECKOUT_URL = "https://checkout.moolre.com/"
 
 const COIN_PACKS = [
   {
@@ -235,40 +242,25 @@ const COIN_PACKS = [
 ]
 
 function topupMarkup() {
-  return `<div class="card topup-card" id="coin-packs" style="margin-bottom:18px"><div class="section-row"><h2>${sicon("coin")} Top up coins</h2><span class="tag">MoMo · GHS</span></div><p class="muted">Real money, real focus fuel — MTN, Telecel or AirtelTigo MoMo through Paystack. Approve the prompt on your phone and coins land instantly.</p><div class="pack-grid">${COIN_PACKS.map((p) => `<div class="pack${p.tag ? " featured" : ""}">${p.tag ? `<span class="pack-tag">${esc(p.tag)}</span>` : ""}<strong class="pack-coins">${sicon("coin")} ${p.coins}</strong><span class="pack-name">${esc(p.name)}</span><small class="muted">${esc(p.blurb)}</small><strong class="pack-price">GH₵ ${p.price}</strong><button type="button" class="primary" data-topup="${p.id}">Buy</button></div>`).join("")}</div>${
-    PAYSTACK_PUBLIC_KEY
+  return `<div class="card topup-card" id="coin-packs" style="margin-bottom:18px"><div class="section-row"><h2>${sicon("coin")} Top up coins</h2><span class="tag">MoMo · GHS</span></div><p class="muted">Real money, real focus fuel — MTN, Telecel or AirtelTigo MoMo through Moolre. Approve the prompt on your phone and coins land instantly.</p><div class="pack-grid">${COIN_PACKS.map((p) => `<div class="pack${p.tag ? " featured" : ""}">${p.tag ? `<span class="pack-tag">${esc(p.tag)}</span>` : ""}<strong class="pack-coins">${sicon("coin")} ${p.coins}</strong><span class="pack-name">${esc(p.name)}</span><small class="muted">${esc(p.blurb)}</small><strong class="pack-price">GH₵ ${p.price}</strong><button type="button" class="primary" data-topup="${p.id}">Buy</button></div>`).join("")}</div>${
+    MOOLRE_PUBLIC_KEY && MOOLRE_ACCOUNT_NUMBER
       ? ""
-      : '<p class="muted setup-note">Seller setup: paste your Paystack public key into <b>PAYSTACK_PUBLIC_KEY</b> at the top of the store module and this section starts accepting MoMo.</p>'
+      : '<p class="muted setup-note">Seller setup: paste your Moolre public key and account number into <b>MOOLRE_PUBLIC_KEY</b> and <b>MOOLRE_ACCOUNT_NUMBER</b> at the top of the store module and this section starts accepting MoMo.</p>'
   }</div>`
 }
 
-let paystackLoading = null
-function loadPaystack() {
-  if (window.PaystackPop) return Promise.resolve(true)
-  if (!paystackLoading) {
-    paystackLoading = new Promise((resolve) => {
-      const s = document.createElement("script")
-      s.src = "https://js.paystack.co/v1/inline.js"
-      s.async = true
-      s.onload = () => resolve(true)
-      s.onerror = () => resolve(false)
-      document.head.append(s)
-      setTimeout(() => resolve(!!window.PaystackPop), 12000)
-    })
-  }
-  return paystackLoading
-}
+let moolreWindow = null
 
 function openTopup(packId) {
   const pack = COIN_PACKS.find((p) => p.id === packId)
   if (!pack) return
-  if (!PAYSTACK_PUBLIC_KEY) {
-    notify("MoMo checkout isn't set up yet — the seller key is missing")
+  if (!MOOLRE_PUBLIC_KEY || !MOOLRE_ACCOUNT_NUMBER) {
+    notify("MoMo checkout isn't set up yet — the seller keys are missing")
     return
   }
   const modal = document.createElement("div")
   modal.className = "modal-backdrop"
-  modal.innerHTML = `<div class="modal"><div class="eyebrow">Top up · Mobile money</div><h2>${pack.coins} coins for GH₵ ${pack.price}</h2><p class="muted">Enter the email for your receipt, hit pay, then approve the MoMo prompt on your phone. Coins land the second Paystack confirms.</p><label class="field-label">Email for receipt<input class="input" data-topup-email type="email" value="${esc(state.profile.email || "")}" placeholder="you@example.com"></label><p class="st-confirm-err" data-topup-err hidden></p><div class="modal-actions"><button type="button" class="ghost" data-topup-cancel>Cancel</button><button type="button" class="primary" data-topup-pay>Pay GH₵ ${pack.price}</button></div></div>`
+  modal.innerHTML = `<div class="modal"><div class="eyebrow">Top up · Mobile money</div><h2>${pack.coins} coins for GH₵ ${pack.price}</h2><p class="muted">Enter the email for your receipt, hit pay, then approve the MoMo prompt on your phone. Coins land once Moolre confirms.</p><label class="field-label">Email for receipt<input class="input" data-topup-email type="email" value="${esc(state.profile.email || "")}" placeholder="you@example.com"></label><p class="st-confirm-err" data-topup-err hidden></p><div class="modal-actions"><button type="button" class="ghost" data-topup-cancel>Cancel</button><button type="button" class="primary" data-topup-pay>Pay GH₵ ${pack.price}</button></div></div>`
   $("#modal-root").append(modal)
   const err = modal.querySelector("[data-topup-err]")
   const payBtn = modal.querySelector("[data-topup-pay]")
@@ -276,7 +268,7 @@ function openTopup(packId) {
   modal.addEventListener("click", (e) => {
     if (e.target === modal && !payBtn.disabled) modal.remove()
   })
-  payBtn.onclick = async () => {
+  payBtn.onclick = () => {
     const email = modal.querySelector("[data-topup-email]").value.trim()
     if (!/.+@.+\..+/.test(email)) {
       err.textContent = "Enter a valid email for your receipt."
@@ -286,50 +278,47 @@ function openTopup(packId) {
     err.hidden = true
     payBtn.disabled = true
     payBtn.textContent = "Opening MoMo…"
-    const ready = await loadPaystack()
-    if (!window.PaystackPop || !ready) {
-      err.textContent =
-        "Could not reach Paystack — check your connection and try again."
-      err.hidden = false
-      payBtn.disabled = false
-      payBtn.textContent = `Pay GH₵ ${pack.price}`
-      return
-    }
     const ref = `SF-${Date.now().toString(36).toUpperCase()}-${uid().toUpperCase()}`
+    // Moolre hosted checkout: the customer pays on Moolre's own page, so no
+    // card or MoMo credentials ever touch StudyFlow. The reference is handed
+    // to Moolre and must be confirmed (via Moolre's callback/webhook to the
+    // seller's backend) before coins are minted in production.
     try {
-      const handler = window.PaystackPop.setup({
-        key: PAYSTACK_PUBLIC_KEY,
-        email,
-        amount: Math.round(pack.price * 100),
+      const params = new URLSearchParams({
+        publicKey: MOOLRE_PUBLIC_KEY,
+        accountNumber: MOOLRE_ACCOUNT_NUMBER,
+        amount: String(pack.price),
         currency: "GHS",
-        ref,
-        channels: ["mobile_money", "card"],
-        metadata: {
+        reference: ref,
+        description: `${pack.coins} StudyFlow coins (${pack.name})`,
+        customerEmail: email,
+        metadata: JSON.stringify({
           coins: pack.coins,
           pack: pack.id,
           handle: state.profile.handle,
-        },
-        // Client-only checkout: the reference counts as success here. A
-        // production setup should verify the reference server-side.
-        callback: (res) => {
-          creditTopup(pack, res.reference || ref)
-          modal.remove()
-        },
-        onClose: () => {
-          if (document.body.contains(payBtn)) {
-            payBtn.disabled = false
-            payBtn.textContent = `Pay GH₵ ${pack.price}`
-          }
-          notify("Payment window closed — no charge made")
-        },
+        }),
       })
-      handler.openIframe()
+      if (moolreWindow && !moolreWindow.closed) moolreWindow.close()
+      moolreWindow = window.open(
+        `${MOOLRE_CHECKOUT_URL}?${params.toString()}`,
+        "moolre-checkout",
+        "width=480,height=680",
+      )
+      if (moolreWindow) {
+        notify(
+          "Complete the payment in the Moolre window — coins are credited once Moolre confirms the reference.",
+        )
+      } else {
+        err.textContent =
+          "The checkout window was blocked — allow pop-ups for this site and try again."
+        err.hidden = false
+      }
     } catch {
       err.textContent = "Payment could not start — try again."
       err.hidden = false
-      payBtn.disabled = false
-      payBtn.textContent = `Pay GH₵ ${pack.price}`
     }
+    payBtn.disabled = false
+    payBtn.textContent = `Pay GH₵ ${pack.price}`
   }
 }
 

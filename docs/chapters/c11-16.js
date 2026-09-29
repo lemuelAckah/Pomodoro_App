@@ -49,7 +49,7 @@ export function ch11() {
 
     h2("11.4 Transport and Secrets"),
     para(
-      "All traffic rides HTTPS, so data is encrypted in transit between browser and backend. Secrets are kept out of the repository: `.env` is git-ignored, and only public-by-design values (the Supabase URL and anon key, the Paystack *public* key) ship to clients. The anon key's safety rests on RLS — it identifies the project but grants no row access beyond policy.",
+      "All traffic rides HTTPS, so data is encrypted in transit between browser and backend. Secrets are kept out of the repository: `.env` is git-ignored, and only public-by-design values (the Supabase URL and anon key, the Moolre *public* credentials) ship to clients. The anon key's safety rests on RLS — it identifies the project but grants no row access beyond policy.",
     ),
 
     h2("11.5 A Real Lesson: Recursive RLS Policies"),
@@ -192,7 +192,7 @@ export function ch14() {
         ["Mastery badges", "Months-scale milestones (250 sessions, 60-day streak…)", "Long-horizon goals explicitly marked EARN ONLY"],
         ["Mystery boxes", "Purchased with coins at published odds", "Variable reward for variety, not progression"],
         ["Store items", "Coins", "Personalisation (themes, garden), small functional treats"],
-        ["Coin packs", "Real money via Paystack MoMo", "Optional support of the project; never gates learning features"],
+        ["Coin packs", "Real money via Moolre MoMo", "Optional support of the project; never gates learning features"],
       ],
       [20, 36, 44],
     ),

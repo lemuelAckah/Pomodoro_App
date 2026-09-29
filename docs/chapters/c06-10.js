@@ -38,7 +38,7 @@ export function ch6() {
         ["Supabase JavaScript client", "Official SDK for the Supabase platform", "All auth, database, storage and realtime access"],
         ["PostgreSQL (via Supabase)", "The relational database", "41 tables, 136 security policies"],
         ["SQL", "Database language", "24 ordered migration files define the schema"],
-        ["Paystack", "African payments platform", "Mobile-money coin top-ups"],
+        ["Moolre", "Ghanaian payments platform", "Mobile-money coin top-ups"],
         ["EPUB (custom parser)", "E-book format (zip of XHTML)", "In-browser book reading, parsed without dependencies"],
         ["Node.js & npm", "JavaScript runtime and package manager", "Runs the build tooling; manages dependencies"],
         ["Git & GitHub", "Version control and hosting of source", "Repository github.com/lemuelAckah/Pomodoro_App"],
@@ -147,12 +147,12 @@ export function ch6() {
       "An EPUB book is a ZIP archive of web pages. StudyFlow parses it with the browser's own DecompressionStream API and DOM parser — the source comments note this deliberately avoids `jszip`/`epub.js` dependencies \"to keep the bundle lean and the free plan intact\". The reader renders chapters in-app, tracks progress, and supports bookmarks, highlights and notes (Section 7.6).",
     ),
 
-    h2("6.12 Paystack"),
+    h2("6.12 Moolre"),
     para(
-      "**What it is.** Paystack is a payments platform widely used in Africa; its inline popup lets a website accept card and mobile-money payments while sensitive details stay on Paystack's own page.",
+      "**What it is.** Moolre is a Ghanaian payments platform (moolre.com); its hosted checkout lets a website accept mobile-money payments while the customer approves the transaction on Moolre's own page — no card or MoMo credentials ever touch the site itself.",
     ),
     para(
-      "**What it does for StudyFlow.** The Rewards Store sells virtual coins used for cosmetic and functional items; students can top coins up with mobile money (MTN, Telecel, AirtelTigo) in Ghanaian cedis through Paystack. Only the **public** key is configured in the client — the secret half of the payment verification lives outside the repository (Section 6.15). With no key configured, the store simply hides the top-up section and the economy remains internal.",
+      "**What it does for StudyFlow.** The Rewards Store sells virtual coins used for cosmetic and functional items; students can top coins up with mobile money (MTN, Telecel, AirtelTigo) in Ghanaian cedis through Moolre. Only the **public** credentials (public key and account number) are configured in the client — the merchant-side confirmation of every payment lives outside the repository (Section 6.15). With no credentials configured, the store simply hides the top-up section and the economy remains internal.",
     ),
 
     h2("6.13 Node.js and npm"),
@@ -181,12 +181,12 @@ export function ch6() {
         ["VITE_SUPABASE_URL", "Address of the Supabase project", "No (public)"],
         ["VITE_SUPABASE_ANON_KEY", "Public client key; RLS still constrains data access", "No (public)"],
         ["VITE_TURN_SERVERS / _USERNAME / _CREDENTIAL", "WebRTC fallback relay configuration", "Credential yes"],
-        ["PAYSTACK_PUBLIC_KEY (store module constant)", "Mobile-money top-ups via Paystack popup", "Public key only"],
+        ["MOOLRE_PUBLIC_KEY / MOOLRE_ACCOUNT_NUMBER (store module constants)", "Mobile-money top-ups via Moolre hosted checkout", "Public credentials only"],
       ],
       [34, 46, 20],
     ),
     para(
-      "The distinction that matters: the Supabase *anon* key is designed to be public — it identifies the project, while Row Level Security decides what any bearer may do. Secret credentials (service-role keys, Paystack secret key, TURN credential) exist only outside the repository.",
+      "The distinction that matters: the Supabase *anon* key is designed to be public — it identifies the project, while Row Level Security decides what any bearer may do. Secret credentials (service-role keys, Moolre account secrets, TURN credential) exist only outside the repository.",
     ),
   ]
 }
@@ -247,7 +247,7 @@ export function ch7() {
 
     h2("7.9 Rewards Store and Gamification Economy"),
     para(
-      "Focus sessions, streaks and completed tasks earn **coins**; coins buy **rewards** from the store (themes, cosmetic garden items, functional treats), open **mystery boxes** (a chance-based reward with published odds), and support **achievements** — from *First Session* to multi-month mastery badges that are explicitly never purchasable (\"NEVER SOLD · EARN ONLY\"). Real-money coin top-ups run through Paystack (Section 6.12). The economy's design intent, and its risks, get their own chapter (Fourteen).",
+      "Focus sessions, streaks and completed tasks earn **coins**; coins buy **rewards** from the store (themes, cosmetic garden items, functional treats), open **mystery boxes** (a chance-based reward with published odds), and support **achievements** — from *First Session* to multi-month mastery badges that are explicitly never purchasable (\"NEVER SOLD · EARN ONLY\"). Real-money coin top-ups run through Moolre (Section 6.12). The economy's design intent, and its risks, get their own chapter (Fourteen).",
     ),
     ...figure("fig-store.png", "The Rewards Store: coin packs, inventory and earn-only mastery badges.", 620),
 
