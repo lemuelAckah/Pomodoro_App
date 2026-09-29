@@ -21,7 +21,7 @@ import { readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, dirname, basename } from "node:path"
 import { fileURLToPath } from "node:url"
-import { convertDocx, contentsHtml, COVER_HTML, shell } from "./pdf-parts.mjs"
+import { convertDocx, contentsHtml, COVER_HTML, shell, markLeads } from "./pdf-parts.mjs"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 const DOCX = join(root, "StudyFlow_Documentation.docx")
@@ -48,7 +48,7 @@ console.log(
   `  contents: ${contents.filter((i) => i.level === "h1").length} sections, ${contents.filter((i) => i.level === "h2").length} subsections`,
 )
 
-const bodyHtml = shell(contentsHtml(contents) + bodyClean)
+const bodyHtml = shell(contentsHtml(contents) + markLeads(bodyClean))
 const coverHtmlDoc = shell(COVER_HTML)
 
 // ------------------------------------------------------------- print to PDF --
@@ -90,7 +90,7 @@ if (!browser) {
 }
 
 const header = `
-  <div style="width:100%;font-size:8pt;color:#5A6B60;padding:0 14mm;display:flex;justify-content:space-between;">
+  <div style="width:100%;font-size:8pt;color:#5A6B60;padding:0 14mm;display:flex;justify-content:space-between;font-family:'Times New Roman',Times,serif;">
     <span>StudyFlow — Research and Technical Documentation</span>
     <span>Blay-Miezah Lemuel Ackah</span>
   </div>`

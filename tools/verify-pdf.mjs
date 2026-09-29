@@ -9,7 +9,7 @@ import { spawn } from "node:child_process"
 import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
-import { convertDocx, contentsHtml, COVER_HTML, shell } from "./pdf-parts.mjs"
+import { convertDocx, contentsHtml, COVER_HTML, shell, markLeads } from "./pdf-parts.mjs"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 const PDF_PATH = join(root, "StudyFlow_Documentation.pdf")
@@ -50,7 +50,7 @@ check(
 const { bodyClean, contents } = await convertDocx(
   await readFileP(join(root, "StudyFlow_Documentation.docx")),
 )
-const html = shell(contentsHtml(contents) + COVER_HTML + bodyClean)
+const html = shell(contentsHtml(contents) + COVER_HTML + markLeads(bodyClean))
 
 const tmp = mkdtempSync(join(tmpdir(), "sfverify-"))
 const proc = spawn(
@@ -86,12 +86,34 @@ try {
   const facts = await page.evaluate(() => {
     const text = document.body.innerText
     const tocLis = [...document.querySelectorAll("ul.toc li")]
+    const tables = [...document.querySelectorAll("table")]
+    const cellStats = tables.map((t) => {
+      const cells = [...t.querySelectorAll("th,td")]
+      const empty = cells.filter((c) => c.innerText.trim() === "").length
+      return { cells: cells.length, empty }
+    })
+    const bodyFont = getComputedStyle(document.body).fontFamily
+    const firstTableHead = tables[0]
+      ? [...tables[0].rows[0].cells].map((c) => c.innerText.trim())
+      : []
     return {
       h1: document.querySelectorAll("h1").length, // 31 body + 1 "Contents"
       h2: document.querySelectorAll("h2").length,
       codeSpans: document.querySelectorAll("code.doccode").length,
       images: document.images.length,
       imagesOk: [...document.images].every((i) => i.complete && i.naturalWidth > 0),
+      tables: tables.length,
+      tableCells: cellStats.reduce((a, s) => a + s.cells, 0),
+      tableEmptyCells: cellStats.reduce((a, s) => a + s.empty, 0),
+      firstTableHead,
+      figureLabels: [...document.querySelectorAll("p strong")].filter((s) =>
+        /^Figure [A-Z]?\d*\.?\d+:$/.test(s.innerText.trim()),
+      ).length,
+      tableLabels: [...document.querySelectorAll("p strong")].filter((s) =>
+        /^Table [A-Z]?\d*\.?\d+:$/.test(s.innerText.trim()),
+      ).length,
+      leads: document.querySelectorAll("p.lead").length,
+      bodyFontIsTimes: /["']?times new roman["']?/i.test(bodyFont),
       hasCodeLine: text.includes('case "techniques":'),
       hasRenderSkeleton: text.includes("renderSkeleton(state.tab)"),
       hasBoldText: text.includes("Vite is a build tool"),
@@ -107,6 +129,22 @@ try {
   check("h2 count", facts.h2 === 169, `${facts.h2}`)
   check("code spans styled", facts.codeSpans === 132, `${facts.codeSpans}`)
   check("all figures embedded", facts.images === 28 && facts.imagesOk, `${facts.images} images`)
+  check("table count (docx registry)", facts.tables === 18, `${facts.tables}`)
+  check(
+    "no empty table cells (the blank-table bug)",
+    facts.tableEmptyCells === 0,
+    `${facts.tableCells} cells, ${facts.tableEmptyCells} empty`,
+  )
+  check(
+    "first table has real headers",
+    facts.firstTableHead.includes("User group") &&
+      facts.firstTableHead.includes("Primary need"),
+    facts.firstTableHead.slice(0, 3).join(" | "),
+  )
+  check("28 figure captions", facts.figureLabels === 28, `${facts.figureLabels}`)
+  check("18 table captions", facts.tableLabels === 18, `${facts.tableLabels}`)
+  check("drop-cap leads on every section", facts.leads === 31, `${facts.leads}`)
+  check("body font is Times New Roman", facts.bodyFontIsTimes, "body computed font")
   check("code line preserved", facts.hasCodeLine)
   check("second code line preserved", facts.hasRenderSkeleton)
   check("bold runs converted (not literal)", facts.hasBoldText)

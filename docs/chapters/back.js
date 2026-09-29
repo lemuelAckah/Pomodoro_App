@@ -252,6 +252,9 @@ export function appendices() {
   setChapter("E")
   out.push(
     h1("Appendix E — Technology Stack Summary"),
+    lead(
+      "This appendix condenses Chapter Six into a single reference table: every layer of the StudyFlow stack, the concrete technology used, and how the codebase verifies that use.",
+    ),
     ...table(
       "Complete verified stack (see Chapter Six for full explanations)",
       ["Layer", "Technology", "Verified use"],

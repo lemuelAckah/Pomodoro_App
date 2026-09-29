@@ -1,5 +1,5 @@
 // Shared docx styling + building blocks for the StudyFlow documentation.
-// Fonts: Aptos (body), Consolas (code). Accent: sage green #47765A.
+// Fonts: Times New Roman (body), Consolas (code). Accent: sage green #47765A.
 import {
   AlignmentType,
   BorderStyle,
@@ -87,39 +87,45 @@ export function h3(text) {
 }
 
 // ---------------------------------------------------------------- body ----
-// runs("plain **bold** *italic* `code`") -> TextRun[]
+// runs("plain **bold** *italic* `code`") -> plain tokens (NOT TextRuns):
+//   { text, bold?, italics?, code? }[]
+// Consumers turn tokens into TextRun[] with runFrom() at their own size and
+// colour — docx TextRun objects do not expose their .options, so rebuilding
+// from runs must never read them (that bug produced empty table cells).
 function runs(text) {
   const out = []
   const re = /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g
   let last = 0
   let m
   while ((m = re.exec(text))) {
-    if (m.index > last)
-      out.push(new TextRun({ text: text.slice(last, m.index) }))
+    if (m.index > last) out.push({ text: text.slice(last, m.index) })
     const tok = m[0]
-    if (tok.startsWith("**"))
-      out.push(new TextRun({ text: tok.slice(2, -2), bold: true }))
-    else if (tok.startsWith("`"))
-      out.push(
-        new TextRun({
-          text: tok.slice(1, -1),
-          font: "Consolas",
-          size: 20,
-          color: ACCENT_DARK,
-        }),
-      )
-    else out.push(new TextRun({ text: tok.slice(1, -1), italics: true }))
+    if (tok.startsWith("**")) out.push({ text: tok.slice(2, -2), bold: true })
+    else if (tok.startsWith("`")) out.push({ text: tok.slice(1, -1), code: true })
+    else out.push({ text: tok.slice(1, -1), italics: true })
     last = m.index + tok.length
   }
-  if (last < text.length) out.push(new TextRun({ text: text.slice(last) }))
+  if (last < text.length) out.push({ text: text.slice(last) })
   return out
+}
+
+// token -> TextRun, with per-context size/colour overrides.
+function runFrom(tok, opts = {}) {
+  return new TextRun({
+    text: tok.text,
+    bold: tok.bold || opts.bold || undefined,
+    italics: tok.italics || opts.italics || undefined,
+    size: opts.size,
+    color: opts.color || (tok.code ? ACCENT_DARK : undefined),
+    font: tok.code ? "Consolas" : undefined,
+  })
 }
 
 export function para(text, opts = {}) {
   return new Paragraph({
     alignment: AlignmentType.JUSTIFIED,
     spacing: { after: 160, line: 300 },
-    children: runs(text),
+    children: runs(text).map((t) => runFrom(t)),
     ...opts,
   })
 }
@@ -129,16 +135,7 @@ export function lead(text) {
   return new Paragraph({
     alignment: AlignmentType.JUSTIFIED,
     spacing: { after: 220, line: 310 },
-    children: runs(text).map(
-      (r) =>
-        new TextRun({
-          text: r.options?.text ?? "",
-          bold: r.options?.bold,
-          italics: r.options?.italics,
-          size: 23,
-          color: MUTED,
-        }),
-    ),
+    children: runs(text).map((t) => runFrom(t, { size: 23, color: MUTED })),
   })
 }
 
@@ -148,7 +145,7 @@ export function bullets(items) {
       new Paragraph({
         bullet: { level: 0 },
         spacing: { after: 90, line: 290 },
-        children: runs(t),
+        children: runs(t).map((tok) => runFrom(tok)),
       }),
   )
 }
@@ -159,7 +156,7 @@ export function numbered(items) {
       new Paragraph({
         numbering: { reference: "doc-num", level: 0 },
         spacing: { after: 90, line: 290 },
-        children: runs(t),
+        children: runs(t).map((tok) => runFrom(tok)),
       }),
   )
 }
@@ -219,20 +216,13 @@ export function table(caption, headers, rows, widths) {
       children: [
         new Paragraph({
           spacing: { after: 0, line: 250 },
-          children: runs(String(text)).map((r) =>
-            isHead
-              ? new TextRun({
-                  text: r.options?.text ?? "",
-                  bold: true,
-                  color: "FFFFFF",
-                  size: 19,
-                })
-              : new TextRun({
-                  text: r.options?.text ?? "",
-                  bold: r.options?.bold,
-                  italics: r.options?.italics,
-                  size: 19,
-                }),
+          children: runs(String(text)).map((tok) =>
+            runFrom(
+              tok,
+              isHead
+                ? { bold: true, color: "FFFFFF", size: 19 }
+                : { size: 19 },
+            ),
           ),
         }),
       ],

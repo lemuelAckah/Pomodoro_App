@@ -85,7 +85,7 @@ const doc = new Document({
   styles: {
     default: {
       document: {
-        run: { font: "Aptos", size: 22, color: "1F2A24" },
+        run: { font: "Times New Roman", size: 22, color: "1F2A24" },
         paragraph: { spacing: { line: 300, after: 160 } },
       },
     },
@@ -96,7 +96,7 @@ const doc = new Document({
         basedOn: "Normal",
         next: "Normal",
         quickFormat: true,
-        run: { size: 40, bold: true, color: "2C5641", font: "Aptos" },
+        run: { size: 40, bold: true, color: "2C5641", font: "Times New Roman" },
         paragraph: {
           spacing: { before: 240, after: 240 },
           outlineLevel: 0,
@@ -108,7 +108,7 @@ const doc = new Document({
         basedOn: "Normal",
         next: "Normal",
         quickFormat: true,
-        run: { size: 30, bold: true, color: "2C5641", font: "Aptos" },
+        run: { size: 30, bold: true, color: "2C5641", font: "Times New Roman" },
         paragraph: {
           spacing: { before: 300, after: 140 },
           outlineLevel: 1,
@@ -120,7 +120,7 @@ const doc = new Document({
         basedOn: "Normal",
         next: "Normal",
         quickFormat: true,
-        run: { size: 25, bold: true, color: "1F2A24", font: "Aptos" },
+        run: { size: 25, bold: true, color: "1F2A24", font: "Times New Roman" },
         paragraph: {
           spacing: { before: 220, after: 110 },
           outlineLevel: 2,

@@ -49,6 +49,15 @@ export function collectContents(html) {
   return items
 }
 
+// Tag the opening paragraph after each h1 with class="lead" so CSS can give
+// it a drop cap — except figure/table captions and image paragraphs.
+export function markLeads(bodyHtml) {
+  return bodyHtml.replace(
+    /(<h1>[\s\S]*?<\/h1>\s*)<p>(?!\s*<strong>(?:Figure|Table) )(?!\s*<img)/g,
+    '$1<p class="lead">',
+  )
+}
+
 export async function convertDocx(buffer) {
   const { value: raw, messages } = await mammoth.convertToHtml(
     { buffer },
@@ -93,13 +102,19 @@ export const CSS = `
   * { box-sizing: border-box; }
   html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   body {
-    font-family: Aptos, "Segoe UI", Calibri, sans-serif;
-    font-size: 10.5pt; line-height: 1.55; color: ${INK}; margin: 0;
+    font-family: "Times New Roman", Times, "Liberation Serif", serif;
+    font-size: 11pt; line-height: 1.5; color: ${INK}; margin: 0;
   }
-  p { margin: 0 0 8pt; text-align: justify; }
+  p { margin: 0 0 8pt; text-align: justify; orphans: 3; widows: 3; }
+  /* Drop cap on the opening paragraph of every section */
+  p.lead::first-letter {
+    font-size: 2.7em; line-height: 0.82;
+    font-weight: 600; color: ${ACCENT_DARK};
+    float: left; padding: 3pt 6pt 0 0;
+  }
   h1 {
-    color: ${ACCENT_DARK}; font-size: 19pt; line-height: 1.25;
-    margin: 0 0 12pt; padding-bottom: 5pt;
+    color: ${ACCENT_DARK}; font-size: 20pt; line-height: 1.25;
+    margin: 0 0 12pt; padding-bottom: 5pt; letter-spacing: 0.2pt;
     border-bottom: 2pt solid ${ACCENT};
     break-before: page; break-after: avoid;
   }
@@ -118,11 +133,20 @@ export const CSS = `
     width: 100%; border-collapse: collapse; margin: 6pt 0 10pt;
     font-size: 9.5pt; line-height: 1.4;
   }
+  /* Booktabs-style rules: strong top and bottom, light row separators,
+     no vertical lines. */
   th {
     background: ${ACCENT}; color: #fff; text-align: left;
-    padding: 4pt 6pt; border: 0.5pt solid ${RULE_LIGHT}; font-weight: 600;
+    padding: 4.5pt 7pt;
+    border-top: 1.5pt solid ${ACCENT_DARK};
+    border-bottom: 0.9pt solid ${ACCENT_DARK};
+    font-weight: 600; font-size: 9pt;
   }
-  td { padding: 4pt 6pt; border: 0.5pt solid ${RULE_LIGHT}; vertical-align: top; }
+  td {
+    padding: 3.5pt 7pt; vertical-align: top;
+    border-bottom: 0.4pt solid ${RULE_LIGHT};
+  }
+  tr:last-child td { border-bottom: 1.2pt solid ${ACCENT}; }
   tr { break-inside: avoid; }
   thead { display: table-header-group; }
   code.doccode {
