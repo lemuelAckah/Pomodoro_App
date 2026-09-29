@@ -10,7 +10,9 @@
     "format": "oxfmt",
     "docs:build": "node docs/build.js",
     "docs:pdf": "node tools/docx-to-pdf.mjs",
-    "docs:pdf:verify": "node tools/verify-pdf.mjs"
+    "docs:pdf:verify": "node tools/verify-pdf.mjs",
+    "deck:pdf": "node tools/make-deck.mjs",
+    "deck:pptx": "node tools/make-pptx.mjs"
   },
   "dependencies": {
     "@supabase/server": "^1.5.3",
@@ -28,6 +30,7 @@
     "mammoth": "^1.13.0",
     "oxfmt": "^0.2.0",
     "pdf-lib": "^1.17.1",
+    "pptxgenjs": "^4.0.1",
     "puppeteer-core": "^25.12.0",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.0",
