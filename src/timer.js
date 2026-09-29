@@ -520,6 +520,11 @@ function toggleBoss(force) {
 function renderTimer() {
   const target = $("#tab-timer")
 
+  const doneCount = state.tasks.filter((t) => t.done).length
+  const totalCount = state.tasks.length
+  const donePct = totalCount ? Math.round((doneCount / totalCount) * 100) : 0
+  const doneOpen = localStorage.getItem("sf-done-open") !== "0"
+
   target.innerHTML = `${viewHead("Focus desk", "A calm command centre for your next deep-work session.")}<div class="grid two"><div class="card timer-card"><div class="mode-switch">${Object.entries(
     modeLabels,
   )
@@ -535,11 +540,15 @@ function renderTimer() {
       "",
     )}</div><div class="template-row">${TIMER_TEMPLATES.map((p) => `<button type="button" class="template-chip" data-template="${p.id}" title="Focus ${p.focus}:${String(p.focusSec ?? 0).padStart(2, "0")} · break ${p.short}:${String(p.shortSec ?? 0).padStart(2, "0")}">${p.name}</button>`).join("")}</div><div class="dur-row"><label class="field-label">Minutes<input class="input dur-input" id="dur-min" type="number" min="0" max="180" step="1" value="${Math.floor(durations[state.mode] / 60)}" aria-label="Custom minutes"></label><label class="field-label">Seconds<input class="input dur-input" id="dur-sec" type="number" min="0" max="59" step="1" value="${durations[state.mode] % 60}" aria-label="Custom seconds"></label><button type="button" class="ghost" data-set-dur title="Apply to ${modeLabels[state.mode]}">Set duration</button></div>${challengeLockBanner()}<div class="focus-live off" data-focus-live><span class="live-dot"></span>Focus live — leaving this page resets the session</div>${techTagMarkup()}<div class="timer-ring" style="--progress:${(state.time / durations[state.mode]) * 360}deg"><div><div class="time">${fmt(state.time)}</div><div class="timer-label">${modeLabels[state.mode]}</div></div></div><div class="timer-actions"><button type="button" class="icon-btn" data-reset title="Reset">↻</button><button type="button" class="primary" data-toggle>${
     state.running ? "Pause" : "Start session"
-  }</button><button type="button" class="icon-btn" data-focusview title="Focus mode — just the timer">${sicon("expand")}</button></div><div class="muted" style="margin-top:36px">${state.sessions % 4}/4 sessions until a long break</div></div><div class="card tasks-card"><div class="section-row"><h2>Today’s tasks</h2><span class="tag" data-task-count>${state.tasks.filter((t) => t.done).length}/${state.tasks.length} complete</span><span class="sync-pill" data-sync-pill hidden></span></div><div class="input-row"><input class="input" id="task-input" placeholder="What are you working on?"><button type="button" class="primary" data-add-task>+</button></div><div id="task-list">${
-    state.tasks.length
-      ? state.tasks.map(taskRow).join("")
-      : '<p class="muted" style="padding:25px 0">Your task list is clear. Add one small next step.</p>'
-  }</div></div></div><div class="grid four stats"><div class="card stat"><span>Sessions</span><strong>${state.sessions}</strong><span>all time</span></div><div class="card stat"><span>Coins</span><strong data-coin="stat">${state.coins}</strong><span>available to spend</span></div><div class="card stat"><span>Tasks</span><strong>${state.tasks.filter((t) => t.done).length}</strong><span>completed</span></div><div class="card stat"><span>Focus streak</span><strong>${state.streak.count}</strong>${streakDots()}<span>day streak</span></div></div>${missionDesk.markup()}${techOfDayMarkup()}${gardenMarkup()}${recordsMarkup()}${achievementsCabinetMarkup()}${masteryLadderMarkup()}`
+  }</button><button type="button" class="icon-btn" data-focusview title="Focus mode — just the timer">${sicon("expand")}</button></div><div class="muted" style="margin-top:36px">${state.sessions % 4}/4 sessions until a long break</div></div><div class="card tasks-card"><div class="section-row"><h2>Today’s tasks</h2><span class="tag" data-task-count>${state.tasks.filter((t) => t.done).length}/${state.tasks.length} complete</span><span class="sync-pill" data-sync-pill hidden></span></div><div class="input-row"><input class="input" id="task-input" placeholder="What are you working on?"><button type="button" class="primary" data-add-task>+</button></div><div class="task-progress" data-task-progress><div class="tp-text"><span><span class="tp-num" data-tp-done>${doneCount}</span> of <span class="tp-num" data-tp-total>${totalCount}</span> tasks complete</span><span class="tp-num" data-tp-pct>${donePct}%</span></div><div class="tp-bar"><div class="tp-fill${totalCount > 0 && doneCount === totalCount ? " full" : ""}" data-tp-fill style="width:${donePct}%"></div></div><div class="tp-caption" data-tp-caption>${taskProgressCaption(doneCount, totalCount)}</div></div><div class="task-groups"><div class="task-group" data-group-open><div class="tg-head"><span class="tg-title">To do</span><span class="tg-count" data-tp-open-count>${totalCount - doneCount}</span></div><div class="tg-list" data-list-open>${
+    state.tasks.some((t) => !t.done)
+      ? state.tasks.filter((t) => !t.done).map(taskRow).join("")
+      : '<p class="task-empty">Nothing waiting — add your next small step.</p>'
+  }</div></div><div class="task-group${doneOpen ? "" : " collapsed"}" data-group-done><button type="button" class="tg-head tg-toggle" data-done-toggle aria-expanded="${doneOpen}" title="Show or hide completed tasks"><span class="tg-title">Completed</span><span class="tg-count" data-tp-done-count>${doneCount}</span>${sicon("chevron-down")}</button><div class="tg-list" data-list-done>${
+    state.tasks.some((t) => t.done)
+      ? state.tasks.filter((t) => t.done).map(taskRow).join("")
+      : '<p class="task-empty dim">Completed tasks will collect here.</p>'
+  }</div></div></div></div></div><div class="grid four stats"><div class="card stat"><span>Sessions</span><strong>${state.sessions}</strong><span>all time</span></div><div class="card stat"><span>Coins</span><strong data-coin="stat">${state.coins}</strong><span>available to spend</span></div><div class="card stat"><span>Tasks</span><strong>${state.tasks.filter((t) => t.done).length}</strong><span>completed</span></div><div class="card stat"><span>Focus streak</span><strong>${state.streak.count}</strong>${streakDots()}<span>day streak</span></div></div>${missionDesk.markup()}${techOfDayMarkup()}${gardenMarkup()}${recordsMarkup()}${achievementsCabinetMarkup()}${masteryLadderMarkup()}`
 
   $$("[data-mode]", target).forEach(
     (b) =>
@@ -779,9 +788,7 @@ function renderTimer() {
           }
         }
 
-        const row = target.querySelector(`[data-task-row="${t.id}"]`)
-
-        if (row) row.classList.toggle("done", t.done)
+        moveTaskRow(t, target)
 
         b.classList.toggle("done", t.done)
 
@@ -798,8 +805,25 @@ function renderTimer() {
 
         if (count)
           count.textContent = `${state.tasks.filter((x) => x.done).length}/${state.tasks.length} complete`
+
+        syncTaskProgress(target)
+
+        refreshTaskEmpties(target)
       }),
   )
+
+  const doneToggle = $("[data-done-toggle]", target)
+
+  if (doneToggle)
+    doneToggle.onclick = () => {
+      const group = doneToggle.closest("[data-group-done]")
+
+      const collapsed = group.classList.toggle("collapsed")
+
+      doneToggle.setAttribute("aria-expanded", String(!collapsed))
+
+      localStorage.setItem("sf-done-open", collapsed ? "0" : "1")
+    }
 
   $$("[data-edit-task]", target).forEach(
     (b) => (b.onclick = () => openTaskEditor(b.dataset.editTask)),
@@ -2275,6 +2299,97 @@ function renderMiniTimer() {
   if (miniEl) makeDraggable(miniEl, miniEl)
 
   updateBarPadding()
+}
+
+// ---- Today's-tasks progress + completed group helpers -------------------
+
+function taskProgressCaption(done, total) {
+  if (!total) return "Add your first task to get started."
+
+  if (done === total) return "All tasks complete — well earned."
+
+  return `${total - done} task${total - done === 1 ? "" : "s"} left to go.`
+}
+
+function syncTaskProgress(scope) {
+  const card = $("[data-task-progress]", scope)
+
+  if (!card) return
+
+  const done = state.tasks.filter((t) => t.done).length
+
+  const total = state.tasks.length
+
+  const pct = total ? Math.round((done / total) * 100) : 0
+
+  const doneEl = $("[data-tp-done]", card)
+
+  const totalEl = $("[data-tp-total]", card)
+
+  const pctEl = $("[data-tp-pct]", card)
+
+  const fill = $("[data-tp-fill]", card)
+
+  const capEl = $("[data-tp-caption]", card)
+
+  if (doneEl) doneEl.textContent = done
+
+  if (totalEl) totalEl.textContent = total
+
+  if (pctEl) pctEl.textContent = `${pct}%`
+
+  if (fill) {
+    fill.style.width = `${pct}%`
+
+    fill.classList.toggle("full", total > 0 && done === total)
+  }
+
+  if (capEl) capEl.textContent = taskProgressCaption(done, total)
+
+  // The group badges live in the group headers, outside the progress card.
+  const doneCount = $("[data-tp-done-count]", scope)
+
+  const openCount = $("[data-tp-open-count]", scope)
+
+  if (doneCount) doneCount.textContent = done
+
+  if (openCount) openCount.textContent = total - done
+}
+
+function refreshTaskEmpties(scope) {
+  const open = $("[data-list-open]", scope)
+
+  const doneList = $("[data-list-done]", scope)
+
+  if (!open || !doneList) return
+
+  $$(".task-empty", open).forEach((e) => e.remove())
+
+  $$(".task-empty", doneList).forEach((e) => e.remove())
+
+  if (!state.tasks.some((t) => !t.done))
+    open.insertAdjacentHTML(
+      "beforeend",
+      '<p class="task-empty">Nothing waiting — add your next small step.</p>',
+    )
+
+  if (!state.tasks.some((t) => t.done))
+    doneList.insertAdjacentHTML(
+      "beforeend",
+      '<p class="task-empty dim">Completed tasks will collect here.</p>',
+    )
+}
+
+function moveTaskRow(t, scope) {
+  const row = $(`[data-task-row="${t.id}"]`, scope)
+
+  const dst = $(t.done ? "[data-list-done]" : "[data-list-open]", scope)
+
+  if (row && dst) {
+    dst.prepend(row)
+
+    row.classList.toggle("done", t.done)
+  }
 }
 
 function taskRow(task) {
