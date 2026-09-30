@@ -183,7 +183,7 @@ const doc = new Document({
   ],
 })
 
-const out = "StudyFlow_Documentation.docx"
+const out = process.argv[2] || "StudyFlow_Documentation.docx"
 await writeDocx(doc, out)
 console.log(
   `Wrote ${out} — ${registry.figures.length} figures, ${registry.tables.length} tables`,

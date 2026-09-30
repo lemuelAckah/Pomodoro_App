@@ -71,15 +71,28 @@ export async function convertDocx(buffer) {
 }
 
 // ------------------------------------------------------------- HTML parts --
-export function contentsHtml(items) {
+// items: [{ level, text }]; pages: aligned array of page numbers, or null
+// for the measuring pass (which appends a white sentinel so the page mapper
+// can find exactly where the contents end).
+// h1 rows are chapters/sections; h2 rows already carry their own numbers in
+// the source text ("1.1 Background"), so nothing is prefixed here.
+export const TOC_SENTINEL = "TOC-END-MARKER-9F3A"
+export function contentsHtml(items, pages) {
   const rows = items
-    .map(({ level, text }) =>
-      level === "h1"
-        ? `<li class="t1">${text}</li>`
-        : `<li class="t2">${text}</li>`,
-    )
+    .map(({ level, text }, i) => {
+      const pg = pages ? pages[i] : null
+      const pgHtml =
+        pg != null
+          ? `<span class="dots"></span><span class="pg">${pg}</span>`
+          : '<span class="dots"></span>'
+      return `<li class="${level === "h1" ? "t1" : "t2"}"><span class="tx">${text}</span>${pgHtml}</li>`
+    })
     .join("\n")
-  return `<section class="tocpage"><h1 class="plain">Contents</h1><ul class="toc">\n${rows}\n</ul><p class="fineprint">Section list for the PDF edition — page numbers omitted; use PDF search to navigate.</p></section>`
+  const sentinel =
+    pages == null
+      ? `<p style="color:#fff;font-size:1pt;margin:0">${TOC_SENTINEL}</p>`
+      : ""
+  return `<section class="tocpage"><h1 class="plain">Contents</h1><ul class="toc">\n${rows}\n</ul>${sentinel}</section>`
 }
 
 export const COVER_HTML = `
@@ -178,14 +191,31 @@ export const CSS = `
   .cover-author { font-size: 13.5pt; font-weight: 600; margin-top: 2mm; }
   .cover-date { font-size: 11.5pt; margin-top: 12mm; }
   .cover-ver, .cover-src { font-size: 10pt; color: ${MUTED}; margin-top: 2mm; }
-  /* generated contents page */
+  /* generated contents page — classic book TOC with dotted leaders */
   .tocpage { break-before: page; }
   h1.plain { border-bottom: 2pt solid ${ACCENT}; }
-  ul.toc { list-style: none; margin: 10pt 0 0; padding: 0; columns: 2; column-gap: 10mm; }
-  ul.toc li { margin: 0 0 3.5pt; text-align: left; break-inside: avoid; }
-  ul.toc li.t1 { font-weight: 600; color: ${ACCENT_DARK}; margin-top: 7pt; }
+  ul.toc { list-style: none; margin: 14pt 0 0; padding: 0; }
+  ul.toc li {
+    display: flex; align-items: baseline;
+    margin: 0; padding: 1.5pt 0; break-inside: avoid;
+  }
+  ul.toc li .tx { flex: none; max-width: 88%; }
+  ul.toc .dots {
+    flex: 1; margin: 0 5pt;
+    border-bottom: 0.7pt dotted #9DB3A5;
+    transform: translateY(-2.5pt);
+  }
+  ul.toc .pg {
+    flex: none; font-family: "Space Mono", Consolas, monospace;
+    font-size: 9pt; color: ${MUTED};
+    font-variant-numeric: tabular-nums;
+  }
+  ul.toc li.t1 {
+    font-weight: 700; color: ${ACCENT_DARK}; font-size: 10.5pt;
+    margin-top: 9pt; break-after: avoid;
+  }
   ul.toc li.t1:first-child { margin-top: 0; }
-  ul.toc li.t2 { font-weight: 400; font-size: 9pt; padding-left: 10pt; }
+  ul.toc li.t2 { font-weight: 400; font-size: 9.5pt; padding-left: 16pt; }
   .fineprint { font-size: 8.5pt; color: ${MUTED}; text-align: center; margin-top: 14mm; }
 `
 
