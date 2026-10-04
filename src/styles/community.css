@@ -2673,9 +2673,14 @@ html[data-night="1"] .poll-add:hover {
     padding: 8px 9px;
     font-size: 11px;
   }
-  .four,
-  .three {
+  .four {
     grid-template-columns: 1fr 1fr;
+  }
+  /* Phones: every card grid goes single-column so each card owns the full
+     row — techniques, groups, Discover recommendations and store rewards all
+     read as calm full-width cards instead of squeezed two-up tiles. */
+  .three {
+    grid-template-columns: 1fr;
   }
   .two {
     grid-template-columns: 1fr;
@@ -2683,6 +2688,25 @@ html[data-night="1"] .poll-add:hover {
   .card {
     padding: 17px;
     border-radius: 16px;
+  }
+  /* Group cards: roomier avatar, calmer type, full-width actions. */
+  .group-card .group-top {
+    gap: 13px;
+  }
+  .group-card .group-logo {
+    width: 50px;
+    height: 50px;
+    border-radius: 15px;
+  }
+  .group-card h3 {
+    font-size: 17px;
+  }
+  .group-card .actions {
+    margin-top: 14px;
+  }
+  .group-card .actions button {
+    padding: 11px 14px;
+    font-size: 13px;
   }
   .timer-card,
   .tasks-card {

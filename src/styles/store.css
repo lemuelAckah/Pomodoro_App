@@ -565,16 +565,17 @@ body.is-scrolling .store-item:focus-within {
   z-index: auto;
 }
 
-/* Mobile: tooltip centered, full-width, can't overflow the screen */
+/* Mobile: keep the desktop right-anchored tooltip. Card grids are
+   single-column on phones, so the tooltip sits fully inside its full-width
+   card — the old centered rule made each 280px tooltip spill ~130px past the
+   card's right edge, which expanded every card's scrollable area and let the
+   whole store page slide sideways (horizontal shift the other tabs never
+   had). */
 @media (max-width: 560px) {
   .info-btn::after {
-    left: 50%;
-    right: auto;
-    transform: translateX(-50%);
-    width: min(280px, calc(100vw - 32px));
+    width: min(230px, calc(100vw - 48px));
     max-width: none;
     bottom: calc(100% + 10px);
-    text-align: center;
   }
   .info-btn:hover::after,
   .info-btn:focus-visible::after {

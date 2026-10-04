@@ -285,6 +285,16 @@ button.coins:hover {
   }
 }
 
+/* Phones: card grids collapse to one column so every card (techniques,
+   groups, Discover picks, store rewards) takes the whole row. Re-asserted
+   here because community.css loads after this file and its base rules win
+   cascade ties on small screens (see the community-layout note above). */
+@media (max-width: 600px) {
+  .three {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 900px) {
   .app-shell {
     grid-template-columns: 1fr;
