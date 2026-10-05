@@ -906,7 +906,9 @@ function sendPrecacheManifest(worker) {
   } catch {
     /* ignore */
   }
-})/* PWA install lifecycle — supports Chrome/Edge (beforeinstallprompt),
+}
+
+/* PWA install lifecycle — supports Chrome/Edge (beforeinstallprompt),
    iOS (Add to Home Screen heuristic), and display-mode detection so the
    app can show the right message in the hero, header and Settings. */
 
@@ -945,7 +947,7 @@ function iosAhsHint() {
     label: "Add to Home Screen",
     instructions: [
       "Tap the Share button (box with an up-arrow) in the browser bar.",
-      "Scroll and tap "Add to Home Screen".",
+      "Scroll and tap Add to Home Screen.",
       "Confirm, then launch StudyFlow from your home screen.",
     ],
   }
