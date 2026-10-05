@@ -21,6 +21,7 @@ import {
   cloudStateSubscription,
   hydrateCloudState,
   refreshCoinDisplays,
+  staggerCardsIn,
   syncThemeToggle,
   toggleNight,
   setCloudSubscription,
@@ -550,6 +551,8 @@ function render() {
 
     paintOverlays()
 
+    staggerCardsIn($(`#tab-${state.tab}`))
+
     return
   }
 
@@ -572,6 +575,8 @@ function render() {
       runView(draw)
 
       paintOverlays()
+
+      staggerCardsIn($(`#tab-${state.tab}`))
     })
     .catch((err) => {
       if (token !== renderToken) return
@@ -908,6 +913,23 @@ function sendPrecacheManifest(worker) {
     /* ignore */
   }
 }
+
+/* PWA install: capture Chrome's install prompt so a styled "Install app"
+   button (landing hero) can fire it at the right moment instead of the
+   easy-to-miss mini-infobar. */
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault()
+
+  window.__sfInstallPrompt = e
+
+  document.body.classList.add("pwa-installable")
+})
+
+window.addEventListener("appinstalled", () => {
+  document.body.classList.remove("pwa-installable")
+
+  window.__sfInstallPrompt = null
+})
 
 function showUpdateToast(reg) {
   if ($("#update-toast")) return

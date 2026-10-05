@@ -1,7 +1,7 @@
 {
-  "description": "Enhance productivity with a professional Pomodoro timer featuring focus mode and customizable intervals to boost concentration and manage work sessions effectively.",
+  "description": "StudyFlow - a focused workspace for productive study sessions. Pomodoro sessions, streaks, study buddies and rewards - free forever.",
   "robots": {
-    "index": false
+    "index": true
   },
   "accessibility": {
     "addBypassLinks": false,

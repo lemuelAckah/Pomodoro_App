@@ -595,6 +595,146 @@ button.tg-toggle .sicon {
   }
 }
 
+/* ---- Life on the Focus desk: micro-animations ---- */
+
+/* Streak flame sits in the record tile's corner and breathes like fire. */
+.records-grid > div {
+  position: relative;
+}
+
+.records-grid .flame {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--gold);
+  transform-origin: 50% 90%;
+}
+
+.records-grid .flame .sicon {
+  width: 15px;
+  height: 15px;
+}
+
+@keyframes flame-flicker {
+  0%,
+  100% {
+    transform: scale(1) rotate(-2deg);
+    opacity: 0.95;
+  }
+  30% {
+    transform: scale(1.12) rotate(3deg) translateY(-1px);
+    opacity: 1;
+  }
+  55% {
+    transform: scale(0.94) rotate(-3deg);
+    opacity: 0.85;
+  }
+  80% {
+    transform: scale(1.06) rotate(2deg);
+    opacity: 1;
+  }
+}
+
+.records-grid .flame {
+  animation: flame-flicker 2.6s ease-in-out infinite;
+}
+
+html[data-night="1"] .records-grid .flame {
+  filter: drop-shadow(0 0 6px rgba(233, 174, 63, 0.55));
+}
+
+/* The running ring gets a soft sage aura — visible in your peripheral
+   vision, never strobing. */
+.timer-ring {
+  transition: filter 0.5s ease;
+}
+
+.timer-ring.running {
+  filter: drop-shadow(0 0 22px rgba(71, 118, 90, 0.4));
+}
+
+html[data-night="1"] .timer-ring.running {
+  filter: drop-shadow(0 0 26px rgba(184, 215, 124, 0.45));
+}
+
+/* Coin pill bounce when the balance changes. */
+@keyframes coin-pop {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.18);
+  }
+  65% {
+    transform: scale(0.95);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.coins.coin-pop,
+[data-coin].coin-pop {
+  animation: coin-pop 0.5s cubic-bezier(0.2, 1.4, 0.4, 1);
+}
+
+/* Cards cascade in when a view renders (stagger set via --rise-i). */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.rise {
+  animation: rise-in 0.45s cubic-bezier(0.2, 0.8, 0.3, 1) both;
+  animation-delay: calc(var(--rise-i, 0) * 45ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .records-grid .flame {
+    animation: none;
+  }
+
+  .rise {
+    animation: none;
+  }
+
+  .coins.coin-pop,
+  [data-coin].coin-pop {
+    animation: none;
+  }
+}
+
+/* Share-my-week button in the Records header. */
+.share-week-btn {
+  font-size: 12px;
+  padding: 7px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.share-week-btn .sicon {
+  width: 14px;
+  height: 14px;
+}
+
+@media (max-width: 640px) {
+  .share-week-btn span:not(.sicon),
+  .share-week-btn {
+    font-size: 11.5px;
+    padding: 6px 10px;
+  }
+}
+
 .ach-row {
   display: flex;
   flex-wrap: wrap;

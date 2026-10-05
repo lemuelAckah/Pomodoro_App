@@ -897,11 +897,107 @@ function refreshCoinDisplays() {
     const v = String(state.coins || 0)
 
     document.querySelectorAll("[data-coin]").forEach((el) => {
+      // Bounce the pill when the balance actually changes (not on re-render
+      // with the same value) — a small, satisfying earn/spend cue.
+      const changed = el.dataset.coinVal !== undefined && el.dataset.coinVal !== v
+
+      el.dataset.coinVal = v
+
       el.innerHTML = el.dataset.coin === "earn" ? `${sicon("coin")} ${v}` : v
+
+      if (changed && !state.reduceMotion) {
+        el.classList.remove("coin-pop")
+
+        void el.offsetWidth
+
+        el.classList.add("coin-pop")
+      }
     })
   } catch {
     /* non-DOM environment */
   }
+}
+
+// Animate number counters from zero to their value once, when their card
+// scrolls into view (Focus desk records/stats). Falls back to static numbers
+// under reduced motion or when IntersectionObserver is unavailable.
+function animateCountUps(root) {
+  const els = $$("[data-count-up]", root || document)
+
+  if (!els.length) return
+
+  const reduce = state.reduceMotion || typeof IntersectionObserver === "undefined"
+
+  const run = (el) => {
+    const target = Number(el.dataset.countUp) || 0
+
+    const suffix = el.dataset.countSuffix || ""
+
+    if (reduce || target === 0) {
+      el.textContent = `${target}${suffix}`
+
+      return
+    }
+
+    const dur = 900
+
+    const start = performance.now()
+
+    const ease = (t) => 1 - Math.pow(1 - t, 3)
+
+    const step = (now) => {
+      const p = Math.min(1, (now - start) / dur)
+
+      el.textContent = `${Math.round(target * ease(p))}${suffix}`
+
+      if (p < 1) requestAnimationFrame(step)
+    }
+
+    requestAnimationFrame(step)
+  }
+
+  if (reduce) {
+    els.forEach(run)
+
+    return
+  }
+
+  const io = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((en) => {
+        if (!en.isIntersecting) return
+
+        io.unobserve(en.target)
+
+        run(en.target)
+      })
+    },
+    { threshold: 0.4 },
+  )
+
+  els.forEach((el) => {
+    el.textContent = `0${el.dataset.countSuffix || ""}`
+
+    io.observe(el)
+  })
+}
+
+// Cards cascade in on view render: a short rise + fade with a small stagger.
+// Purely decorative — skipped under reduced motion.
+function staggerCardsIn(root) {
+  if (state.reduceMotion) return
+
+  const cards = $$(".card, .landing-shot, .landing-quote", root || document)
+
+  cards.forEach((el, i) => {
+    if (el.dataset.rised) return
+
+    el.dataset.rised = "1"
+
+    el.style.setProperty("--rise-i", String(Math.min(i, 10)))
+
+    el.classList.add("rise")
+  })
 }
 
 // Fixed bottom bars (now-playing bar, mini timer pill, mini player) overlap
@@ -3623,6 +3719,8 @@ export {
   persist,
   persistNow,
   refreshCoinDisplays,
+  animateCountUps,
+  staggerCardsIn,
   updateBarPadding,
   makeDraggable,
   dragLock,

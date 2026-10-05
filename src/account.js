@@ -33,6 +33,8 @@ import {
   randomHandle,
 } from "./core.js"
 
+import { mountLanding } from "./landing.js"
+
 import { pullProductivity } from "./services/productivity-sync.js"
 
 import { pullRewards } from "./services/rewards-sync.js"
@@ -1076,31 +1078,21 @@ function renderLanding() {
 
   applyDisplay()
 
-  root.innerHTML = `<div class="landing landing-on-dusk"><div class="landing-dusk" aria-hidden="true"><span class="dusk-glow"></span><span class="dusk-dial"><i class="dusk-pie"></i><i class="dusk-ring"></i></span><span class="dusk-orbit"><b class="dusk-dot a"></b><b class="dusk-dot b"></b></span><span class="dusk-echo"></span></div><div class="landing-hero"><div class="brand-mark landing-mark">◷</div><div class="eyebrow">StudyFlow</div><h1>Focus with intention.</h1><p class="lede">Pomodoro sessions, streaks, study buddies and rewards — one calm workspace for deep work.</p><div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:20px"><button type="button" class="primary" data-enter style="padding:14px 28px;font-size:15px">Open Focus Desk →</button><button type="button" class="ghost landing-ghost" data-landing-how>How it works</button></div><div class="muted" style="margin-top:12px;font-size:12px">Free forever · No account needed to start</div></div><div class="grid three landing-feats"><div class="card"><div class="emoji">${sicon("timer")}</div><h3>Smart timer</h3><p class="muted">Focus, short and long breaks with custom lengths and gentle anti-distraction rules.</p></div><div class="card"><div class="emoji">${sicon("fire")}</div><h3>Streaks & garden</h3><p class="muted">Every session plants a flower and pays coins. Consistency compounds.</p></div><div class="card"><div class="emoji">${sicon("users")}</div><h3>Study together</h3><p class="muted">Sprint rooms, group challenges, messages and voice notes with buddies.</p></div></div><div class="card" id="landing-how" style="margin-top:18px"><h2>How it works</h2><ol class="detail-steps"><li><strong>Pick a task</strong> — name what you'll work on.</li><li><strong>Start a session</strong> — focused minutes, phone down.</li><li><strong>Rest & repeat</strong> — short breaks between, coins and streaks after.</li></ol></div><footer class="landing-foot muted">StudyFlow · made for deep work</footer></div>`
+  mountLanding(root, {
+    onEnter: () => {
+      state.entered = true
 
-  $("[data-enter]").onclick = () => {
-    state.entered = true
+      persist()
 
-    persist()
-
-    // Onboarding lives in the lazy techniques chunk — pull it on demand.
-    import("./techniques.js")
-      .then((tech) => {
-        if (state.techCheck && state.techCheck.done) tech.enterApp()
-        else tech.startTechCheck("onboard")
-      })
-      .catch(() => notify("Could not open the setup check — try again"))
-  }
-
-  $("[data-landing-how]").onclick = () => {
-    try {
-      $("#landing-how")?.scrollIntoView({
-        behavior: state.reduceMotion ? "auto" : "smooth",
-      })
-    } catch {
-      /* ignore */
-    }
-  }
+      // Onboarding lives in the lazy techniques chunk — pull it on demand.
+      import("./techniques.js")
+        .then((tech) => {
+          if (state.techCheck && state.techCheck.done) tech.enterApp()
+          else tech.startTechCheck("onboard")
+        })
+        .catch(() => notify("Could not open the setup check — try again"))
+    },
+  })
 }
 
 function renderAccount() {

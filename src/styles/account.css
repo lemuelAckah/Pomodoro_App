@@ -1873,3 +1873,562 @@ html[data-night="1"] .auth-gate-perks {
     order: 2;
   }
 }
+
+/* ==========================================================================
+   Landing marketing page (src/landing.js) — nav, hero, live demo timer,
+   stats strip, product showcase, feature grid, testimonials, FAQ, CTA, footer.
+   The landing always renders on the dusk theme, so colors are explicit.
+   ========================================================================== */
+
+.landing {
+  max-width: 1120px;
+  padding: 0 20px 56px;
+}
+
+/* ---- Top nav strip ---- */
+.landing-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 20px;
+  margin: 0 -20px;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: linear-gradient(180deg, rgba(12, 19, 16, 0.94), rgba(12, 19, 16, 0.8) 72%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.ln-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #f4f3ea;
+}
+
+.ln-brand strong {
+  font-family: "Fraunces", serif;
+  font-size: 20px;
+  letter-spacing: -0.3px;
+}
+
+.ln-links {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ln-links button {
+  background: none;
+  border: 0;
+  color: rgba(238, 240, 230, 0.75);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 11px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.ln-links button:hover {
+  color: #fff;
+  background: rgba(242, 240, 228, 0.1);
+}
+
+.ln-links .ln-open {
+  background: var(--lime);
+  color: #18352a;
+  padding: 9px 16px;
+  font-weight: 700;
+}
+
+.ln-links .ln-open:hover {
+  background: #cfe89b;
+  transform: translateY(-1px);
+}
+
+/* ---- Hero actions ---- */
+.landing-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+
+.landing-actions .primary {
+  padding: 14px 28px;
+  font-size: 15px;
+}
+
+.landing-trust {
+  margin-top: 14px;
+  font-size: 12px;
+}
+
+/* Install app chip — only shown once the browser offers installation. */
+.landing-install {
+  display: none;
+}
+
+body.pwa-installable .landing-install {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.landing-install .sicon {
+  width: 15px;
+  height: 15px;
+}
+
+/* ---- Live demo timer ---- */
+.landing-demo {
+  display: flex;
+  justify-content: center;
+  margin: 14px 0 6px;
+  scroll-margin-top: 84px;
+}
+
+.demo-card {
+  width: min(440px, 100%);
+  text-align: center;
+  padding: 26px 24px 20px;
+}
+
+.demo-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.demo-sprint {
+  font-size: 11.5px;
+  padding: 6px 11px;
+  border-radius: 999px;
+}
+
+.demo-ring {
+  width: min(252px, 62vw);
+  aspect-ratio: 1;
+  margin: 14px auto;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: conic-gradient(var(--lime) var(--p), rgba(242, 240, 228, 0.14) 0);
+  position: relative;
+  isolation: isolate;
+  transition: filter 0.4s ease;
+}
+
+.demo-ring:after {
+  content: "";
+  position: absolute;
+  inset: 11px;
+  border-radius: 50%;
+  background: #10190f;
+  z-index: 0;
+}
+
+.demo-ring.running {
+  filter: drop-shadow(0 0 22px rgba(184, 215, 124, 0.35));
+}
+
+.demo-time {
+  position: relative;
+  z-index: 2;
+  font:
+    700 52px "Space Mono",
+    monospace;
+  letter-spacing: -3px;
+  color: #f4f3ea;
+}
+
+.demo-label {
+  position: relative;
+  z-index: 2;
+  color: var(--lime);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  font-weight: 700;
+  margin-top: 6px;
+}
+
+.demo-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 4px;
+}
+
+.demo-hint {
+  font-size: 11.5px;
+  margin-top: 12px;
+}
+
+.demo-card .icon-btn {
+  width: 44px;
+  height: 44px;
+  font-size: 18px;
+}
+
+/* ---- Stats strip ---- */
+.landing-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 36px 0 8px;
+}
+
+.ls-item {
+  background: rgba(242, 240, 228, 0.06);
+  border: 1px solid rgba(242, 240, 228, 0.12);
+  border-radius: 16px;
+  padding: 16px 14px;
+  text-align: center;
+  display: grid;
+  gap: 4px;
+  align-content: center;
+}
+
+.ls-item b {
+  font:
+    700 26px "Space Mono",
+    monospace;
+  color: var(--lime);
+}
+
+.ls-item span {
+  font-size: 12px;
+  color: rgba(238, 240, 230, 0.72);
+  line-height: 1.4;
+}
+
+/* ---- Product showcase ---- */
+.landing-showcase {
+  margin: 36px 0 6px;
+  text-align: center;
+}
+
+.landing-shot {
+  margin: 0;
+  border-radius: 18px;
+  overflow: hidden;
+  border: 1px solid rgba(242, 240, 228, 0.16);
+  box-shadow: 0 30px 80px rgba(5, 10, 7, 0.5);
+  background: #0e1611;
+}
+
+.shot-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  background: rgba(242, 240, 228, 0.07);
+  border-bottom: 1px solid rgba(242, 240, 228, 0.1);
+}
+
+.shot-bar i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: rgba(242, 240, 228, 0.22);
+}
+
+.shot-bar i:first-child {
+  background: #e8796b;
+}
+
+.shot-bar i:nth-child(2) {
+  background: #e9ae3f;
+}
+
+.shot-bar i:nth-child(3) {
+  background: #7fb069;
+}
+
+.shot-bar span {
+  margin-left: 10px;
+  font:
+    600 11.5px "Space Mono",
+    monospace;
+  color: rgba(238, 240, 230, 0.6);
+  background: rgba(242, 240, 228, 0.08);
+  border-radius: 999px;
+  padding: 4px 14px;
+}
+
+.landing-shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.landing-showcase figcaption {
+  margin-top: 12px;
+  font-size: 12.5px;
+}
+
+/* ---- Sections ---- */
+.landing-feats {
+  margin-top: 42px;
+  scroll-margin-top: 84px;
+}
+
+.landing-how-card {
+  margin-top: 18px;
+  scroll-margin-top: 84px;
+}
+
+.landing-quotes-wrap,
+.landing-faq-wrap {
+  margin-top: 50px;
+  scroll-margin-top: 84px;
+}
+
+.landing-quotes-wrap h2,
+.landing-faq-wrap h2 {
+  text-align: center;
+  font-size: clamp(22px, 3vw, 30px);
+  margin-bottom: 20px;
+  color: #f4f3ea;
+}
+
+/* ---- Testimonials ---- */
+.landing-quote {
+  padding: 20px;
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.landing-quote blockquote {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.65;
+  color: rgba(238, 240, 230, 0.88);
+}
+
+.landing-quote figcaption {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.q-ava {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(140deg, var(--sage), #2b5542);
+  color: #eaf3e9;
+  font-weight: 800;
+  font-size: 13px;
+  border: 1px solid rgba(242, 240, 228, 0.2);
+  flex-shrink: 0;
+}
+
+.landing-quote figcaption strong {
+  font-size: 13px;
+  color: #f4f3ea;
+  display: block;
+}
+
+.landing-quote figcaption small {
+  color: rgba(238, 240, 230, 0.6);
+  font-size: 11px;
+}
+
+/* ---- FAQ ---- */
+.landing-faq {
+  max-width: 760px;
+  margin: 0 auto;
+  display: grid;
+  gap: 10px;
+}
+
+.landing-faq details {
+  background: rgba(242, 240, 228, 0.06);
+  border: 1px solid rgba(242, 240, 228, 0.12);
+  border-radius: 14px;
+  padding: 4px 18px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.landing-faq details[open] {
+  border-color: rgba(184, 215, 124, 0.4);
+  background: rgba(242, 240, 228, 0.09);
+}
+
+.landing-faq summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 13px 0;
+  font-weight: 700;
+  font-size: 14.5px;
+  color: #f4f3ea;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.landing-faq summary::-webkit-details-marker {
+  display: none;
+}
+
+.landing-faq summary:after {
+  content: "+";
+  font:
+    700 18px "Space Mono",
+    monospace;
+  color: var(--lime);
+  transition: transform 0.2s ease;
+}
+
+.landing-faq details[open] summary:after {
+  transform: rotate(45deg);
+}
+
+.landing-faq details p {
+  margin: 0 0 14px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: rgba(238, 240, 230, 0.75);
+}
+
+/* ---- Closing CTA ---- */
+.landing-cta {
+  margin-top: 50px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 30px 32px;
+  flex-wrap: wrap;
+}
+
+.landing-cta h2 {
+  margin: 0 0 6px;
+}
+
+.landing-cta p {
+  margin: 0;
+  font-size: 13.5px;
+}
+
+.landing-cta .primary {
+  padding: 13px 24px;
+  font-size: 14px;
+}
+
+/* ---- Footer ---- */
+.landing-foot {
+  margin-top: 46px;
+  padding: 24px 0 6px;
+  border-top: 1px solid rgba(242, 240, 228, 0.12);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.lf-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #f4f3ea;
+}
+
+.lf-brand strong {
+  font-family: "Fraunces", serif;
+  font-size: 17px;
+}
+
+.lf-brand .brand-mark {
+  width: 30px;
+  height: 30px;
+  font-size: 15px;
+}
+
+.lf-links {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.lf-links button {
+  background: none;
+  border: 0;
+  color: rgba(238, 240, 230, 0.66);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 9px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.lf-links button:hover {
+  color: #fff;
+  background: rgba(242, 240, 228, 0.08);
+}
+
+/* ---- Landing responsive ---- */
+@media (max-width: 860px) {
+  .landing-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .landing {
+    padding: 0 16px 44px;
+  }
+
+  .landing-nav {
+    margin: 0 -16px;
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .ln-links button:not(.ln-open) {
+    display: none;
+  }
+
+  .landing-actions .primary {
+    width: 100%;
+  }
+
+  .demo-card {
+    padding: 20px 16px 16px;
+  }
+
+  .demo-time {
+    font-size: 44px;
+    letter-spacing: -2px;
+  }
+
+  .landing-cta {
+    padding: 22px 20px;
+  }
+
+  .landing-cta .primary {
+    width: 100%;
+    text-align: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .demo-ring {
+    transition: none;
+  }
+}

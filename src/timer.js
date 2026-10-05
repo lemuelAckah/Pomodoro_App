@@ -26,6 +26,7 @@ import {
   updateBarPadding,
   makeDraggable,
   pushUserSettings,
+  animateCountUps,
 } from "./core.js"
 
 import {
@@ -548,7 +549,7 @@ function renderTimer() {
     state.tasks.some((t) => t.done)
       ? state.tasks.filter((t) => t.done).map(taskRow).join("")
       : '<p class="task-empty dim">Completed tasks will collect here.</p>'
-  }</div></div></div></div></div><div class="grid four stats"><div class="card stat"><span>Sessions</span><strong>${state.sessions}</strong><span>all time</span></div><div class="card stat"><span>Coins</span><strong data-coin="stat">${state.coins}</strong><span>available to spend</span></div><div class="card stat"><span>Tasks</span><strong>${state.tasks.filter((t) => t.done).length}</strong><span>completed</span></div><div class="card stat"><span>Focus streak</span><strong>${state.streak.count}</strong>${streakDots()}<span>day streak</span></div></div>${missionDesk.markup()}${techOfDayMarkup()}${gardenMarkup()}${recordsMarkup()}${achievementsCabinetMarkup()}${masteryLadderMarkup()}`
+  }</div></div></div></div></div><div class="grid four stats"><div class="card stat"><span>Sessions</span><strong data-count-up="${state.sessions}">${state.sessions}</strong><span>all time</span></div><div class="card stat"><span>Coins</span><strong data-coin="stat">${state.coins}</strong><span>available to spend</span></div><div class="card stat"><span>Tasks</span><strong data-count-up="${state.tasks.filter((t) => t.done).length}">${state.tasks.filter((t) => t.done).length}</strong><span>completed</span></div><div class="card stat"><span>Focus streak</span><strong data-count-up="${state.streak.count}">${state.streak.count}</strong>${streakDots()}<span>day streak</span></div></div>${missionDesk.markup()}${techOfDayMarkup()}${gardenMarkup()}${recordsMarkup()}${achievementsCabinetMarkup()}${masteryLadderMarkup()}`
 
   $$("[data-mode]", target).forEach(
     (b) =>
@@ -588,6 +589,12 @@ function renderTimer() {
   )
 
   $("[data-toggle]", target).onclick = () => toggleTimer()
+
+  const shareBtn = $("[data-share-week]", target)
+
+  if (shareBtn) shareBtn.onclick = () => shareWeekCard()
+
+  animateCountUps(target)
 
   const focusBtn = $("[data-focusview]", target)
 
@@ -1569,7 +1576,7 @@ function recordsMarkup() {
 
   const wins = (state.focusLog || []).slice(0, 5)
 
-  return `<div class="grid two" style="margin-top:18px"><div class="card"><div class="section-row"><h2>Records</h2><span class="tag">all time</span></div><div class="records-grid"><div><strong>${state.bestStreak || 0}${sicon("fire")}</strong><span>longest streak</span></div><div><strong>${biggestDay()}m</strong><span>biggest day</span></div><div><strong>${hours}h ${mins}m</strong><span>total focus</span></div><div><strong>${state.sessions}</strong><span>sessions</span></div></div><div class="section-row" style="margin-top:14px"><h3>Achievements</h3><span class="tag">${earned.length}/${ACHIEVEMENTS.length}</span></div><div class="ach-row">${earned.map((a) => `<span class="ach earned" title="${esc(a.name)}">${a.emoji}</span>`).join("")}${locked.map((a) => `<span class="ach locked" title="${esc(a.name)} — locked">${a.emoji}</span>`).join("")}</div></div><div class="card"><div class="section-row"><h2>Win journal</h2><span class="tag">${(state.focusLog || []).length}</span></div>${
+  return `<div class="grid two" style="margin-top:18px"><div class="card"><div class="section-row"><h2>Records</h2><button type="button" class="ghost share-week-btn" data-share-week title="Share this week's focus as an image">${sicon("sparkle")} Share my week</button><span class="tag">all time</span></div><div class="records-grid"><div><strong data-count-up="${state.bestStreak || 0}">${state.bestStreak || 0}</strong><b class="flame">${sicon("fire")}</b><span>longest streak</span></div><div><strong data-count-up="${biggestDay()}" data-count-suffix="m">${biggestDay()}m</strong><span>biggest day</span></div><div><strong>${hours}h ${mins}m</strong><span>total focus</span></div><div><strong data-count-up="${state.sessions}">${state.sessions}</strong><span>sessions</span></div></div><div class="section-row" style="margin-top:14px"><h3>Achievements</h3><span class="tag">${earned.length}/${ACHIEVEMENTS.length}</span></div><div class="ach-row">${earned.map((a) => `<span class="ach earned" title="${esc(a.name)}">${a.emoji}</span>`).join("")}${locked.map((a) => `<span class="ach locked" title="${esc(a.name)} — locked">${a.emoji}</span>`).join("")}</div></div><div class="card"><div class="section-row"><h2>Win journal</h2><span class="tag">${(state.focusLog || []).length}</span></div>${
     wins.length
       ? wins
           .map(
@@ -1579,6 +1586,232 @@ function recordsMarkup() {
           .join("")
       : '<p class="muted">After each focus session, note one win. Future-you will thank you on hard days.</p>'
   }</div></div>`
+}
+
+/* Share-the-win: draw the week's focus as a branded 1200×675 image, then
+   hand it to the native share sheet (phones) or download it with the caption
+   on the clipboard (desktop). The shared image does the marketing. */
+async function shareWeekCard() {
+  try {
+    const weekAgo = Date.now() - 7 * 864e5
+
+    const week = (state.focusLog || []).filter((w) => (w.at || 0) >= weekAgo)
+
+    const weekMins = week.reduce((a, w) => a + (w.mins || 0), 0)
+
+    const byDay = {}
+
+    week.forEach((w) => {
+      const k = dayKey(new Date(w.at || Date.now()))
+
+      byDay[k] = (byDay[k] || 0) + (w.mins || 0)
+    })
+
+    const bestDay = Math.max(0, ...Object.values(byDay))
+
+    const flowers = (state.garden || []).length
+
+    const stats = [
+      { label: "day streak", value: String(state.streak?.count || 0) },
+      { label: "sessions this week", value: String(week.length) },
+      { label: "minutes this week", value: String(weekMins) },
+      { label: "best day", value: `${bestDay}m` },
+    ]
+
+    const W = 1200
+
+    const H = 675
+
+    const c = document.createElement("canvas")
+
+    c.width = W
+
+    c.height = H
+
+    const x = c.getContext("2d")
+
+    try {
+      await Promise.all([
+        document.fonts.load('700 64px Fraunces'),
+        document.fonts.load("700 46px 'Space Mono'"),
+        document.fonts.ready,
+      ])
+    } catch {
+      /* fall back to system faces */
+    }
+
+    const g = x.createLinearGradient(0, 0, W, H)
+
+    g.addColorStop(0, "#1d3a2b")
+
+    g.addColorStop(1, "#0c1310")
+
+    x.fillStyle = g
+
+    x.fillRect(0, 0, W, H)
+
+    const glow = x.createRadialGradient(W * 0.85, H * 0.1, 0, W * 0.85, H * 0.1, 440)
+
+    glow.addColorStop(0, "rgba(184, 215, 124, 0.20)")
+
+    glow.addColorStop(1, "rgba(184, 215, 124, 0)")
+
+    x.fillStyle = glow
+
+    x.fillRect(0, 0, W, H)
+
+    const warm = x.createRadialGradient(W * 0.08, H * 0.92, 0, W * 0.08, H * 0.92, 400)
+
+    warm.addColorStop(0, "rgba(233, 174, 63, 0.14)")
+
+    warm.addColorStop(1, "rgba(233, 174, 63, 0)")
+
+    x.fillStyle = warm
+
+    x.fillRect(0, 0, W, H)
+
+    x.strokeStyle = "rgba(242, 240, 228, 0.22)"
+
+    x.lineWidth = 2
+
+    x.beginPath()
+
+    if (x.roundRect) x.roundRect(26, 26, W - 52, H - 52, 30)
+    else x.rect(26, 26, W - 52, H - 52)
+
+    x.stroke()
+
+    x.fillStyle = "#b8d77c"
+
+    x.font = "700 40px 'Space Mono', monospace"
+
+    x.fillText("◷", 68, 104)
+
+    x.fillStyle = "rgba(238, 240, 230, 0.78)"
+
+    x.font = "700 19px 'Space Mono', monospace"
+
+    x.fillText("S T U D Y F L O W", 118, 100)
+
+    x.fillStyle = "#f4f3ea"
+
+    x.font = "700 66px Fraunces, Georgia, serif"
+
+    x.fillText("My focus week", 64, 210)
+
+    x.fillStyle = "rgba(238, 240, 230, 0.66)"
+
+    x.font = "600 24px system-ui, sans-serif"
+
+    x.fillText(
+      `Last 7 days · ${new Date().toLocaleDateString(undefined, { month: "short", day: "numeric" })}`,
+      68,
+      250,
+    )
+
+    const gap = 22
+
+    const bw = (W - 128 - gap * 3) / 4
+
+    stats.forEach((s, i) => {
+      const bx = 64 + i * (bw + gap)
+
+      const by = 320
+
+      const bh = 200
+
+      x.fillStyle = "rgba(242, 240, 228, 0.07)"
+
+      x.beginPath()
+
+      if (x.roundRect) x.roundRect(bx, by, bw, bh, 22)
+      else x.rect(bx, by, bw, bh)
+
+      x.fill()
+
+      x.strokeStyle = "rgba(242, 240, 228, 0.14)"
+
+      x.stroke()
+
+      x.textAlign = "center"
+
+      x.fillStyle = "#b8d77c"
+
+      x.font = "700 52px 'Space Mono', monospace"
+
+      x.fillText(s.value, bx + bw / 2, by + 96, bw - 28)
+
+      x.fillStyle = "rgba(238, 240, 230, 0.72)"
+
+      x.font = "600 19px system-ui, sans-serif"
+
+      x.fillText(s.label, bx + bw / 2, by + 142, bw - 24)
+
+      x.textAlign = "left"
+    })
+
+    x.fillStyle = "rgba(238, 240, 230, 0.5)"
+
+    x.font = "600 22px system-ui, sans-serif"
+
+    x.textAlign = "center"
+
+    x.fillText(
+      flowers
+        ? `${flowers} flower${flowers === 1 ? "" : "s"} grown in the focus garden · made with StudyFlow`
+        : "made with StudyFlow · focus with intention",
+      W / 2,
+      H - 66,
+    )
+
+    x.textAlign = "left"
+
+    const blob = await new Promise((res) => c.toBlob(res, "image/png"))
+
+    if (!blob) {
+      notify("Could not create the image")
+
+      return
+    }
+
+    const file = new File([blob], "studyflow-week.png", { type: "image/png" })
+
+    const text = `My week in focus: ${weekMins} minutes across ${week.length} session${
+      week.length === 1 ? "" : "s"
+    } · ${state.streak?.count || 0}-day streak — made with StudyFlow`
+
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], text, title: "My StudyFlow week" })
+
+        return
+      } catch (e) {
+        if (e && e.name === "AbortError") return
+      }
+    }
+
+    const url = URL.createObjectURL(blob)
+
+    const a = document.createElement("a")
+
+    a.href = url
+
+    a.download = "studyflow-week.png"
+
+    a.click()
+
+    setTimeout(() => URL.revokeObjectURL(url), 4000)
+
+    try {
+      await navigator.clipboard.writeText(text)
+
+      notify("Week image downloaded and caption copied — paste it anywhere " + sicon("check"))
+    } catch {
+      notify("Week image downloaded " + sicon("check"))
+    }
+  } catch {
+    notify("Sharing did not work — try again")
+  }
 }
 
 function findWin(id) {
@@ -2195,6 +2428,9 @@ function updateTimerDom() {
 
       `${(state.time / durations[state.mode]) * 360}deg`,
     )
+
+    // Soft sage glow while a session actually runs — calm, not flashy.
+    ring.classList.toggle("running", !!state.running)
 
     const labelEl = $(".timer-label", ring)
 
