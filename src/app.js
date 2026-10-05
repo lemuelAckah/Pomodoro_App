@@ -906,24 +906,120 @@ function sendPrecacheManifest(worker) {
   } catch {
     /* ignore */
   }
+})/* PWA install lifecycle — supports Chrome/Edge (beforeinstallprompt),
+   iOS (Add to Home Screen heuristic), and display-mode detection so the
+   app can show the right message in the hero, header and Settings. */
+
+const SF_INSTALL_EMAIL = "blaymiezahlemuelackah2008@gmail.com"
+
+function isIosSafari() {
+  return (
+    /iPad|iPhone|iPod/.test(navigator.userAgent) &&
+    !window.MSStream &&
+    !!navigator.standalone === false
+  )
 }
 
-/* PWA install: capture Chrome's install prompt so a styled "Install app"
-   button (landing hero) can fire it at the right moment instead of the
-   easy-to-miss mini-infobar. */
+function isSupportedBrowser() {
+  // Chrome, Edge, Opera, Samsung Internet, Firefox (Gecko) expose the
+  // beforeinstallprompt event. Safari does not.
+  return "beforeinstallprompt" in window
+}
+
+function isInstalled() {
+  // display-mode tells us whether the app is already running standalone.
+  if (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)
+    return true
+  if (window.matchMedia && window.matchMedia("(display-mode: window-controls-overlay)").matches)
+    return true
+  // iOS fallback: navigator.standalone is true after "Add to Home Screen".
+  if (navigator.standalone) return true
+  return false
+}
+
+function iosAhsHint() {
+  if (!isIosSafari()) return null
+  // Safari does not fire beforeinstallprompt, but the app is installable.
+  return {
+    platform: "ios",
+    label: "Add to Home Screen",
+    instructions: [
+      "Tap the Share button (box with an up-arrow) in the browser bar.",
+      "Scroll and tap "Add to Home Screen".",
+      "Confirm, then launch StudyFlow from your home screen.",
+    ],
+  }
+}
+
+window.__sfInstallState = window.__sfInstallState || {}
+window.__sfInstallPrompt = null
+window.sfInstall = null
+
 window.addEventListener("beforeinstallprompt", (e) => {
   e.preventDefault()
-
   window.__sfInstallPrompt = e
-
+  window.__sfInstallState.offered = true
   document.body.classList.add("pwa-installable")
+  window.dispatchEvent(new CustomEvent("sf-install:offered"))
 })
 
 window.addEventListener("appinstalled", () => {
-  document.body.classList.remove("pwa-installable")
-
+  window.__sfInstallState.installed = true
+  window.__sfInstallState.offered = false
   window.__sfInstallPrompt = null
+  document.body.classList.remove("pwa-installable")
+  document.body.classList.add("pwa-installed")
+  window.dispatchEvent(new CustomEvent("sf-install:installed"))
 })
+
+// Detect display-mode changes (e.g. user opens a fresh standalone session).
+window.addEventListener("SFInstalled", () => {
+  window.__sfInstallState.installed = true
+  document.body.classList.add("pwa-installed")
+  window.dispatchEvent(new CustomEvent("sf-install:installed"))
+})
+
+window.sfInstall = (() => {
+  const prompt = window.__sfInstallPrompt
+  if (!prompt) return
+  prompt.prompt().then((choice) => {
+    if (choice && choice.outcome === "accepted") {
+      window.__sfInstallState.installed = true
+      window.__sfInstallState.offered = false
+      document.body.classList.remove("pwa-installable")
+      document.body.classList.add("pwa-installed")
+      window.dispatchEvent(new CustomEvent("sf-install:installed"))
+      if (window.sfInstallDismissed === "dismissed") window.sfInstallDismissed = null
+    } else if (choice && choice.outcome === "dismissed") {
+      window.sfInstallDismissed = "dismissed"
+      window.dispatchEvent(new CustomEvent("sf-install:dismissed"))
+    }
+  }).catch(() => {})
+})
+
+/**
+ * Public API used by the landing page and Settings install card.
+ * @returns {object} current install state snapshot
+ */
+export function sfInstallState() {
+  return {
+    supported: isSupportedBrowser(),
+    ios: isIosSafari(),
+    offered: !!window.__sfInstallState.offered,
+    installed: isInstalled() || !!window.__sfInstallState.installed,
+    hint: isInstalled() ? null : iosAHSHint(),
+  }
+}
+
+/**
+ * Ask the browser to install. On iOS this is a no-op — the caller should
+ * instead surface the iOS instructions from sfInstallState().
+ */
+export function sfInstallNow() {
+  if (navigator.standalone || isInstalled()) return
+  if (window.sfInstall) window.sfInstall()
+}
+
 
 function showUpdateToast(reg) {
   if ($("#update-toast")) return

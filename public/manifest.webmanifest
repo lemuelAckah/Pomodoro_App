@@ -1,23 +1,48 @@
 {
-  "name": "StudyFlow — Focus with intention",
+  "name": "StudyFlow",
   "short_name": "StudyFlow",
-  "description": "A focused workspace for productive study sessions.",
-  "start_url": "/",
+  "description": "A calm, offline-first workspace for focused study — Pomodoro sessions, streaks, study buddies, coins, books and rewards.",
+  "start_url": "/?utm_source=web_app_manifest",
   "scope": "/",
   "display": "standalone",
-  "orientation": "portrait-primary",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "any",
   "background_color": "#f6f7f2",
   "theme_color": "#47765a",
+  "categories": ["education", "productivity"],
+  "lang": "en",
+  "dir": "ltr",
+  "shortcuts": [
+    { "name": "Open Focus Desk", "url": "/?tab=timer", "short_name": "Focus" },
+    { "name": "Start a session", "url": "/?tab=timer&mode=focus", "short_name": "Go" }
+  ],
+  "screenshots": [
+    {
+      "src": "/app-preview.png",
+      "sizes": "1440x900",
+      "type": "image/png",
+      "form_factor": "wide",
+      "platform": "wide"
+    }
+  ],
   "icons": [
     {
       "src": "/icon-192.png",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     },
     {
       "src": "/icon-512.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }

@@ -784,6 +784,36 @@ function completenessMarkup() {
   }</div>`
 }
 
+function installCardMarkup() {
+  const st = (window.sfInstallState && window.sfInstallState()) || {
+    supported: false,
+    ios: false,
+    offered: false,
+    installed: false,
+    hint: null,
+  }
+
+  const isInstalled = st.installed || navigator.standalone || window.matchMedia?.("(display-mode: standalone)").matches || window.matchMedia?.("(display-mode: window-controls-overlay)").matches
+
+  const installedLabel = isInstalled
+    ? "Installed"
+    : st.ios
+      ? "Add to Home Screen"
+      : st.offered
+        ? "Install available"
+        : "Install available"
+
+  const installedHint = isInstalled
+    ? "StudyFlow is already installed on this device."
+    : st.ios
+      ? "Safari on iPhone or iPad. Use the browser’s Share menu → Add to Home Screen."
+      : st.supported
+        ? "Chrome, Edge and other supported browsers can install StudyFlow as an app."
+        : "This browser doesn’t support app installation — use a supported browser to install."
+
+  return `<div class="card" style="margin-top:18px"><div class="section-row"><h2>Install app</h2><span class="tag">${installedLabel}</span></div><p class="muted">${installedHint}</p><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button type="button" class="primary" data-install-app ${isInstalled ? "disabled" : ""}>${st.ios ? sicon("download") : sicon("download")} ${st.ios ? "Add to Home Screen" : st.offered ? "Install app" : "Install app"}</button></div>${st.ios && st.hint ? `<p class="muted" style="font-size:11px;margin-top:10px"><b>On iPhone or iPad:</b><br>• Tap the Share button in the browser bar<br>• Scroll and tap “Add to Home Screen”<br>• Confirm, then open StudyFlow from your home screen</p>` : ""}${!st.supported ? `<p class="muted" style="font-size:11px;margin-top:10px">Your browser doesn’t currently support installing web apps. Try Chrome or Edge on desktop, or Safari on iPhone/iPad (Add to Home Screen).</p>` : ""}</div>`
+}
+
 function dataMarkup() {
   const cloudTag = backendConfigured
     ? state.user
@@ -795,7 +825,7 @@ function dataMarkup() {
     state.user
       ? "Stored in this browser and mirrored to your cloud account. Export takes a full local snapshot; wipe clears this browser (server rows are removed too when the backend is available)."
       : "Everything lives in this browser. Take a copy with you, or erase it all — your call."
-  }</p><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button type="button" class="ghost" data-export>Export my data</button><label class="ghost" style="cursor:pointer">Import backup<input type="file" id="import-file" accept="application/json,.json" hidden></label><button type="button" class="ghost" data-clear-history>Clear local history…</button><button type="button" class="ghost" data-wipe style="color:#c0392b">Delete my data…</button></div><p class="muted" style="font-size:11px;margin-top:10px">Clear local history removes chat messages and pins from this device only — your profile, settings, account, coins and server data stay put.</p></div>`
+  }</p><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button type="button" class="ghost" data-export>Export my data</button><label class="ghost" style="cursor:pointer">Import backup<input type="file" id="import-file" accept="application/json,.json" hidden></label><button type="button" class="ghost" data-clear-history>Clear local history…</button><button type="button" class="ghost" data-wipe style="color:#c0392b">Delete my data…</button></div><p class="muted" style="font-size:11px;margin-top:10px">Clear local history removes chat messages and pins from this device only — your profile, settings, account, coins and server data stay put.</p></div>${installCardMarkup()}`
 }
 
 // Local-only history wipe: messages + pins (+ per-message tombstones) leave
@@ -2071,7 +2101,23 @@ function bindDataZone(root) {
   $("[data-wipe]", root)?.addEventListener("click", wipeData)
 }
 
+function bindInstallApp(root) {
+  $(root).querySelector("[data-install-app]")?.addEventListener("click", () => {
+    if (window.__sfInstallState && window.__sfInstallState.ios && window.__sfInstallState.hint) {
+      const hint = window.__sfInstallState.hint
+      const msg = [
+        hint.label + ":",
+        ...hint.instructions.map((s) => "• " + s),
+      ].join("\n")
+      alert(msg)
+      return
+    }
+    if (window.sfInstall) window.sfInstall()
+  })
+}
+
 function bindSettings(root) {
+  bindInstallApp(root)
   bindDataZone(root)
 
   bindPwToggles(root)
