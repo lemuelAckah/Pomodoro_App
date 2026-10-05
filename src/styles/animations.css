@@ -219,3 +219,38 @@
     transform: translate(-50%, -50%) rotate(360deg);
   }
 }
+
+/* ---- Landing v2 ---- */
+@keyframes btn-shine {
+  to {
+    left: 130%;
+  }
+}
+
+@keyframes ripple-pop {
+  to {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+
+@keyframes shot-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes li-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
