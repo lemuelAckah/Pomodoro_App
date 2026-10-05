@@ -27,22 +27,78 @@ export function ch6() {
       "StudyFlow's actual technology stack, verified from the source code",
       ["Technology", "What it is", "Role in StudyFlow"],
       [
-        ["HTML", "The document format browsers render", "Single index.html shell that hosts the app"],
-        ["CSS", "The language of visual styling", "~19,000 lines of hand-written stylesheets, theme tokens"],
-        ["JavaScript (ES modules)", "The browser's programming language", "All application logic; ~41,000 lines across 21 modules"],
-        ["Vite", "A build tool and dev server", "Bundling, minification, code splitting, dev server"],
-        ["Service Worker API", "A script that sits between page and network", "Offline precaching of shell and route chunks"],
-        ["Web Audio API", "Browser audio synthesis/processing", "Ambient sound generation in the Sound Studio"],
+        [
+          "HTML",
+          "The document format browsers render",
+          "Single index.html shell that hosts the app",
+        ],
+        [
+          "CSS",
+          "The language of visual styling",
+          "~19,000 lines of hand-written stylesheets, theme tokens",
+        ],
+        [
+          "JavaScript (ES modules)",
+          "The browser's programming language",
+          "All application logic; ~41,000 lines across 21 modules",
+        ],
+        [
+          "Vite",
+          "A build tool and dev server",
+          "Bundling, minification, code splitting, dev server",
+        ],
+        [
+          "Service Worker API",
+          "A script that sits between page and network",
+          "Offline precaching of shell and route chunks",
+        ],
+        [
+          "Web Audio API",
+          "Browser audio synthesis/processing",
+          "Ambient sound generation in the Sound Studio",
+        ],
         ["WebRTC", "Browser-to-browser audio/video", "Voice and video calls"],
-        ["MediaRecorder API", "In-browser recording", "Video/audio capture for stories"],
-        ["Supabase JavaScript client", "Official SDK for the Supabase platform", "All auth, database, storage and realtime access"],
-        ["PostgreSQL (via Supabase)", "The relational database", "41 tables, 136 security policies"],
-        ["SQL", "Database language", "24 ordered migration files define the schema"],
+        [
+          "MediaRecorder API",
+          "In-browser recording",
+          "Video/audio capture for stories",
+        ],
+        [
+          "Supabase JavaScript client",
+          "Official SDK for the Supabase platform",
+          "All auth, database, storage and realtime access",
+        ],
+        [
+          "PostgreSQL (via Supabase)",
+          "The relational database",
+          "41 tables, 136 security policies",
+        ],
+        [
+          "SQL",
+          "Database language",
+          "24 ordered migration files define the schema",
+        ],
         ["Moolre", "Ghanaian payments platform", "Mobile-money coin top-ups"],
-        ["EPUB (custom parser)", "E-book format (zip of XHTML)", "In-browser book reading, parsed without dependencies"],
-        ["Node.js & npm", "JavaScript runtime and package manager", "Runs the build tooling; manages dependencies"],
-        ["Git & GitHub", "Version control and hosting of source", "Repository github.com/lemuelAckah/Pomodoro_App"],
-        ["Figma Make", "AI-assisted frontend scaffolding service", "Initial project scaffold and preview hosting"],
+        [
+          "EPUB (custom parser)",
+          "E-book format (zip of XHTML)",
+          "In-browser book reading, parsed without dependencies",
+        ],
+        [
+          "Node.js & npm",
+          "JavaScript runtime and package manager",
+          "Runs the build tooling; manages dependencies",
+        ],
+        [
+          "Git & GitHub",
+          "Version control and hosting of source",
+          "Repository github.com/lemuelAckah/Pomodoro_App",
+        ],
+        [
+          "Figma Make",
+          "AI-assisted frontend scaffolding service",
+          "Initial project scaffold and preview hosting",
+        ],
       ],
       [24, 36, 40],
     ),
@@ -50,9 +106,9 @@ export function ch6() {
     h2("6.2 HTML — the Page"),
     para(
       "**What it is.** HTML (HyperText Markup Language) describes the structure of a web page: headings, paragraphs, buttons, containers. The browser reads it and builds the page you see.",
-      ),
+    ),
     para(
-      "**Why this much simplicity.** StudyFlow's index.html is only a few dozen lines: metadata, a theme bootstrap, an empty `<div id=\"root\">`, and one script tag. Everything else is built dynamically by JavaScript. This \"empty shell\" pattern is what makes StudyFlow a single-page application: the browser loads the document once, and the application redraws the interior as the student moves between tabs.",
+      '**Why this much simplicity.** StudyFlow\'s index.html is only a few dozen lines: metadata, a theme bootstrap, an empty `<div id="root">`, and one script tag. Everything else is built dynamically by JavaScript. This "empty shell" pattern is what makes StudyFlow a single-page application: the browser loads the document once, and the application redraws the interior as the student moves between tabs.',
     ),
     ...codeCaption("index.html — the entire static page (abridged)", [
       '<div id="root"></div>',
@@ -61,20 +117,23 @@ export function ch6() {
 
     h2("6.3 CSS — the Look"),
     para(
-      "**What it is.** CSS (Cascading Style Sheets) is the language that controls how pages look: colours, spacing, fonts, layout, animation. \"Cascading\" refers to the rules browsers use to combine styles from different sources.",
+      '**What it is.** CSS (Cascading Style Sheets) is the language that controls how pages look: colours, spacing, fonts, layout, animation. "Cascading" refers to the rules browsers use to combine styles from different sources.',
     ),
     para(
       "**Why hand-written CSS.** StudyFlow's visual design is defined in about nineteen thousand lines of hand-authored CSS, split into files by responsibility (`tokens.css`, `layout.css`, `timer.css`, `community.css`, …) and imported in a deliberate cascade order from a manifest (`styles.css`). No CSS framework is used. The centrepiece is a **token system**: colours, radii and shadows are declared once as CSS variables, and every component refers to the tokens. Night mode is then a single swap of token values under a `data-night` attribute on the root element — one place to change, everywhere consistent.",
     ),
-    ...codeCaption("src/styles/tokens.css — a design token and its night-mode counterpart", [
-      ":root {",
-      "  --sage: #47765a;        /* the brand accent */",
-      "  --panel-2: #f4f6f1;     /* card background, day mode */",
-      "}",
-      '[data-night="1"] {',
-      "  --panel-2: rgba(255, 255, 255, 0.045);",
-      "}",
-    ]),
+    ...codeCaption(
+      "src/styles/tokens.css — a design token and its night-mode counterpart",
+      [
+        ":root {",
+        "  --sage: #47765a;        /* the brand accent */",
+        "  --panel-2: #f4f6f1;     /* card background, day mode */",
+        "}",
+        '[data-night="1"] {',
+        "  --panel-2: rgba(255, 255, 255, 0.045);",
+        "}",
+      ],
+    ),
 
     h2("6.4 JavaScript and ES Modules"),
     para(
@@ -83,13 +142,16 @@ export function ch6() {
     para(
       "**Why vanilla JavaScript.** \"Vanilla\" means using the language and browser APIs directly, without a framework like React or Vue. The choice has real costs (the app must manage its own screen updates) and real benefits: no framework download on the critical path, no build-time translation between what is written and what runs, and an architecture that reads as plain, auditable JavaScript. StudyFlow's modules have a strict shape: `app.js` (entry, router, shell), `core.js` (shared state and helpers), one module per feature area, and a `services/` directory that owns all backend contact. Feature modules are lazily loaded — the browser fetches a tab's code the first time the student opens it, not at boot.",
     ),
-    ...codeCaption("Lazy route loading in src/app.js — the Techniques tab is fetched on first use", [
-      "case \"techniques\":",
-      "  renderSkeleton(state.tab)",
-      "  import(\"./techniques.js\")",
-      "    .then((m) => m.renderTechniques(container))",
-      "    .catch(showErrorBoundary)",
-    ]),
+    ...codeCaption(
+      "Lazy route loading in src/app.js — the Techniques tab is fetched on first use",
+      [
+        'case "techniques":',
+        "  renderSkeleton(state.tab)",
+        '  import("./techniques.js")',
+        "    .then((m) => m.renderTechniques(container))",
+        "    .catch(showErrorBoundary)",
+      ],
+    ),
 
     h2("6.5 Vite — the Build Tool"),
     para(
@@ -109,17 +171,20 @@ export function ch6() {
 
     h2("6.7 Supabase — Auth, Database, Storage, Realtime"),
     para(
-      "**What it is.** Supabase is a managed backend platform built on PostgreSQL. One project provides four services: **Auth** (accounts and sessions), **Database** (PostgreSQL tables), **Storage** (file buckets) and **Realtime** (live event streams over WebSockets). \"Managed\" means StudyFlow runs no servers of its own; the platform operates them.",
+      '**What it is.** Supabase is a managed backend platform built on PostgreSQL. One project provides four services: **Auth** (accounts and sessions), **Database** (PostgreSQL tables), **Storage** (file buckets) and **Realtime** (live event streams over WebSockets). "Managed" means StudyFlow runs no servers of its own; the platform operates them.',
     ),
     para(
       "**Why Supabase.** For a free, student-built project the deciding factors were: a real relational database (not a toy), authentication that would not have to be hand-rolled, generous free tier, Row Level Security for server-enforced privacy, and realtime channels that remove the need for a custom chat server. The official JavaScript client (`@supabase/supabase-js`) is the only Supabase dependency in the browser bundle.",
     ),
-    ...codeCaption("src/services/backend.js — the single gateway, offline-guarded", [
-      'const url = import.meta.env.VITE_SUPABASE_URL',
-      'const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY',
-      'export const backendConfigured = Boolean(url && anonKey)',
-      'export const supabase = backendConfigured ? createClient(url, anonKey) : null',
-    ]),
+    ...codeCaption(
+      "src/services/backend.js — the single gateway, offline-guarded",
+      [
+        "const url = import.meta.env.VITE_SUPABASE_URL",
+        "const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY",
+        "export const backendConfigured = Boolean(url && anonKey)",
+        "export const supabase = backendConfigured ? createClient(url, anonKey) : null",
+      ],
+    ),
 
     h2("6.8 PostgreSQL and SQL"),
     para(
@@ -134,7 +199,7 @@ export function ch6() {
       "**What it is.** WebRTC (Web Real-Time Communication) is a browser capability that lets two computers send audio and video **directly to each other**, encrypted, without the media flowing through an intermediate server.",
     ),
     para(
-      "**What it does for StudyFlow.** Voice and video calls between study partners are pure WebRTC: the browser asks for microphone/camera permission, two peers exchange connection descriptions through a Supabase Realtime channel (the \"signalling\" postman), and then talk directly. A TURN relay (a fallback courier for networks that block direct paths) is supported but optional, configured by environment variables. Chapter Twelve explains the full call lifecycle.",
+      '**What it does for StudyFlow.** Voice and video calls between study partners are pure WebRTC: the browser asks for microphone/camera permission, two peers exchange connection descriptions through a Supabase Realtime channel (the "signalling" postman), and then talk directly. A TURN relay (a fallback courier for networks that block direct paths) is supported but optional, configured by environment variables. Chapter Twelve explains the full call lifecycle.',
     ),
 
     h2("6.10 Web Audio and MediaRecorder"),
@@ -144,7 +209,7 @@ export function ch6() {
 
     h2("6.11 The Custom EPUB Reader"),
     para(
-      "An EPUB book is a ZIP archive of web pages. StudyFlow parses it with the browser's own DecompressionStream API and DOM parser — the source comments note this deliberately avoids `jszip`/`epub.js` dependencies \"to keep the bundle lean and the free plan intact\". The reader renders chapters in-app, tracks progress, and supports bookmarks, highlights and notes (Section 7.6).",
+      'An EPUB book is a ZIP archive of web pages. StudyFlow parses it with the browser\'s own DecompressionStream API and DOM parser — the source comments note this deliberately avoids `jszip`/`epub.js` dependencies "to keep the bundle lean and the free plan intact". The reader renders chapters in-app, tracks progress, and supports bookmarks, highlights and notes (Section 7.6).',
     ),
 
     h2("6.12 Moolre"),
@@ -179,9 +244,21 @@ export function ch6() {
       ["Variable", "Purpose", "Secret?"],
       [
         ["VITE_SUPABASE_URL", "Address of the Supabase project", "No (public)"],
-        ["VITE_SUPABASE_ANON_KEY", "Public client key; RLS still constrains data access", "No (public)"],
-        ["VITE_TURN_SERVERS / _USERNAME / _CREDENTIAL", "WebRTC fallback relay configuration", "Credential yes"],
-        ["MOOLRE_PUBLIC_KEY / MOOLRE_ACCOUNT_NUMBER (store module constants)", "Mobile-money top-ups via Moolre hosted checkout", "Public credentials only"],
+        [
+          "VITE_SUPABASE_ANON_KEY",
+          "Public client key; RLS still constrains data access",
+          "No (public)",
+        ],
+        [
+          "VITE_TURN_SERVERS / _USERNAME / _CREDENTIAL",
+          "WebRTC fallback relay configuration",
+          "Credential yes",
+        ],
+        [
+          "MOOLRE_PUBLIC_KEY / MOOLRE_ACCOUNT_NUMBER (store module constants)",
+          "Mobile-money top-ups via Moolre hosted checkout",
+          "Public credentials only",
+        ],
       ],
       [34, 46, 20],
     ),
@@ -201,9 +278,13 @@ export function ch7() {
 
     h2("7.1 The Landing Experience and Onboarding"),
     para(
-      "First visitors see a landing page that states the product plainly — *\"Focus with intention\"* — with a single action: **Open Focus Desk**. No account is required; a guest enters directly into the working app. On first entry, an optional five-step tour highlights the core surfaces, and the **Technique Check** (Section 7.4) offers a one-minute assessment. Every interrupting surface is skippable in one click, a deliberate application of the calm-interface principle: onboarding must never trap a student away from studying.",
+      'First visitors see a landing page that states the product plainly — *"Focus with intention"* — with a single action: **Open Focus Desk**. No account is required; a guest enters directly into the working app. On first entry, an optional five-step tour highlights the core surfaces, and the **Technique Check** (Section 7.4) offers a one-minute assessment. Every interrupting surface is skippable in one click, a deliberate application of the calm-interface principle: onboarding must never trap a student away from studying.',
     ),
-    ...figure("fig-landing.png", "The StudyFlow landing page: one proposition, one action, no account required.", 620),
+    ...figure(
+      "fig-landing.png",
+      "The StudyFlow landing page: one proposition, one action, no account required.",
+      620,
+    ),
 
     h2("7.2 The Focus Desk and Pomodoro Timer"),
     para(
@@ -212,23 +293,31 @@ export function ch7() {
     para(
       "Completed focus sessions feed everything else: the session counter, today's focus total, the streak, the garden (each finished session plants a flower), coins, and the analytics record. Around the timer sit the supporting cast: today's tasks (Section 7.3), a live mission dock for group sprints, a technique-of-the-day card, the win journal, records, and the achievement cabinet. The desk is thus the daily dashboard *and* the session cockpit in one screen — the integration that Chapter Three argued is the product.",
     ),
-    ...figure("fig-timer.png", "The Focus Desk: timer, session controls, tasks and progress cards.", 620),
+    ...figure(
+      "fig-timer.png",
+      "The Focus Desk: timer, session controls, tasks and progress cards.",
+      620,
+    ),
 
     h2("7.3 Tasks"),
     para(
-      "The task panel answers *\"what is this session for?\"*. Tasks are typed in one field and appear as a checklist; they can be completed, edited and deleted. Each task binds a study intention to the sessions served under it, which is what makes the analytics meaningful — sessions aggregate toward named work, not anonymous minutes. The panel's empty state models good practice (*\"Your task list is clear. Add one small next step.\"*), nudging decomposition of vague workload into concrete actions.",
+      'The task panel answers *"what is this session for?"*. Tasks are typed in one field and appear as a checklist; they can be completed, edited and deleted. Each task binds a study intention to the sessions served under it, which is what makes the analytics meaningful — sessions aggregate toward named work, not anonymous minutes. The panel\'s empty state models good practice (*"Your task list is clear. Add one small next step."*), nudging decomposition of vague workload into concrete actions.',
     ),
 
     h2("7.4 The Technique Check"),
     para(
-      "New students are offered a twelve-question, roughly one-minute assessment about how they prefer to work — deadline response, note habits, subject preferences. The result ranks the technique catalog for *this* student and suggests two or three to try first. This document is explicit about what the check is: **a self-report guidance mechanism**, comparable to a menu recommendation, not a validated psychological instrument and not a \"learning style\" diagnosis — the learning-styles hypothesis (that teaching to a preferred style improves outcomes) lacks supporting evidence (Pashler et al., 2008). The check's value is orientation: it lowers the cost of starting with *some* evidence-based technique rather than none.",
+      'New students are offered a twelve-question, roughly one-minute assessment about how they prefer to work — deadline response, note habits, subject preferences. The result ranks the technique catalog for *this* student and suggests two or three to try first. This document is explicit about what the check is: **a self-report guidance mechanism**, comparable to a menu recommendation, not a validated psychological instrument and not a "learning style" diagnosis — the learning-styles hypothesis (that teaching to a preferred style improves outcomes) lacks supporting evidence (Pashler et al., 2008). The check\'s value is orientation: it lowers the cost of starting with *some* evidence-based technique rather than none.',
     ),
 
     h2("7.5 Study Techniques"),
     para(
-      "The Techniques tab presents nine techniques, each with an icon, a one-line definition, a rhythm tag (\"25 min work · 5 min rest\"), and a guided walkthrough: what the technique is, the steps in order, when it fits, and check-in prompts to answer during use. The catalog: Pomodoro, Feynman, Spaced Repetition, Active Recall, Interleaving, Elaboration, Cornell Notes, Practice Testing and Deliberate Practice. Techniques can be favorited; favorites surface on the Focus Desk and in the Favorites tab so the student's chosen methods are always one click away.",
+      'The Techniques tab presents nine techniques, each with an icon, a one-line definition, a rhythm tag ("25 min work · 5 min rest"), and a guided walkthrough: what the technique is, the steps in order, when it fits, and check-in prompts to answer during use. The catalog: Pomodoro, Feynman, Spaced Repetition, Active Recall, Interleaving, Elaboration, Cornell Notes, Practice Testing and Deliberate Practice. Techniques can be favorited; favorites surface on the Focus Desk and in the Favorites tab so the student\'s chosen methods are always one click away.',
     ),
-    ...figure("fig-techniques.png", "The Techniques tab: the guided catalog of study methods.", 620),
+    ...figure(
+      "fig-techniques.png",
+      "The Techniques tab: the guided catalog of study methods.",
+      620,
+    ),
 
     h2("7.6 Book Library and Reader"),
     para(
@@ -247,9 +336,13 @@ export function ch7() {
 
     h2("7.9 Rewards Store and Gamification Economy"),
     para(
-      "Focus sessions, streaks and completed tasks earn **coins**; coins buy **rewards** from the store (themes, cosmetic garden items, functional treats), open **mystery boxes** (a chance-based reward with published odds), and support **achievements** — from *First Session* to multi-month mastery badges that are explicitly never purchasable (\"NEVER SOLD · EARN ONLY\"). Real-money coin top-ups run through Moolre (Section 6.12). The economy's design intent, and its risks, get their own chapter (Fourteen).",
+      'Focus sessions, streaks and completed tasks earn **coins**; coins buy **rewards** from the store (themes, cosmetic garden items, functional treats), open **mystery boxes** (a chance-based reward with published odds), and support **achievements** — from *First Session* to multi-month mastery badges that are explicitly never purchasable ("NEVER SOLD · EARN ONLY"). Real-money coin top-ups run through Moolre (Section 6.12). The economy\'s design intent, and its risks, get their own chapter (Fourteen).',
     ),
-    ...figure("fig-store.png", "The Rewards Store: coin packs, inventory and earn-only mastery badges.", 620),
+    ...figure(
+      "fig-store.png",
+      "The Rewards Store: coin packs, inventory and earn-only mastery badges.",
+      620,
+    ),
 
     h2("7.10 Community, Groups and Messaging"),
     para(
@@ -275,7 +368,11 @@ export function ch7() {
     para(
       "The Account tab covers profile (name, avatar, bio), theme, and the sign-in surfaces (email/password, Google). Settings carries the deeper controls: timer defaults, sound volumes, night mode, reduced motion, and — critically — **data control**: export, sign-out, and a guided **delete-my-data** flow that removes cloud data in one verified step (Section 11.6 documents the mechanism). Night mode re-themes the entire application through the token system described in Section 6.3.",
     ),
-    ...figure("fig-settings.png", "Settings: preferences, themes and data controls.", 620),
+    ...figure(
+      "fig-settings.png",
+      "Settings: preferences, themes and data controls.",
+      620,
+    ),
 
     h2("7.15 Analytics and Progress"),
     para(
@@ -286,25 +383,73 @@ export function ch7() {
     para(
       "The Favorites tab consolidates the student's pinned techniques, sounds and books into one place — the personalisation layer that keeps the most-used tools one click away rather than buried in their sections.",
     ),
-    ...figure("fig-favorites.png", "Favorites: the student's pinned techniques and sounds.", 620),
+    ...figure(
+      "fig-favorites.png",
+      "Favorites: the student's pinned techniques and sounds.",
+      620,
+    ),
 
     h2("7.17 Feature Summary"),
     ...table(
       "Feature-to-value summary",
       ["Feature", "Purpose", "Learning / UX benefit"],
       [
-        ["Focus Desk + timer", "Structured, timed study sessions", "Protects attention; makes effort visible"],
-        ["Tasks", "Bind sessions to intentions", "Turns vague workload into next actions"],
-        ["Techniques", "Guided evidence-based methods", "Lowers the cost of studying well"],
-        ["Technique Check", "Personalised starting point", "Orientation, not diagnosis (Section 7.4)"],
-        ["Book Library", "Reading + retrieval prompts", "Keeps material and practice together"],
-        ["Sound Studio", "Personal study atmosphere", "User-controlled ambience"],
-        ["Notes / Cornell", "Capture and structured review", "Supports elaboration and review"],
-        ["Community", "Groups, friends, messaging", "Accountability and coordination"],
-        ["Statuses", "Progress sharing, expiring", "Social expression without a permanent feed"],
+        [
+          "Focus Desk + timer",
+          "Structured, timed study sessions",
+          "Protects attention; makes effort visible",
+        ],
+        [
+          "Tasks",
+          "Bind sessions to intentions",
+          "Turns vague workload into next actions",
+        ],
+        [
+          "Techniques",
+          "Guided evidence-based methods",
+          "Lowers the cost of studying well",
+        ],
+        [
+          "Technique Check",
+          "Personalised starting point",
+          "Orientation, not diagnosis (Section 7.4)",
+        ],
+        [
+          "Book Library",
+          "Reading + retrieval prompts",
+          "Keeps material and practice together",
+        ],
+        [
+          "Sound Studio",
+          "Personal study atmosphere",
+          "User-controlled ambience",
+        ],
+        [
+          "Notes / Cornell",
+          "Capture and structured review",
+          "Supports elaboration and review",
+        ],
+        [
+          "Community",
+          "Groups, friends, messaging",
+          "Accountability and coordination",
+        ],
+        [
+          "Statuses",
+          "Progress sharing, expiring",
+          "Social expression without a permanent feed",
+        ],
         ["Calls", "Voice/video for partners", "Synchronous collaboration"],
-        ["Rewards", "Coins, achievements, store", "Motivates consistency (with risks, Ch. 14)"],
-        ["Analytics", "Session/streak records", "Feedback on behaviour, not learning (Ch. 17)"],
+        [
+          "Rewards",
+          "Coins, achievements, store",
+          "Motivates consistency (with risks, Ch. 14)",
+        ],
+        [
+          "Analytics",
+          "Session/streak records",
+          "Feedback on behaviour, not learning (Ch. 17)",
+        ],
         ["Favorites", "Personalised shortcuts", "Reduces navigation cost"],
       ],
       [22, 38, 40],
@@ -321,7 +466,11 @@ export function ch8() {
     ),
 
     h2("8.1 The Mapping at a Glance"),
-    ...figure("dia-techniques.png", "From learning-technique research to the StudyFlow features that embody it.", 620),
+    ...figure(
+      "dia-techniques.png",
+      "From learning-technique research to the StudyFlow features that embody it.",
+      620,
+    ),
 
     h2("8.2 The Timer and Attention"),
     para(
@@ -350,7 +499,7 @@ export function ch8() {
 
     h2("8.7 The Technique Check and Metacognition"),
     para(
-      "**Research suggests** metacognitive accuracy — knowing what you know — is trainable through low-stakes testing and reflection, but self-report questionnaires cannot diagnose how a person learns (Pashler et al., 2008). **StudyFlow does** present its twelve-question check as orientation: it ranks suggestions and says so; it does not label the student's \"style\". The win journal and check-ins exercise the monitoring half of metacognition.",
+      '**Research suggests** metacognitive accuracy — knowing what you know — is trainable through low-stakes testing and reflection, but self-report questionnaires cannot diagnose how a person learns (Pashler et al., 2008). **StudyFlow does** present its twelve-question check as orientation: it ranks suggestions and says so; it does not label the student\'s "style". The win journal and check-ins exercise the monitoring half of metacognition.',
     ),
 
     h2("8.8 Community and Social Learning"),
@@ -373,15 +522,51 @@ export function ch8() {
       "Learning principles, StudyFlow responses, and status of evidence",
       ["Principle (research)", "StudyFlow's response", "Status"],
       [
-        ["Bounded focus blocks aid attention", "Timer presets, session records, focus mode", "Implemented; interval length is preference, not prescription"],
-        ["Retrieval practice is high-utility", "Technique guides, book companion questions, Feynman loop", "Implemented; adoption measurable via usage records"],
-        ["Spacing beats cramming", "Planner returns, streaks, spacing guide", "Scheduling support; no adaptive algorithm yet"],
-        ["Interleaving aids discrimination", "Technique guide; multi-topic task planning", "Guidance-level support"],
-        ["Elaboration/self-explanation", "Cornell notes, win journal, check-ins", "Implemented as scaffolds"],
-        ["Metacognition is trainable", "Technique Check (orientation only), reflection prompts", "Guidance, explicitly not diagnosis"],
-        ["Social learning conditions", "Groups, sprints, messaging, calls", "Implemented; net effect unmeasured"],
-        ["Gamification motivates behaviour", "Coins, streaks, achievements, store", "Implemented; risks discussed (Ch. 14)"],
-        ["Metrics ≠ learning", "Analytics measure behaviour only", "Boundary maintained throughout"],
+        [
+          "Bounded focus blocks aid attention",
+          "Timer presets, session records, focus mode",
+          "Implemented; interval length is preference, not prescription",
+        ],
+        [
+          "Retrieval practice is high-utility",
+          "Technique guides, book companion questions, Feynman loop",
+          "Implemented; adoption measurable via usage records",
+        ],
+        [
+          "Spacing beats cramming",
+          "Planner returns, streaks, spacing guide",
+          "Scheduling support; no adaptive algorithm yet",
+        ],
+        [
+          "Interleaving aids discrimination",
+          "Technique guide; multi-topic task planning",
+          "Guidance-level support",
+        ],
+        [
+          "Elaboration/self-explanation",
+          "Cornell notes, win journal, check-ins",
+          "Implemented as scaffolds",
+        ],
+        [
+          "Metacognition is trainable",
+          "Technique Check (orientation only), reflection prompts",
+          "Guidance, explicitly not diagnosis",
+        ],
+        [
+          "Social learning conditions",
+          "Groups, sprints, messaging, calls",
+          "Implemented; net effect unmeasured",
+        ],
+        [
+          "Gamification motivates behaviour",
+          "Coins, streaks, achievements, store",
+          "Implemented; risks discussed (Ch. 14)",
+        ],
+        [
+          "Metrics ≠ learning",
+          "Analytics measure behaviour only",
+          "Boundary maintained throughout",
+        ],
       ],
       [32, 40, 28],
     ),
@@ -403,18 +588,22 @@ export function ch9() {
 
     h2("9.2 Visual Hierarchy and Typography"),
     para(
-      "Visual hierarchy is the arrangement of elements so importance is obvious before reading begins: size, weight, colour and spacing do the pointing. StudyFlow uses a serif display face (**Fraunces**) for headings — a deliberate, slightly editorial personality — against a geometric sans (**DM Sans**) for body text, with **Space Mono** reserved for numerals where alignment matters (the timer, counters). Sizes step down in a fixed scale; muted grey carries secondary text so bold dark ink always means \"read me\".",
+      'Visual hierarchy is the arrangement of elements so importance is obvious before reading begins: size, weight, colour and spacing do the pointing. StudyFlow uses a serif display face (**Fraunces**) for headings — a deliberate, slightly editorial personality — against a geometric sans (**DM Sans**) for body text, with **Space Mono** reserved for numerals where alignment matters (the timer, counters). Sizes step down in a fixed scale; muted grey carries secondary text so bold dark ink always means "read me".',
     ),
 
     h2("9.3 Navigation and Information Architecture"),
     para(
       "Information architecture is how content is divided and related. StudyFlow divides by *activity* (focus, learn, listen, socialise, read, shop, review, configure) into nine top-level tabs, each a single lazy-loaded module. The navigation rail collapses to a bottom bar on phones. Cross-references are deliberately few and purposeful (a technique-of-the-day card links to its guide; the mission dock links to sprints) — deep linking everywhere would rebuild the fragmentation the app exists to remove.",
     ),
-    ...figure("fig-account.png", "The Account tab: profile and sign-in surfaces.", 620),
+    ...figure(
+      "fig-account.png",
+      "The Account tab: profile and sign-in surfaces.",
+      620,
+    ),
 
     h2("9.4 Feedback, States and Error Handling"),
     para(
-      "Feedback is the system answering the user's action. StudyFlow layers it: immediate state change on click (a task checks off at once), toasts for completed background actions, skeletons during lazy loads (never blank screens), inline validation on forms, and translated error copy — raw errors like *\"Invalid login credentials\"* become *\"Email or password is incorrect. Try again or reset your password.\"* via a central `friendlyAuthError()` function. The same philosophy governs offline: the app never shows a dead screen; it shows local data and quietly queues sync.",
+      'Feedback is the system answering the user\'s action. StudyFlow layers it: immediate state change on click (a task checks off at once), toasts for completed background actions, skeletons during lazy loads (never blank screens), inline validation on forms, and translated error copy — raw errors like *"Invalid login credentials"* become *"Email or password is incorrect. Try again or reset your password."* via a central `friendlyAuthError()` function. The same philosophy governs offline: the app never shows a dead screen; it shows local data and quietly queues sync.',
     ),
 
     h2("9.5 Modals, Forms and Touch Targets"),
@@ -426,7 +615,11 @@ export function ch9() {
     para(
       "StudyFlow ships full day and night themes implemented as token swaps (Section 6.3) — not darkened screenshots but a re-derived palette, audited surface by surface. It also honours the operating system's **reduced motion** preference: when the student's device asks for less animation, a single CSS rule set stills decorative movement app-wide. These are accessibility features (Chapter Fifteen) that double as comfort features for everyone.",
     ),
-    ...figure("fig-night-timer.png", "Night mode: the same Focus Desk re-derived from the token system.", 620),
+    ...figure(
+      "fig-night-timer.png",
+      "Night mode: the same Focus Desk re-derived from the token system.",
+      620,
+    ),
 
     h2("9.7 Notification Restraint"),
     para(
@@ -434,7 +627,11 @@ export function ch9() {
     ),
 
     h2("9.8 Responsive Behaviour"),
-    ...figure("fig-mobile-timer.png", "The Focus Desk on a 390-px phone viewport: bottom navigation, stacked cards.", 300),
+    ...figure(
+      "fig-mobile-timer.png",
+      "The Focus Desk on a 390-px phone viewport: bottom navigation, stacked cards.",
+      300,
+    ),
     para(
       "StudyFlow is built mobile-first: base styles target the small screen, and media queries add complexity as space allows — the navigation rail becomes a bottom bar, card grids restack, the timer scales by viewport units, and modals become full-screen sheets. Chapter Fifteen covers the responsive technique in depth, including viewport-height quirks on mobile browsers and the safe-area insets of notched phones.",
     ),
@@ -458,39 +655,70 @@ export function ch10() {
     para(
       "StudyFlow's tables organise into six clusters around one root: the Supabase-managed `auth.users` account, mirrored by a `profiles` row (display name, avatar, bio) created automatically on sign-up. Everything else hangs off the user's id by foreign key.",
     ),
-    ...figure("dia-database.png", "Simplified entity map: one account, six data clusters.", 620),
+    ...figure(
+      "dia-database.png",
+      "Simplified entity map: one account, six data clusters.",
+      620,
+    ),
     ...table(
       "The six data clusters and their main tables",
       ["Cluster", "Tables (representative)", "Purpose"],
       [
-        ["Identity", "profiles, user_settings", "Who the user is; their preferences"],
-        ["Productivity", "tasks, user_state, user_notes, streaks, technique_usage, technique_assessments", "Sessions, tasks, notes, streaks, technique data"],
-        ["Social", "friendships, groups, group_memberships, messages, message_reactions, message_receipts, stories, story_views, call_events, call_history, call_participants, notifications, reports, community_blocks", "Everything between people"],
-        ["Library", "books, book_progress, book_bookmarks, book_highlights, book_notes, book_favorites", "Personal books and reading data"],
-        ["Rewards", "rewards, user_balances, purchases, user_inventory, coin_transactions, mystery_box_openings, user_achievements, achievement_defs", "The economy and achievements"],
-        ["Media & music", "music_tracks, music_playlists, music_playlist_tracks, favorites", "Study audio and song favorites"],
+        [
+          "Identity",
+          "profiles, user_settings",
+          "Who the user is; their preferences",
+        ],
+        [
+          "Productivity",
+          "tasks, user_state, user_notes, streaks, technique_usage, technique_assessments",
+          "Sessions, tasks, notes, streaks, technique data",
+        ],
+        [
+          "Social",
+          "friendships, groups, group_memberships, messages, message_reactions, message_receipts, stories, story_views, call_events, call_history, call_participants, notifications, reports, community_blocks",
+          "Everything between people",
+        ],
+        [
+          "Library",
+          "books, book_progress, book_bookmarks, book_highlights, book_notes, book_favorites",
+          "Personal books and reading data",
+        ],
+        [
+          "Rewards",
+          "rewards, user_balances, purchases, user_inventory, coin_transactions, mystery_box_openings, user_achievements, achievement_defs",
+          "The economy and achievements",
+        ],
+        [
+          "Media & music",
+          "music_tracks, music_playlists, music_playlist_tracks, favorites",
+          "Study audio and song favorites",
+        ],
       ],
       [14, 52, 34],
     ),
 
     h2("10.3 Constraints: the Database as Rule-Keeper"),
     para(
-      "PostgreSQL enforces rules at the database level, where no buggy client can bypass them. StudyFlow leans on this deliberately. The stories table, for example, carries a check constraint that bounds every status to a 24-hour lifetime at write time — an interface bug could not create a permanent \"story\" if it tried:",
+      'PostgreSQL enforces rules at the database level, where no buggy client can bypass them. StudyFlow leans on this deliberately. The stories table, for example, carries a check constraint that bounds every status to a 24-hour lifetime at write time — an interface bug could not create a permanent "story" if it tried:',
     ),
-    ...codeCaption("From migration 016 — server-enforced 24-hour status lifetime", [
-      "create table if not exists public.stories (",
-      "  id uuid primary key default gen_random_uuid(),",
-      "  user_id uuid not null references auth.users(id) on delete cascade,",
-      "  kind text not null check (kind in ('text', 'image', 'video')),",
-      "  text text not null default '' check (char_length(text) <= 500),",
-      "  visibility text not null default 'public'",
-      "    check (visibility in ('public', 'connections', 'private')),",
-      "  created_at timestamptz not null default now(),",
-      "  expires_at timestamptz not null default now() + interval '24 hours',",
-      "  check (expires_at > created_at",
-      "    and expires_at <= created_at + interval '25 hours')",
-      ");",
-    ]),
+    ...codeCaption(
+      "From migration 016 — server-enforced 24-hour status lifetime",
+      [
+        "create table if not exists public.stories (",
+        "  id uuid primary key default gen_random_uuid(),",
+        "  user_id uuid not null references auth.users(id) on delete cascade,",
+        "  kind text not null check (kind in ('text', 'image', 'video')),",
+        "  text text not null default '' check (char_length(text) <= 500),",
+        "  visibility text not null default 'public'",
+        "    check (visibility in ('public', 'connections', 'private')),",
+        "  created_at timestamptz not null default now(),",
+        "  expires_at timestamptz not null default now() + interval '24 hours',",
+        "  check (expires_at > created_at",
+        "    and expires_at <= created_at + interval '25 hours')",
+        ");",
+      ],
+    ),
 
     h2("10.4 Migrations: a Schema That Tells Its History"),
     para(
@@ -508,10 +736,10 @@ export function ch10() {
     ),
     ...codeCaption("Representative gateway query (abridged from backend.js)", [
       "const { data, error } = await supabase",
-      "  .from(\"tasks\")",
-      "  .select(\"id, title, done, created_at\")",
-      "  .eq(\"user_id\", uid)",
-      "  .order(\"created_at\", { ascending: false })",
+      '  .from("tasks")',
+      '  .select("id, title, done, created_at")',
+      '  .eq("user_id", uid)',
+      '  .order("created_at", { ascending: false })',
     ]),
 
     h2("10.7 Data Lifecycle"),

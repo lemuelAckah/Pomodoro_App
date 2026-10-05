@@ -145,7 +145,8 @@ import {
 registerMissionDesk({ markup: missionDeskMarkup, bind: bindMissionDesk })
 
 try {
-  if (state.tab === "timer" && document.querySelector("#tab-timer")) renderTimer()
+  if (state.tab === "timer" && document.querySelector("#tab-timer"))
+    renderTimer()
 } catch {
   /* shell not ready yet — next render picks the real desk up */
 }
@@ -21157,9 +21158,7 @@ export {
   bindMissionDesk,
 }
 
-export {
-  joinChallenge,
-}
+export { joinChallenge }
 
 export {
   isEventOwner,

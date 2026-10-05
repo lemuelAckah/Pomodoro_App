@@ -121,7 +121,9 @@ self.addEventListener("fetch", (event) => {
         .catch(async () => {
           const hit = await caches
             .open(VERSION)
-            .then((cache) => cache.match(NAVIGATE_FALLBACK, { ignoreVary: true }))
+            .then((cache) =>
+              cache.match(NAVIGATE_FALLBACK, { ignoreVary: true }),
+            )
           if (!hit) throw new Error("offline and shell not cached")
           return hit
         }),
@@ -131,8 +133,7 @@ self.addEventListener("fetch", (event) => {
 
   // Hashed build assets are immutable: cache first, populate on a miss.
   if (url.pathname.startsWith("/assets/")) {
-    event.respondWith(
-      caches.open(VERSION).then((cache) =>
+    event.respondWith(caches.open(VERSION).then((cache) =>
         cache.match(request, { ignoreVary: true }).then(
           (hit) =>
             hit ||
@@ -143,8 +144,7 @@ self.addEventListener("fetch", (event) => {
               return response
             }),
         ),
-      ),
-    )
+      ))
     return
   }
 
@@ -153,11 +153,7 @@ self.addEventListener("fetch", (event) => {
     fetch(request)
       .then(async (response) => {
         if (response && response.ok)
-          await store(
-            await caches.open(VERSION),
-            request,
-            response.clone(),
-          )
+          await store(await caches.open(VERSION), request, response.clone())
 
         return response
       })

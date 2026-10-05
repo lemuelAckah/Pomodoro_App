@@ -24,7 +24,12 @@ export const MUTED = "5A6B60"
 export const RULE = "DDE6DE"
 export const TINT = "F2F5F2"
 
-const IMG_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "docs", "img")
+const IMG_DIR = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "docs",
+  "img",
+)
 export function imgData(file) {
   return `data:image/png;base64,${readFileSync(join(IMG_DIR, file)).toString("base64")}`
 }
@@ -64,7 +69,14 @@ export const slides = [
       "A <b>social layer</b>: groups, messaging, voice/video calls, expiring statuses.",
       "A <b>reward economy</b>: coins, achievements and a store.",
     ],
-    media: [{ file: "fig-landing.png", alt: "StudyFlow landing page", role: "shot", cap: "The StudyFlow landing page" }],
+    media: [
+      {
+        file: "fig-landing.png",
+        alt: "StudyFlow landing page",
+        role: "shot",
+        cap: "The StudyFlow landing page",
+      },
+    ],
     foot: "Slide 3",
     notes:
       "Walk the six pillars left to right, then point at the screenshot: everything shown is a real screen capture of the running app.",
@@ -74,12 +86,19 @@ export const slides = [
     kicker: "Feature — Focus Desk",
     title: "The timer at the centre",
     media: [
-      { file: "fig-timer.png", alt: "Focus Desk timer tab", role: "shot", cap: "Focus Desk on desktop" },
+      {
+        file: "fig-timer.png",
+        alt: "Focus Desk timer tab",
+        role: "shot",
+        cap: "Focus Desk on desktop",
+      },
       { file: "fig-mobile-timer.png", alt: "Timer on mobile", role: "shot" },
       { file: "fig-night-timer.png", alt: "Timer in night mode", role: "shot" },
     ],
     cap: "Responsive on mobile · night mode built in",
-    bullets: ["Presets, sessions and <b>streak tracking</b> keep the routine honest."],
+    bullets: [
+      "Presets, sessions and <b>streak tracking</b> keep the routine honest.",
+    ],
     foot: "Slide 4",
     notes:
       "The Focus Desk is the daily anchor: presets, session history and streaks. Responsive layout and night mode are built in — all three captures are live screens, not mock-ups.",
@@ -88,7 +107,14 @@ export const slides = [
     layout: "diagram-top",
     kicker: "Learning Science",
     title: "A session cycle designed from the evidence",
-    media: [{ file: "dia-cycle.png", alt: "Pomodoro session cycle diagram", role: "diagram", cap: "Focus → short break → repeat → long break" }],
+    media: [
+      {
+        file: "dia-cycle.png",
+        alt: "Pomodoro session cycle diagram",
+        role: "diagram",
+        cap: "Focus → short break → repeat → long break",
+      },
+    ],
     bullets: [
       "Work in <b>focused intervals</b> separated by restorative breaks.",
       "Breaks and limits counter <b>attention residue</b> from task switching.",
@@ -103,8 +129,18 @@ export const slides = [
     kicker: "Feature — Techniques",
     title: "Guided methods, matched to the student",
     media: [
-      { file: "fig-techniques.png", alt: "Techniques tab", role: "shot", cap: "The Techniques library" },
-      { file: "dia-techniques.png", alt: "Technique assessment flow diagram", role: "diagram", cap: "Orientation assessment → personal fit" },
+      {
+        file: "fig-techniques.png",
+        alt: "Techniques tab",
+        role: "shot",
+        cap: "The Techniques library",
+      },
+      {
+        file: "dia-techniques.png",
+        alt: "Technique assessment flow diagram",
+        role: "diagram",
+        cap: "Orientation assessment → personal fit",
+      },
     ],
     bullets: [
       "Each method explains <b>what to do and why it works</b>.",
@@ -119,9 +155,24 @@ export const slides = [
     kicker: "Feature — Study Life",
     title: "Library, sound and community in one place",
     media: [
-      { file: "fig-books.png", alt: "Book library", role: "shot", cap: "EPUB reader & prompts" },
-      { file: "fig-sounds.png", alt: "Sound studio", role: "shot", cap: "Synthesised ambience" },
-      { file: "fig-community.png", alt: "Community tab", role: "shot", cap: "Groups & messaging" },
+      {
+        file: "fig-books.png",
+        alt: "Book library",
+        role: "shot",
+        cap: "EPUB reader & prompts",
+      },
+      {
+        file: "fig-sounds.png",
+        alt: "Sound studio",
+        role: "shot",
+        cap: "Synthesised ambience",
+      },
+      {
+        file: "fig-community.png",
+        alt: "Community tab",
+        role: "shot",
+        cap: "Groups & messaging",
+      },
     ],
     foot: "Slide 7",
     notes:
@@ -131,7 +182,14 @@ export const slides = [
     layout: "text-right-media-left",
     kicker: "Feature — Motivation",
     title: "Coins, achievements and a store",
-    media: [{ file: "fig-store.png", alt: "Store tab", role: "shot", cap: "The reward store" }],
+    media: [
+      {
+        file: "fig-store.png",
+        alt: "Store tab",
+        role: "shot",
+        cap: "The reward store",
+      },
+    ],
     bullets: [
       "Focus sessions and streaks earn <b>coins</b>.",
       "Achievements mark <b>real milestones</b>, not busywork.",
@@ -146,7 +204,13 @@ export const slides = [
     layout: "big-diagram",
     kicker: "Under the Hood",
     title: "A disciplined vanilla-JS architecture",
-    media: [{ file: "dia-architecture.png", alt: "System architecture diagram", role: "diagram" }],
+    media: [
+      {
+        file: "dia-architecture.png",
+        alt: "System architecture diagram",
+        role: "diagram",
+      },
+    ],
     bullets: [
       "<b>Single static shell</b>; routes lazy-load as ES-module chunks.",
       "Main bundle ≈ <b>288 kB</b>; everything else fetched on demand.",
@@ -160,7 +224,14 @@ export const slides = [
     layout: "text-right-media-left",
     kicker: "Under the Hood",
     title: "Supabase: PostgreSQL, auth and enforced privacy",
-    media: [{ file: "dia-database.png", alt: "Database entity map", role: "diagram", cap: "Entity map (simplified)" }],
+    media: [
+      {
+        file: "dia-database.png",
+        alt: "Database entity map",
+        role: "diagram",
+        cap: "Entity map (simplified)",
+      },
+    ],
     bullets: [
       "<b>41 PostgreSQL tables</b> across 24 migrations.",
       "<b>136 Row Level Security policies</b> — privacy enforced by the database, not the client.",
@@ -176,10 +247,22 @@ export const slides = [
     kicker: "Under the Hood",
     title: "Real-time presence, statuses and calls",
     media: [
-      { file: "dia-auth.png", alt: "Authentication flow diagram", role: "diagram", cap: "JWT sessions through Supabase Auth" },
-      { file: "dia-call.png", alt: "Call flow diagram", role: "diagram", cap: "WebRTC peer-to-peer voice & video, optional TURN" },
+      {
+        file: "dia-auth.png",
+        alt: "Authentication flow diagram",
+        role: "diagram",
+        cap: "JWT sessions through Supabase Auth",
+      },
+      {
+        file: "dia-call.png",
+        alt: "Call flow diagram",
+        role: "diagram",
+        cap: "WebRTC peer-to-peer voice & video, optional TURN",
+      },
     ],
-    bullets: ["Expiring <b>status updates</b> (24-hour lifetime, server-enforced)."],
+    bullets: [
+      "Expiring <b>status updates</b> (24-hour lifetime, server-enforced).",
+    ],
     foot: "Slide 11",
     notes:
       "JWT sessions through Supabase Auth; calls are WebRTC peer-to-peer with optional TURN fallback; statuses expire after 24 hours, enforced server-side.",
@@ -193,7 +276,8 @@ export const slides = [
       "<b>Honest limits:</b> no experimental evaluation of learning outcomes yet; React/Tailwind scaffolding unused.",
       "<b>Next:</b> a controlled study of StudyFlow's effect on retention, plus social and content expansion.",
     ],
-    afterword: "Full details: StudyFlow_Documentation — 21 chapters, 41 references, 8 appendices.",
+    afterword:
+      "Full details: StudyFlow_Documentation — 21 chapters, 41 references, 8 appendices.",
     foot: "Slide 12",
     notes:
       "Close on honesty: everything documented is verified against the codebase; no outcome evaluation exists yet, and a controlled study is the proposed next step. Point the audience to the full documentation.",

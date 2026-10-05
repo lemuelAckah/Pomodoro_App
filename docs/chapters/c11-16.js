@@ -25,7 +25,7 @@ export function ch11() {
 
     h2("11.1 Authentication (Who You Are)"),
     para(
-      "**Authentication** is verifying identity. StudyFlow delegates it entirely to Supabase Auth: email-and-password with confirmation links, password reset by email, and Google OAuth (sign in with an existing Google account, so StudyFlow never handles those credentials at all). On success the client receives a **session** — a signed JSON Web Token (JWT): a credential whose contents are cryptographically sealed, so it cannot be forged, only issued. Sessions expire and refresh automatically; the application can be signed out globally (every device) with one call (`signOut({ scope: \"global\" })`).",
+      '**Authentication** is verifying identity. StudyFlow delegates it entirely to Supabase Auth: email-and-password with confirmation links, password reset by email, and Google OAuth (sign in with an existing Google account, so StudyFlow never handles those credentials at all). On success the client receives a **session** — a signed JSON Web Token (JWT): a credential whose contents are cryptographically sealed, so it cannot be forged, only issued. Sessions expire and refresh automatically; the application can be signed out globally (every device) with one call (`signOut({ scope: "global" })`).',
     ),
 
     h2("11.2 Authorization (What You May Do)"),
@@ -35,12 +35,15 @@ export function ch11() {
     para(
       "**RLS in plain terms.** Imagine the tasks table as a filing room where every cabinet drawer is labelled with its owner's name. RLS is the security guard on the door: whatever a person asks for, the guard only hands over drawers bearing *their* name — and only accepts new papers into drawers they own. The student's app can ask for anything; the guard decides. StudyFlow enables RLS on **every user-owned table** (42 enabled) and defines **136 policies** such as:",
     ),
-    ...codeCaption("Representative policy (pattern used across user-owned tables)", [
-      "create policy \"tasks_owner_all\"",
-      "  on public.tasks for all",
-      "  using (auth.uid() = user_id)",
-      "  with check (auth.uid() = user_id);",
-    ]),
+    ...codeCaption(
+      "Representative policy (pattern used across user-owned tables)",
+      [
+        'create policy "tasks_owner_all"',
+        "  on public.tasks for all",
+        "  using (auth.uid() = user_id)",
+        "  with check (auth.uid() = user_id);",
+      ],
+    ),
 
     h2("11.3 Storage Security"),
     para(
@@ -54,10 +57,10 @@ export function ch11() {
 
     h2("11.5 A Real Lesson: Recursive RLS Policies"),
     para(
-      "Migration 018 records an instructive failure. The Community tab began returning HTTP 500 with Postgres error **42P17 — infinite recursion detected in policy**. The cause: policies on two tables referenced *each other*. The groups policy asked \"is the caller a member?\" (querying group_memberships), while the memberships policy asked \"is this group public?\" (querying groups). Each policy check triggered the other's check, and Postgres cut the loop at depth ~10 — breaking **every** read of either table, even a bare `select * from groups`.",
+      'Migration 018 records an instructive failure. The Community tab began returning HTTP 500 with Postgres error **42P17 — infinite recursion detected in policy**. The cause: policies on two tables referenced *each other*. The groups policy asked "is the caller a member?" (querying group_memberships), while the memberships policy asked "is this group public?" (querying groups). Each policy check triggered the other\'s check, and Postgres cut the loop at depth ~10 — breaking **every** read of either table, even a bare `select * from groups`.',
     ),
     para(
-      "The fix replaced policy subqueries with **SECURITY DEFINER functions** — small SQL helpers that run with the function owner's authority (RLS bypassed internally) and return exactly one fact (\"is this group public?\"; \"what is the caller's role?\"). The recursion cycle is broken because policy checks no longer re-enter policy checks. Two general lessons are recorded in the migration's own comments: mutual policy references are a latent bomb that can pass per-table tests and still detonate on a combined query; and helper functions should be minimal, locked down (`set search_path`), and return one fact each.",
+      'The fix replaced policy subqueries with **SECURITY DEFINER functions** — small SQL helpers that run with the function owner\'s authority (RLS bypassed internally) and return exactly one fact ("is this group public?"; "what is the caller\'s role?"). The recursion cycle is broken because policy checks no longer re-enter policy checks. Two general lessons are recorded in the migration\'s own comments: mutual policy references are a latent bomb that can pass per-table tests and still detonate on a combined query; and helper functions should be minimal, locked down (`set search_path`), and return one fact each.',
     ),
 
     h2("11.6 Privacy and Data Control"),
@@ -70,16 +73,34 @@ export function ch11() {
       "Security mechanisms and their purposes",
       ["Mechanism", "Purpose"],
       [
-        ["Supabase Auth (bcrypt-backed)", "Password storage and verification off the app's hands"],
+        [
+          "Supabase Auth (bcrypt-backed)",
+          "Password storage and verification off the app's hands",
+        ],
         ["OAuth (Google)", "Credentials never touch StudyFlow"],
         ["JWT sessions", "Tamper-proof identity on every request"],
-        ["Row Level Security (41 tables, 136 policies)", "Database-enforced per-user access"],
-        ["SECURITY DEFINER helpers (migration 018)", "Policy recursion eliminated; minimal authority helpers"],
-        ["Storage bucket policies + signed URLs", "Private media with temporary access"],
-        ["Client-side upload validation", "Type/size checks before bytes leave the browser"],
+        [
+          "Row Level Security (41 tables, 136 policies)",
+          "Database-enforced per-user access",
+        ],
+        [
+          "SECURITY DEFINER helpers (migration 018)",
+          "Policy recursion eliminated; minimal authority helpers",
+        ],
+        [
+          "Storage bucket policies + signed URLs",
+          "Private media with temporary access",
+        ],
+        [
+          "Client-side upload validation",
+          "Type/size checks before bytes leave the browser",
+        ],
         ["HTTPS everywhere", "Encryption in transit"],
         ["Env-var secrets, git-ignored", "No credentials in the repository"],
-        ["Transactional account deletion", "All-or-nothing data removal with per-item report"],
+        [
+          "Transactional account deletion",
+          "All-or-nothing data removal with per-item report",
+        ],
       ],
       [46, 54],
     ),
@@ -96,7 +117,7 @@ export function ch12() {
 
     h2("12.1 Real-Time Concepts"),
     para(
-      "Ordinary web traffic is a question-and-answer cycle: the browser asks, the server answers, the connection ends. A **WebSocket** is a persistent two-way connection: either side can push a message at any moment. Supabase Realtime exposes this through **channels** — named rooms a client can join — carrying two kinds of traffic: **postgres_changes** events (\"a row was just inserted/updated in a table you watch\") and **broadcast** events (ephemeral messages between channel members, stored nowhere). **Presence** is a third facility: the channel tracks who is currently connected.",
+      'Ordinary web traffic is a question-and-answer cycle: the browser asks, the server answers, the connection ends. A **WebSocket** is a persistent two-way connection: either side can push a message at any moment. Supabase Realtime exposes this through **channels** — named rooms a client can join — carrying two kinds of traffic: **postgres_changes** events ("a row was just inserted/updated in a table you watch") and **broadcast** events (ephemeral messages between channel members, stored nowhere). **Presence** is a third facility: the channel tracks who is currently connected.',
     ),
 
     h2("12.2 Messaging Flow"),
@@ -108,7 +129,11 @@ export function ch12() {
     para(
       "WebRTC lets two browsers send audio and video **directly** to each other, encrypted — like exchanging house keys through a postman and then talking privately at home. Three stages: **getUserMedia** asks permission and opens the microphone/camera (a browser-level prompt the user can deny — the app treats denial as a first-class state with clear messaging); **signalling** exchanges each peer's *description* (what codecs/settings it offers and answers) through a rendezvous channel — in StudyFlow, a Supabase broadcast channel named per call room; and **ICE negotiation** tries every route from direct local paths to the optional **TURN relay** (a courier server for networks that block direct connections, configured via environment variables). After connection, media flows peer-to-peer; the signalling channel goes quiet.",
     ),
-    ...figure("dia-call.png", "The call lifecycle: signalling sets up a direct, encrypted peer connection.", 620),
+    ...figure(
+      "dia-call.png",
+      "The call lifecycle: signalling sets up a direct, encrypted peer connection.",
+      620,
+    ),
 
     h2("12.4 The Full Call Lifecycle"),
     ...numbered([
@@ -143,7 +168,7 @@ export function ch13() {
 
     h2("13.1 The Design Intent"),
     para(
-      "Permanent feeds reward curation and comparison; expiring statuses lower the stakes. In a study tool, that difference matters: the intended content is *\"day 12 of exam prep — 6 sessions today\"*, not a highlight reel. The 24-hour expiry is not just a UI convention — it is a database constraint (Section 10.3), so the ephemeral guarantee holds even against bugs.",
+      'Permanent feeds reward curation and comparison; expiring statuses lower the stakes. In a study tool, that difference matters: the intended content is *"day 12 of exam prep — 6 sessions today"*, not a highlight reel. The 24-hour expiry is not just a UI convention — it is a database constraint (Section 10.3), so the ephemeral guarantee holds even against bugs.',
     ),
 
     h2("13.2 What a Status Contains"),
@@ -152,7 +177,11 @@ export function ch13() {
     ),
 
     h2("13.3 The Lifecycle"),
-    ...figure("dia-status.png", "Status lifecycle from creation to expiry, enforced end to end.", 620),
+    ...figure(
+      "dia-status.png",
+      "Status lifecycle from creation to expiry, enforced end to end.",
+      620,
+    ),
     ...numbered([
       "**Create** — compose text, capture/import media (MediaRecorder for in-app video capture), add caption/music.",
       "**Edit & preview** — visibility, caption and audio are adjustable on a preview surface before anything uploads.",
@@ -178,7 +207,7 @@ export function ch14() {
 
     h2("14.1 The Theory in Brief"),
     para(
-      "Self-Determination Theory (Deci & Ryan, 2000) holds that motivation endures when three needs are fed: **autonomy** (I chose this), **competence** (I am getting better), and **relatedness** (I am not alone). External rewards are double-edged: meta-analysis (Deci et al., 1999) shows tangible, expected rewards can *undermine* intrinsic motivation — the overjustification effect — while informational feedback that signals competence tends to help. Gamification reviews (Hamari et al., 2014) find positive effects are common but contingent on context and implementation. The design conclusion is not \"skip rewards\" but \"anchor rewards to what should be reinforced, and make them informational, not controlling.\"",
+      'Self-Determination Theory (Deci & Ryan, 2000) holds that motivation endures when three needs are fed: **autonomy** (I chose this), **competence** (I am getting better), and **relatedness** (I am not alone). External rewards are double-edged: meta-analysis (Deci et al., 1999) shows tangible, expected rewards can *undermine* intrinsic motivation — the overjustification effect — while informational feedback that signals competence tends to help. Gamification reviews (Hamari et al., 2014) find positive effects are common but contingent on context and implementation. The design conclusion is not "skip rewards" but "anchor rewards to what should be reinforced, and make them informational, not controlling."',
     ),
 
     h2("14.2 StudyFlow's Economy"),
@@ -186,13 +215,41 @@ export function ch14() {
       "The components of StudyFlow's motivation system",
       ["Element", "Earned by", "Design intent"],
       [
-        ["Coins", "Completed focus sessions, task completion", "Visible, immediate consequence of study behaviour"],
-        ["Streaks", "Studying on consecutive days", "Consistency cue; makes the habit chain visible"],
-        ["Achievements", "Milestones (first session → 50 sessions; streaks; hours)", "Competence feedback; graded challenge ladder"],
-        ["Mastery badges", "Months-scale milestones (250 sessions, 60-day streak…)", "Long-horizon goals explicitly marked EARN ONLY"],
-        ["Mystery boxes", "Purchased with coins at published odds", "Variable reward for variety, not progression"],
-        ["Store items", "Coins", "Personalisation (themes, garden), small functional treats"],
-        ["Coin packs", "Real money via Moolre MoMo", "Optional support of the project; never gates learning features"],
+        [
+          "Coins",
+          "Completed focus sessions, task completion",
+          "Visible, immediate consequence of study behaviour",
+        ],
+        [
+          "Streaks",
+          "Studying on consecutive days",
+          "Consistency cue; makes the habit chain visible",
+        ],
+        [
+          "Achievements",
+          "Milestones (first session → 50 sessions; streaks; hours)",
+          "Competence feedback; graded challenge ladder",
+        ],
+        [
+          "Mastery badges",
+          "Months-scale milestones (250 sessions, 60-day streak…)",
+          "Long-horizon goals explicitly marked EARN ONLY",
+        ],
+        [
+          "Mystery boxes",
+          "Purchased with coins at published odds",
+          "Variable reward for variety, not progression",
+        ],
+        [
+          "Store items",
+          "Coins",
+          "Personalisation (themes, garden), small functional treats",
+        ],
+        [
+          "Coin packs",
+          "Real money via Moolre MoMo",
+          "Optional support of the project; never gates learning features",
+        ],
       ],
       [20, 36, 44],
     ),
@@ -200,7 +257,7 @@ export function ch14() {
     h2("14.3 What the Economy Deliberately Avoids"),
     ...bullets([
       "**No pay-to-progress:** every learning feature is free; money buys cosmetic/functional extras, never an advantage in study itself.",
-      "**No punishment loop:** missing a day resets a streak — the interface treats it as information (\"restart today\"), not shame; there is no health bar draining while you sleep.",
+      '**No punishment loop:** missing a day resets a streak — the interface treats it as information ("restart today"), not shame; there is no health bar draining while you sleep.',
       "**No outcome rewards:** coins never depend on test scores or perceived productivity, which the system cannot see and should not guess.",
       "**No dark patterns:** no countdown pressure, no loss-aversion pop-ups, no re-engagement notifications; mystery-box odds are published.",
       "**Earn-only status symbols:** mastery badges cannot be bought, keeping the prestige economy tied to the behaviour it represents.",
@@ -232,9 +289,17 @@ export function ch15() {
       "Measured production build (vite build, this repository)",
       ["Chunk", "Role", "Loaded"],
       [
-        ["index + runtime + backend (~288 kB app bundle total)", "Shell, state, routing, services", "On boot"],
+        [
+          "index + runtime + backend (~288 kB app bundle total)",
+          "Shell, state, routing, services",
+          "On boot",
+        ],
         ["techniques-*.js", "Techniques tab", "First visit to tab"],
-        ["community-*.js", "Community, messaging, stories, calls", "First visit to tab"],
+        [
+          "community-*.js",
+          "Community, messaging, stories, calls",
+          "First visit to tab",
+        ],
         ["books-*.js", "Library and reader", "First visit to tab"],
         ["store-*.js", "Rewards store", "First visit to tab"],
         ["index-*.css", "All styles", "On boot"],
@@ -256,7 +321,11 @@ export function ch15() {
     para(
       "Responsive design means one codebase that adapts its layout to the screen. StudyFlow is **mobile-first**: base CSS targets ~360 px phones; media queries add the desktop rail, multi-column grids and hover states as space allows. Mobile specifics handled explicitly: dynamic viewport height (mobile browsers shrink/expand chrome, so full-height surfaces use `dvh`-style units and fallbacks), safe-area insets for notched phones, bottom navigation within thumb reach, modals that become full-screen sheets, and touch targets kept finger-sized.",
     ),
-    ...figure("fig-mobile-timer.png", "The same Focus Desk, mobile-first: bottom nav, stacked cards.", 300),
+    ...figure(
+      "fig-mobile-timer.png",
+      "The same Focus Desk, mobile-first: bottom nav, stacked cards.",
+      300,
+    ),
 
     h2("15.5 Accessibility"),
     para(

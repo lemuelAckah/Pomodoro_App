@@ -21,7 +21,7 @@ export function ch17() {
 
     h2("17.1 Study Time versus Actual Learning"),
     para(
-      "A student may sit at a desk for five hours, rereading highlighted notes with a phone face-up nearby, and retain almost nothing. Another may spend ninety minutes answering practice questions, checking answers, spacing a return for tomorrow, and walk away with durable knowledge. Both \"studied\"; the records of their time look nothing like the records of their learning. Time-on-task is a measure of *exposure*, and exposure is the weakest variable in the memory equation — what matters is what happened during the time: whether attention was present, whether retrieval was exercised, whether difficulty was embraced rather than avoided (Bjork & Bjork, 2011).",
+      'A student may sit at a desk for five hours, rereading highlighted notes with a phone face-up nearby, and retain almost nothing. Another may spend ninety minutes answering practice questions, checking answers, spacing a return for tomorrow, and walk away with durable knowledge. Both "studied"; the records of their time look nothing like the records of their learning. Time-on-task is a measure of *exposure*, and exposure is the weakest variable in the memory equation — what matters is what happened during the time: whether attention was present, whether retrieval was exercised, whether difficulty was embraced rather than avoided (Bjork & Bjork, 2011).',
     ),
     para(
       "This has an uncomfortable corollary for study software: **a tool can be excellent at producing study-shaped behaviour while having no necessary effect on learning.** Timers reliably produce sessions; streaks reliably produce days; neither guarantees a single retrieved fact. The literature's high-utility techniques (retrieval practice, spacing) are precisely the ones that feel effortful — meaning a well-meaning app that optimised purely for *more studying* could succeed at its metrics while leaving learning untouched, or even displace the difficult methods with comfortable ones.",
@@ -116,12 +116,36 @@ export function ch19() {
       "Short-term proposals",
       ["Proposal", "Problem it solves", "Constraint to respect"],
       [
-        ["Automated test suite (unit + one E2E flow)", "Regressions currently depend on manual passes", "Keep the zero-cost CI tier; start with timer, tasks, auth"],
-        ["Accessibility audit (axe + screen-reader pass)", "A11y claims are design-level (Section 15.5)", "Fix contrast/focus first; document residual gaps"],
-        ["Adaptive spaced-repetition scheduler", "Planner support is manual (Section 8.5)", "Start from SM-2-style intervals; keep it explainable"],
-        ["Retrieval analytics in the book companion", "Companion prompts are not recorded", "Store results only with explicit consent"],
-        ["Offline story/message queueing", "Social features drop offline", "Conflict rules first; expiry must still be enforced"],
-        ["Deployment hardening (staging, backup policy)", "Single-maintainer operations risk", "Free-tier only"],
+        [
+          "Automated test suite (unit + one E2E flow)",
+          "Regressions currently depend on manual passes",
+          "Keep the zero-cost CI tier; start with timer, tasks, auth",
+        ],
+        [
+          "Accessibility audit (axe + screen-reader pass)",
+          "A11y claims are design-level (Section 15.5)",
+          "Fix contrast/focus first; document residual gaps",
+        ],
+        [
+          "Adaptive spaced-repetition scheduler",
+          "Planner support is manual (Section 8.5)",
+          "Start from SM-2-style intervals; keep it explainable",
+        ],
+        [
+          "Retrieval analytics in the book companion",
+          "Companion prompts are not recorded",
+          "Store results only with explicit consent",
+        ],
+        [
+          "Offline story/message queueing",
+          "Social features drop offline",
+          "Conflict rules first; expiry must still be enforced",
+        ],
+        [
+          "Deployment hardening (staging, backup policy)",
+          "Single-maintainer operations risk",
+          "Free-tier only",
+        ],
       ],
       [30, 38, 32],
     ),
@@ -169,12 +193,36 @@ export function ch20() {
       "Proposed variables",
       ["Role", "Variable", "Instrument"],
       [
-        ["Independent", "StudyFlow access + onboarding (A vs B)", "Random assignment"],
-        ["Independent (secondary)", "Feature-usage mix (techniques, sprints, planner)", "In-app usage records"],
-        ["Dependent (primary)", "Retention of course material", "Validated pre/post retrieval test on matched topics"],
-        ["Dependent (secondary)", "Study consistency", "Self-reported + app-recorded session regularity"],
-        ["Dependent (secondary)", "Perceived concentration and motivation", "Validated scales (e.g. intrinsic-motivation items)"],
-        ["Covariates", "Baseline GPA, year, subject load", "Intake questionnaire"],
+        [
+          "Independent",
+          "StudyFlow access + onboarding (A vs B)",
+          "Random assignment",
+        ],
+        [
+          "Independent (secondary)",
+          "Feature-usage mix (techniques, sprints, planner)",
+          "In-app usage records",
+        ],
+        [
+          "Dependent (primary)",
+          "Retention of course material",
+          "Validated pre/post retrieval test on matched topics",
+        ],
+        [
+          "Dependent (secondary)",
+          "Study consistency",
+          "Self-reported + app-recorded session regularity",
+        ],
+        [
+          "Dependent (secondary)",
+          "Perceived concentration and motivation",
+          "Validated scales (e.g. intrinsic-motivation items)",
+        ],
+        [
+          "Covariates",
+          "Baseline GPA, year, subject load",
+          "Intake questionnaire",
+        ],
       ],
       [22, 42, 36],
     ),
@@ -193,7 +241,7 @@ export function ch20() {
     ...bullets([
       "Self-selection into a study of a study app may bias the sample toward already-motivated students.",
       "A 12–14-week horizon cannot speak to long-term retention or habit permanence.",
-      "Usage is unsupervised; \"treatment as intended\" cannot be guaranteed — which is why dose is recorded, not assumed.",
+      'Usage is unsupervised; "treatment as intended" cannot be guaranteed — which is why dose is recorded, not assumed.',
       "Learning outcomes rely on researcher-constructed tests for matched topics unless validated instruments are available.",
     ]),
   ]
@@ -213,7 +261,7 @@ export function ch21() {
       "The **engineering** serves the philosophy rather than the reverse: a vanilla-JavaScript single-page application of ~60,000 lines, code-split and offline-first through a service worker; a single gateway to a managed Supabase backend of 41 RLS-protected tables, realtime channels and peer-to-peer WebRTC calls; free-tier economics as a hard design constraint; and a security posture (database-enforced privacy, atomic deletion, no secrets in the client) that treats user data as the user's, not the platform's.",
     ),
     para(
-      "The **honesty** is the contribution this document most wants to survive contact with the future: StudyFlow's metrics measure behaviour, not learning; its technique guidance carries methods the literature favours, not methods proven effective *in* StudyFlow; its gamification and social layer name their own risks; and its educational effect is an open empirical question with a proposed answer in Chapter Twenty. Between *\"StudyFlow currently does\"*, *\"research suggests\"* and *\"remains to be shown\"*, this document has kept the seams visible — because a study tool that respects evidence in its marketing is more likely to respect it in its roadmap.",
+      'The **honesty** is the contribution this document most wants to survive contact with the future: StudyFlow\'s metrics measure behaviour, not learning; its technique guidance carries methods the literature favours, not methods proven effective *in* StudyFlow; its gamification and social layer name their own risks; and its educational effect is an open empirical question with a proposed answer in Chapter Twenty. Between *"StudyFlow currently does"*, *"research suggests"* and *"remains to be shown"*, this document has kept the seams visible — because a study tool that respects evidence in its marketing is more likely to respect it in its roadmap.',
     ),
     para(
       "What remains is work: automated tests, audited accessibility, an adaptive scheduler, retrieval analytics, and above all the study that would let the next edition of this document replace design rationale with data. The cycle the app teaches — plan, focus, learn, practice, review, track, reflect, improve — applies, fittingly, to the app itself.",

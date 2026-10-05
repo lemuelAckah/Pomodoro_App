@@ -50,6 +50,13 @@ Use the existing tokens for colors — never hard-code surfaces — and keep
 `@media` rules with their feature file. Animations live in
 `src/styles/animations.css`; dark variants in `src/styles/theme.css`.
 
+## Navigation rules
+
+- The Study Technique Check welcome page ("Let's discover how you learn best.")
+  must always offer a back route to the landing page: its ← Back button returns
+  to the landing (and clears `state.entered` so a refresh stays there), or to
+  Settings when the check was opened from Settings.
+
 ## Code quality
 
 - Use double quotes for strings containing apostrophes (`"We're here to help"`), or escape them in single-quoted strings. An unescaped apostrophe in a single-quoted string breaks the build.

@@ -51,7 +51,7 @@ export function ch1() {
 
     h2("1.3 Motivation"),
     para(
-      "The project began, as the repository's original name (`Pomodoro_App`) still shows, as a straightforward Pomodoro timer: a ring that counts down twenty-five minutes, a break, and a session log. Using it daily surfaced the wider gap. A timer answers *\"am I focusing right now?\"* but not *\"what should I focus on?\"*, not *\"is this the right way to study this subject?\"*, and not *\"is any of this working?\"*. Each of those questions grew into a feature area — task planning, a catalog of study techniques with guidance, analytics of sessions and streaks — and each feature area exposed another missing piece: notes needed a home, books needed a reader, consistency needed motivation, and consistency alone was lonely, so community arrived.",
+      'The project began, as the repository\'s original name (`Pomodoro_App`) still shows, as a straightforward Pomodoro timer: a ring that counts down twenty-five minutes, a break, and a session log. Using it daily surfaced the wider gap. A timer answers *"am I focusing right now?"* but not *"what should I focus on?"*, not *"is this the right way to study this subject?"*, and not *"is any of this working?"*. Each of those questions grew into a feature area — task planning, a catalog of study techniques with guidance, analytics of sessions and streaks — and each feature area exposed another missing piece: notes needed a home, books needed a reader, consistency needed motivation, and consistency alone was lonely, so community arrived.',
     ),
     para(
       "The result is that StudyFlow's feature set was not designed up-front as a product spec. It grew along the shape of a real study workflow, which is also why this document spends as much space on learning science and design rationale as on technology: the engineering decisions only make sense in the light of the behaviour the system is trying to support.",
@@ -131,7 +131,7 @@ export function ch2() {
 
     h2("2.2 Memory"),
     para(
-      "Memory is conventionally divided into sensory memory, **working memory** and **long-term memory**. Working memory is the mental workspace that holds what you are thinking about right now — and it is small. Cowan (2001) reviewed the evidence and placed its capacity at roughly four items of new information (a revision of the classic \"seven plus or minus two\" of Miller, 1956). Long-term memory, by contrast, is effectively unlimited; its limit is not storage but retrieval — finding the right memory at the right moment.",
+      'Memory is conventionally divided into sensory memory, **working memory** and **long-term memory**. Working memory is the mental workspace that holds what you are thinking about right now — and it is small. Cowan (2001) reviewed the evidence and placed its capacity at roughly four items of new information (a revision of the classic "seven plus or minus two" of Miller, 1956). Long-term memory, by contrast, is effectively unlimited; its limit is not storage but retrieval — finding the right memory at the right moment.',
     ),
     para(
       "Two consequences follow for a study tool. First, anything that competes for working memory during study (navigation, clutter, notifications, feature sprawl) is not neutral; it consumes the very resource learning needs. This is StudyFlow's core argument for a calm, low-chrome interface. Second, because long-term memory depends on retrieval strength built through repeated, spaced recall, a tool that schedules and records review at increasing intervals is doing something fundamentally different from a tool that merely displays material.",
@@ -139,7 +139,7 @@ export function ch2() {
 
     h2("2.3 Attention"),
     para(
-      "Attention is the selection mechanism that decides what working memory processes. It is sharply limited and, crucially, it is **switchable but not parallel**: when people \"multitask\", they are actually rapid-switching, and each switch leaves residue. Leroy (2009) showed that unfinished tasks intrude on attention to subsequent tasks — the brain keeps paying them rent. Mark et al. (2008) documented the fragmenting effect of interruptions in real work settings, with task switches every few minutes and long tail-times to resume deep work. For students, the practical unit of study is therefore not the evening but the protected block — which is precisely what a Pomodoro session is: a short, bounded, defensible claim on one's own attention.",
+      'Attention is the selection mechanism that decides what working memory processes. It is sharply limited and, crucially, it is **switchable but not parallel**: when people "multitask", they are actually rapid-switching, and each switch leaves residue. Leroy (2009) showed that unfinished tasks intrude on attention to subsequent tasks — the brain keeps paying them rent. Mark et al. (2008) documented the fragmenting effect of interruptions in real work settings, with task switches every few minutes and long tail-times to resume deep work. For students, the practical unit of study is therefore not the evening but the protected block — which is precisely what a Pomodoro session is: a short, bounded, defensible claim on one\'s own attention.',
     ),
 
     h2("2.4 Cognitive Load"),
@@ -238,11 +238,31 @@ export function ch3() {
       "StudyFlow's primary user groups and their main needs",
       ["User group", "Primary need", "How StudyFlow serves it"],
       [
-        ["Secondary-school students", "Structure and motivation", "Timer presets, streaks, tasks, rewards"],
-        ["University students", "Evidence-based technique, workload tracking", "Technique guides, analytics, book library"],
-        ["Self-learners", "Consistency without external deadlines", "Streaks, planning, community accountability"],
-        ["Study groups", "Coordination and shared focus", "Groups, sprints, messaging, calls"],
-        ["Parents and teachers (indirect)", "Visibility into study habits", "Session and streak records the student can share"],
+        [
+          "Secondary-school students",
+          "Structure and motivation",
+          "Timer presets, streaks, tasks, rewards",
+        ],
+        [
+          "University students",
+          "Evidence-based technique, workload tracking",
+          "Technique guides, analytics, book library",
+        ],
+        [
+          "Self-learners",
+          "Consistency without external deadlines",
+          "Streaks, planning, community accountability",
+        ],
+        [
+          "Study groups",
+          "Coordination and shared focus",
+          "Groups, sprints, messaging, calls",
+        ],
+        [
+          "Parents and teachers (indirect)",
+          "Visibility into study habits",
+          "Session and streak records the student can share",
+        ],
       ],
       [26, 34, 40],
     ),
@@ -263,7 +283,11 @@ export function ch3() {
     para(
       "StudyFlow organises the study process as a cycle of eight stages. Each is supported by specific features, and each feeds the next — the cycle is the application's mental model, and it recurs throughout this document.",
     ),
-    ...figure("dia-cycle.png", "The StudyFlow learning cycle and the features that support each stage.", 620),
+    ...figure(
+      "dia-cycle.png",
+      "The StudyFlow learning cycle and the features that support each stage.",
+      620,
+    ),
     ...bullets([
       "**Plan** — the student writes today's tasks and intention on the Focus Desk, converting vague obligation into a concrete next action.",
       "**Focus** — a timed session bounds attention; the ring, the break schedule and the session log structure the block.",
@@ -280,12 +304,30 @@ export function ch3() {
       "StudyFlow's system goals and the concrete measures taken",
       ["Goal", "Measure taken"],
       [
-        ["Free to run", "Frontend-only architecture; free-tier managed backend; no server code to host"],
-        ["Works without an account", "Full study workflow in local mode; account adds sync and social"],
-        ["Resilient offline", "Service worker precaches the app shell and all route chunks (Chapter 15)"],
-        ["Secure by construction", "Row Level Security on every user table; policies documented in Chapter 11"],
-        ["Respects attention", "No ads, no feeds-by-default, batched notifications, quiet visual design"],
-        ["Cross-device", "Responsive layout, installable PWA, cloud sync when signed in"],
+        [
+          "Free to run",
+          "Frontend-only architecture; free-tier managed backend; no server code to host",
+        ],
+        [
+          "Works without an account",
+          "Full study workflow in local mode; account adds sync and social",
+        ],
+        [
+          "Resilient offline",
+          "Service worker precaches the app shell and all route chunks (Chapter 15)",
+        ],
+        [
+          "Secure by construction",
+          "Row Level Security on every user table; policies documented in Chapter 11",
+        ],
+        [
+          "Respects attention",
+          "No ads, no feeds-by-default, batched notifications, quiet visual design",
+        ],
+        [
+          "Cross-device",
+          "Responsive layout, installable PWA, cloud sync when signed in",
+        ],
       ],
       [34, 66],
     ),
@@ -305,24 +347,96 @@ export function ch4() {
       "Core functional requirements (FR) as implemented",
       ["ID", "Requirement", "Where implemented"],
       [
-        ["FR-1", "Run configurable focus sessions with preset and custom durations", "Focus Desk / timer (src/timer.js)"],
-        ["FR-2", "Track sessions, streaks and task completion", "State store + analytics cards"],
-        ["FR-3", "Create, edit, complete and delete tasks", "Focus Desk task panel"],
-        ["FR-4", "Present study techniques with guided steps and check-ins", "Techniques tab (tech-catalog.js)"],
-        ["FR-5", "Assess technique fit via a 12-question onboarding quiz", "Technique Check (onboarding)"],
-        ["FR-6", "Create and organise notes, including a Cornell template", "Notes (core.js, techniques.js)"],
-        ["FR-7", "Upload, read, bookmark, highlight and annotate books", "Book Library (books*.js)"],
-        ["FR-8", "Play ambient audio and manage sound favorites", "Sound Studio (audio*.js)"],
-        ["FR-9", "Create groups, manage memberships, share group media", "Community (community.js)"],
-        ["FR-10", "Exchange direct messages with realtime delivery and receipts", "Community DMs (backend.js)"],
-        ["FR-11", "Post expiring status updates (text, image, video) with music", "Stories (community.js, backend.js)"],
-        ["FR-12", "Conduct one-to-one voice and video calls", "Calls (community.js, WebRTC)"],
-        ["FR-13", "Earn coins, unlock achievements, open mystery boxes, buy rewards", "Rewards (store.js, backend.js)"],
-        ["FR-14", "Purchase coin packs via mobile money (Moolre)", "Store top-up flow"],
-        ["FR-15", "Sync study state, productivity and media across devices when signed in", "services/*-sync.js"],
-        ["FR-16", "Operate fully without a backend, falling back to localStorage", "backendConfigured guard"],
-        ["FR-17", "Notify the user of messages, calls and session events, batched and dismissible", "Notifications panel"],
-        ["FR-18", "Allow the user to delete their account data in one verified step", "Account deletion flow"],
+        [
+          "FR-1",
+          "Run configurable focus sessions with preset and custom durations",
+          "Focus Desk / timer (src/timer.js)",
+        ],
+        [
+          "FR-2",
+          "Track sessions, streaks and task completion",
+          "State store + analytics cards",
+        ],
+        [
+          "FR-3",
+          "Create, edit, complete and delete tasks",
+          "Focus Desk task panel",
+        ],
+        [
+          "FR-4",
+          "Present study techniques with guided steps and check-ins",
+          "Techniques tab (tech-catalog.js)",
+        ],
+        [
+          "FR-5",
+          "Assess technique fit via a 12-question onboarding quiz",
+          "Technique Check (onboarding)",
+        ],
+        [
+          "FR-6",
+          "Create and organise notes, including a Cornell template",
+          "Notes (core.js, techniques.js)",
+        ],
+        [
+          "FR-7",
+          "Upload, read, bookmark, highlight and annotate books",
+          "Book Library (books*.js)",
+        ],
+        [
+          "FR-8",
+          "Play ambient audio and manage sound favorites",
+          "Sound Studio (audio*.js)",
+        ],
+        [
+          "FR-9",
+          "Create groups, manage memberships, share group media",
+          "Community (community.js)",
+        ],
+        [
+          "FR-10",
+          "Exchange direct messages with realtime delivery and receipts",
+          "Community DMs (backend.js)",
+        ],
+        [
+          "FR-11",
+          "Post expiring status updates (text, image, video) with music",
+          "Stories (community.js, backend.js)",
+        ],
+        [
+          "FR-12",
+          "Conduct one-to-one voice and video calls",
+          "Calls (community.js, WebRTC)",
+        ],
+        [
+          "FR-13",
+          "Earn coins, unlock achievements, open mystery boxes, buy rewards",
+          "Rewards (store.js, backend.js)",
+        ],
+        [
+          "FR-14",
+          "Purchase coin packs via mobile money (Moolre)",
+          "Store top-up flow",
+        ],
+        [
+          "FR-15",
+          "Sync study state, productivity and media across devices when signed in",
+          "services/*-sync.js",
+        ],
+        [
+          "FR-16",
+          "Operate fully without a backend, falling back to localStorage",
+          "backendConfigured guard",
+        ],
+        [
+          "FR-17",
+          "Notify the user of messages, calls and session events, batched and dismissible",
+          "Notifications panel",
+        ],
+        [
+          "FR-18",
+          "Allow the user to delete their account data in one verified step",
+          "Account deletion flow",
+        ],
       ],
       [8, 52, 40],
     ),
@@ -332,14 +446,46 @@ export function ch4() {
       "Non-functional requirements (NFR) and acceptance criteria",
       ["ID", "Category", "Requirement"],
       [
-        ["NFR-1", "Performance", "App shell interactive within ~2 s on a mid-range laptop; lazy routes load in under 1 s on broadband"],
-        ["NFR-2", "Offline", "After one online visit, full navigation and study workflow work with the server unreachable"],
-        ["NFR-3", "Resilience", "No backend failure blocks boot: the UI must render in local mode whenever cloud is unavailable"],
-        ["NFR-4", "Security", "All user-data tables enforce Row Level Security; no secrets in the client bundle"],
-        ["NFR-5", "Privacy", "Users can inspect and delete their stored data; deletions are verified complete"],
-        ["NFR-6", "Accessibility", "Keyboard-operable core flows, visible focus, reduced-motion support, day/night themes"],
-        ["NFR-7", "Responsiveness", "Usable from ~360 px phone width to wide desktop without horizontal scrolling"],
-        ["NFR-8", "Cost", "Zero recurring infrastructure cost on the free tier"],
+        [
+          "NFR-1",
+          "Performance",
+          "App shell interactive within ~2 s on a mid-range laptop; lazy routes load in under 1 s on broadband",
+        ],
+        [
+          "NFR-2",
+          "Offline",
+          "After one online visit, full navigation and study workflow work with the server unreachable",
+        ],
+        [
+          "NFR-3",
+          "Resilience",
+          "No backend failure blocks boot: the UI must render in local mode whenever cloud is unavailable",
+        ],
+        [
+          "NFR-4",
+          "Security",
+          "All user-data tables enforce Row Level Security; no secrets in the client bundle",
+        ],
+        [
+          "NFR-5",
+          "Privacy",
+          "Users can inspect and delete their stored data; deletions are verified complete",
+        ],
+        [
+          "NFR-6",
+          "Accessibility",
+          "Keyboard-operable core flows, visible focus, reduced-motion support, day/night themes",
+        ],
+        [
+          "NFR-7",
+          "Responsiveness",
+          "Usable from ~360 px phone width to wide desktop without horizontal scrolling",
+        ],
+        [
+          "NFR-8",
+          "Cost",
+          "Zero recurring infrastructure cost on the free tier",
+        ],
       ],
       [10, 16, 74],
     ),
@@ -387,7 +533,11 @@ export function ch5() {
     para(
       "StudyFlow is a **single-page application** (SPA): the browser loads one HTML page plus its scripts, and from then on the application redraws parts of the screen itself without full page reloads. All logic runs in the browser — there is no custom server. The browser application talks to **Supabase**, a managed backend platform that supplies four services under one roof: authentication, a PostgreSQL database, object storage for files, and realtime channels. The application is offline-first: every cloud call is guarded, and when the backend is unreachable or unconfigured, the app falls back to the browser's localStorage so study can continue.",
     ),
-    ...figure("dia-architecture.png", "StudyFlow's layers: user, frontend, gateway and Supabase services.", 620),
+    ...figure(
+      "dia-architecture.png",
+      "StudyFlow's layers: user, frontend, gateway and Supabase services.",
+      620,
+    ),
 
     h2("5.2 Frontend"),
     para(
@@ -399,7 +549,7 @@ export function ch5() {
 
     h2("5.3 Backend"),
     para(
-      "The \"backend\" has exactly one door: `src/services/backend.js`, a roughly five-thousand-line gateway module that wraps every Supabase interaction — auth, database queries, storage uploads, realtime channels — behind named functions the rest of the app imports. Because every call passes through one file, three properties hold: the rest of the code never vendors URLs or keys; offline degradation is implemented once (each function checks `backendConfigured` and otherwise resolves locally); and security-relevant behaviour (who may read or write what) is auditable in a single place. Supporting sync modules (`productivity-sync.js`, `rewards-sync.js`, `music-sync.js`, `books-sync.js`) move local state to the cloud on sign-in.",
+      'The "backend" has exactly one door: `src/services/backend.js`, a roughly five-thousand-line gateway module that wraps every Supabase interaction — auth, database queries, storage uploads, realtime channels — behind named functions the rest of the app imports. Because every call passes through one file, three properties hold: the rest of the code never vendors URLs or keys; offline degradation is implemented once (each function checks `backendConfigured` and otherwise resolves locally); and security-relevant behaviour (who may read or write what) is auditable in a single place. Supporting sync modules (`productivity-sync.js`, `rewards-sync.js`, `music-sync.js`, `books-sync.js`) move local state to the cloud on sign-in.',
     ),
 
     h2("5.4 Database"),
@@ -416,7 +566,11 @@ export function ch5() {
     para(
       "Supabase Auth manages accounts: email-and-password sign-up with confirmation links, password reset, and OAuth sign-in with Google. On success the client holds a session — a signed token (a tamper-proof credential) that every subsequent request presents. The database itself verifies the token's identity on every query; the application never decides who a user is, it only carries the credential. Figure 5.2 shows the flow; Chapter Eleven covers the security detail.",
     ),
-    ...figure("dia-auth.png", "Sign-in flow: credentials become a session, and the session becomes authorised access.", 620),
+    ...figure(
+      "dia-auth.png",
+      "Sign-in flow: credentials become a session, and the session becomes authorised access.",
+      620,
+    ),
 
     h2("5.7 Realtime"),
     para(
@@ -428,11 +582,31 @@ export function ch5() {
       "External services StudyFlow integrates with",
       ["Service", "Role", "Client-side integration"],
       [
-        ["Supabase (Auth, PostgreSQL, Storage, Realtime)", "Accounts, data, media, live events", "@supabase/supabase-js"],
-        ["Moolre", "Coin-pack purchases via mobile money (MTN, Telecel, AirtelTigo)", "Hosted checkout, public credentials only"],
-        ["Google Fonts", "Typography (DM Sans, Fraunces, Space Mono)", "Stylesheet link; system-font fallback offline"],
-        ["Google OAuth (via Supabase)", "One-tap sign-in", "signInWithOAuth redirect"],
-        ["TURN relay (optional, self-hosted credentials)", "WebRTC fallback when direct peer connection fails", "ICE server configuration from env vars"],
+        [
+          "Supabase (Auth, PostgreSQL, Storage, Realtime)",
+          "Accounts, data, media, live events",
+          "@supabase/supabase-js",
+        ],
+        [
+          "Moolre",
+          "Coin-pack purchases via mobile money (MTN, Telecel, AirtelTigo)",
+          "Hosted checkout, public credentials only",
+        ],
+        [
+          "Google Fonts",
+          "Typography (DM Sans, Fraunces, Space Mono)",
+          "Stylesheet link; system-font fallback offline",
+        ],
+        [
+          "Google OAuth (via Supabase)",
+          "One-tap sign-in",
+          "signInWithOAuth redirect",
+        ],
+        [
+          "TURN relay (optional, self-hosted credentials)",
+          "WebRTC fallback when direct peer connection fails",
+          "ICE server configuration from env vars",
+        ],
       ],
       [30, 40, 30],
     ),

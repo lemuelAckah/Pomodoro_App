@@ -541,13 +541,23 @@ function renderTimer() {
       "",
     )}</div><div class="template-row">${TIMER_TEMPLATES.map((p) => `<button type="button" class="template-chip" data-template="${p.id}" title="Focus ${p.focus}:${String(p.focusSec ?? 0).padStart(2, "0")} · break ${p.short}:${String(p.shortSec ?? 0).padStart(2, "0")}">${p.name}</button>`).join("")}</div><div class="dur-row"><label class="field-label">Minutes<input class="input dur-input" id="dur-min" type="number" min="0" max="180" step="1" value="${Math.floor(durations[state.mode] / 60)}" aria-label="Custom minutes"></label><label class="field-label">Seconds<input class="input dur-input" id="dur-sec" type="number" min="0" max="59" step="1" value="${durations[state.mode] % 60}" aria-label="Custom seconds"></label><button type="button" class="ghost" data-set-dur title="Apply to ${modeLabels[state.mode]}">Set duration</button></div>${challengeLockBanner()}<div class="focus-live off" data-focus-live><span class="live-dot"></span>Focus live — leaving this page resets the session</div>${techTagMarkup()}<div class="timer-ring" style="--progress:${(state.time / durations[state.mode]) * 360}deg"><div><div class="time">${fmt(state.time)}</div><div class="timer-label">${modeLabels[state.mode]}</div></div></div><div class="timer-actions"><button type="button" class="icon-btn" data-reset title="Reset">↻</button><button type="button" class="primary" data-toggle>${
     state.running ? "Pause" : "Start session"
-  }</button><button type="button" class="icon-btn" data-focusview title="Focus mode — just the timer">${sicon("expand")}</button></div><div class="muted" style="margin-top:36px">${state.sessions % 4}/4 sessions until a long break</div></div><div class="card tasks-card"><div class="section-row"><h2>Today’s tasks</h2><span class="tag" data-task-count>${state.tasks.filter((t) => t.done).length}/${state.tasks.length} complete</span><span class="sync-pill" data-sync-pill hidden></span></div><div class="input-row"><input class="input" id="task-input" placeholder="What are you working on?"><button type="button" class="primary" data-add-task>+</button></div><div class="task-progress" data-task-progress><div class="tp-text"><span><span class="tp-num" data-tp-done>${doneCount}</span> of <span class="tp-num" data-tp-total>${totalCount}</span> tasks complete</span><span class="tp-num" data-tp-pct>${donePct}%</span></div><div class="tp-bar"><div class="tp-fill${totalCount > 0 && doneCount === totalCount ? " full" : ""}" data-tp-fill style="width:${donePct}%"></div></div><div class="tp-caption" data-tp-caption>${taskProgressCaption(doneCount, totalCount)}</div><div data-task-history>${taskHistoryMarkup()}</div></div><div class="task-groups"><div class="task-group" data-group-open><div class="tg-head"><span class="tg-title">To do</span><span class="tg-count" data-tp-open-count>${totalCount - doneCount}</span></div><div class="tg-list" data-list-open>${
+  }</button><button type="button" class="icon-btn" data-focusview title="Focus mode — just the timer">${sicon("expand")}</button></div><div class="muted" style="margin-top:36px">${state.sessions % 4}/4 sessions until a long break</div></div><div class="card tasks-card"><div class="section-row"><h2>Today’s tasks</h2><span class="tag" data-task-count>${state.tasks.filter((t) => t.done).length}/${state.tasks.length} complete</span><span class="sync-pill" data-sync-pill hidden></span></div><div class="input-row"><input class="input" id="task-input" placeholder="What are you working on?"><button type="button" class="primary" data-add-task>+</button></div><div class="task-progress" data-task-progress><div class="tp-text"><span><span class="tp-num" data-tp-done>${doneCount}</span> of <span class="tp-num" data-tp-total>${totalCount}</span> tasks complete</span><span class="tp-num" data-tp-pct>${donePct}%</span></div><div class="tp-bar"><div class="tp-fill${
+    totalCount > 0 && doneCount === totalCount ? " full" : ""
+  }" data-tp-fill style="width:${donePct}%"></div></div><div class="tp-caption" data-tp-caption>${taskProgressCaption(doneCount, totalCount)}</div><div data-task-history>${taskHistoryMarkup()}</div></div><div class="task-groups"><div class="task-group" data-group-open><div class="tg-head"><span class="tg-title">To do</span><span class="tg-count" data-tp-open-count>${totalCount - doneCount}</span></div><div class="tg-list" data-list-open>${
     state.tasks.some((t) => !t.done)
-      ? state.tasks.filter((t) => !t.done).map(taskRow).join("")
+      ? state.tasks
+          .filter((t) => !t.done)
+          .map(taskRow)
+          .join("")
       : '<p class="task-empty">Nothing waiting — add your next small step.</p>'
-  }</div></div><div class="task-group${doneOpen ? "" : " collapsed"}" data-group-done><button type="button" class="tg-head tg-toggle" data-done-toggle aria-expanded="${doneOpen}" title="Show or hide completed tasks"><span class="tg-title">Completed</span><span class="tg-count" data-tp-done-count>${doneCount}</span>${sicon("chevron-down")}</button><div class="tg-list" data-list-done>${
+  }</div></div><div class="task-group${
+    doneOpen ? "" : " collapsed"
+  }" data-group-done><button type="button" class="tg-head tg-toggle" data-done-toggle aria-expanded="${doneOpen}" title="Show or hide completed tasks"><span class="tg-title">Completed</span><span class="tg-count" data-tp-done-count>${doneCount}</span>${sicon("chevron-down")}</button><div class="tg-list" data-list-done>${
     state.tasks.some((t) => t.done)
-      ? state.tasks.filter((t) => t.done).map(taskRow).join("")
+      ? state.tasks
+          .filter((t) => t.done)
+          .map(taskRow)
+          .join("")
       : '<p class="task-empty dim">Completed tasks will collect here.</p>'
   }</div></div></div></div></div><div class="grid four stats"><div class="card stat"><span>Sessions</span><strong data-count-up="${state.sessions}">${state.sessions}</strong><span>all time</span></div><div class="card stat"><span>Coins</span><strong data-coin="stat">${state.coins}</strong><span>available to spend</span></div><div class="card stat"><span>Tasks</span><strong data-count-up="${state.tasks.filter((t) => t.done).length}">${state.tasks.filter((t) => t.done).length}</strong><span>completed</span></div><div class="card stat"><span>Focus streak</span><strong data-count-up="${state.streak.count}">${state.streak.count}</strong>${streakDots()}<span>day streak</span></div></div>${missionDesk.markup()}${techOfDayMarkup()}${gardenMarkup()}${recordsMarkup()}${achievementsCabinetMarkup()}${masteryLadderMarkup()}`
 
@@ -1632,7 +1642,7 @@ async function shareWeekCard() {
 
     try {
       await Promise.all([
-        document.fonts.load('700 64px Fraunces'),
+        document.fonts.load("700 64px Fraunces"),
         document.fonts.load("700 46px 'Space Mono'"),
         document.fonts.ready,
       ])
@@ -1650,7 +1660,14 @@ async function shareWeekCard() {
 
     x.fillRect(0, 0, W, H)
 
-    const glow = x.createRadialGradient(W * 0.85, H * 0.1, 0, W * 0.85, H * 0.1, 440)
+    const glow = x.createRadialGradient(
+      W * 0.85,
+      H * 0.1,
+      0,
+      W * 0.85,
+      H * 0.1,
+      440,
+    )
 
     glow.addColorStop(0, "rgba(184, 215, 124, 0.20)")
 
@@ -1660,7 +1677,14 @@ async function shareWeekCard() {
 
     x.fillRect(0, 0, W, H)
 
-    const warm = x.createRadialGradient(W * 0.08, H * 0.92, 0, W * 0.08, H * 0.92, 400)
+    const warm = x.createRadialGradient(
+      W * 0.08,
+      H * 0.92,
+      0,
+      W * 0.08,
+      H * 0.92,
+      400,
+    )
 
     warm.addColorStop(0, "rgba(233, 174, 63, 0.14)")
 
@@ -1758,7 +1782,9 @@ async function shareWeekCard() {
 
     x.fillText(
       flowers
-        ? `${flowers} flower${flowers === 1 ? "" : "s"} grown in the focus garden · made with StudyFlow`
+        ? `${flowers} flower${
+            flowers === 1 ? "" : "s"
+          } grown in the focus garden · made with StudyFlow`
         : "made with StudyFlow · focus with intention",
       W / 2,
       H - 66,
@@ -1782,7 +1808,11 @@ async function shareWeekCard() {
 
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       try {
-        await navigator.share({ files: [file], text, title: "My StudyFlow week" })
+        await navigator.share({
+          files: [file],
+          text,
+          title: "My StudyFlow week",
+        })
 
         return
       } catch (e) {
@@ -1805,7 +1835,10 @@ async function shareWeekCard() {
     try {
       await navigator.clipboard.writeText(text)
 
-      notify("Week image downloaded and caption copied — paste it anywhere " + sicon("check"))
+      notify(
+        "Week image downloaded and caption copied — paste it anywhere " +
+          sicon("check"),
+      )
     } catch {
       notify("Week image downloaded " + sicon("check"))
     }
@@ -2600,7 +2633,9 @@ function taskHistoryMarkup() {
 
       const isToday = i === days.length - 1
 
-      return `<div class="th-day${isToday ? " today" : ""}${n ? " has" : ""}" title="${
+      return `<div class="th-day${isToday ? " today" : ""}${
+        n ? " has" : ""
+      }" title="${
         n ? `${n} completed` : "No completions"
       } ${day.date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}"><span class="th-n">${n || ""}</span><span class="th-bar"><span class="th-fill" style="height:${Math.round(
         (n / max) * 100,

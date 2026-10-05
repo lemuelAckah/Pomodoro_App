@@ -63,17 +63,18 @@ import { techniques, openTechniqueGuide } from "./tech-catalog.js"
 
 import { renderSounds } from "./audio.js"
 
-import { storeItems, normItem, migrateOwned, equippedAvatarEmoji } from "./store-catalog.js"
+import {
+  storeItems,
+  normItem,
+  migrateOwned,
+  equippedAvatarEmoji,
+} from "./store-catalog.js"
 
 import { syncBooksLibrary } from "./services/books-sync.js"
 
 import { renderFavorites } from "./tech-catalog.js"
 
-import {
-  renderLanding,
-  renderAccount,
-  renderSettings,
-} from "./account.js"
+import { renderLanding, renderAccount, renderSettings } from "./account.js"
 
 let searchHits = []
 
@@ -510,9 +511,7 @@ function render() {
 
   const paintOverlays = () => {
     if (state.call) {
-      import("./community.js")
-        .then((m) => m.renderCall())
-        .catch(() => {})
+      import("./community.js").then((m) => m.renderCall()).catch(() => {})
     }
 
     renderNowPlaying()
@@ -566,7 +565,6 @@ function render() {
   if (skelPanel) {
     skelPanel.innerHTML = `<div class="route-skeleton" aria-hidden="true"><div class="sk-line sk-title"></div><div class="sk-line sk-sub"></div><div class="sk-grid">${`<div class="sk-line sk-card"></div>`.repeat(6)}</div></div>`
   }
-
   ;(lazyViews[state.tab] || (() => Promise.resolve(renderTimer)))()
     .then((draw) => {
       // The user may have switched tabs while the chunk was in flight.
@@ -800,9 +798,7 @@ if (!state.deviceId) {
 refreshServerTime()
 
 // Stories pruning lives in the lazy community chunk.
-import("./community.js")
-  .then((m) => m.pruneExpiredStories())
-  .catch(() => {})
+import("./community.js").then((m) => m.pruneExpiredStories()).catch(() => {})
 
 if (!state.entered) {
   renderLanding()
@@ -820,9 +816,7 @@ if (!state.entered) {
   if (!state.toured)
     setTimeout(() => {
       if (state.entered && !state.toured)
-        import("./account.js")
-          .then((m) => m.startTour())
-          .catch(() => {})
+        import("./account.js").then((m) => m.startTour()).catch(() => {})
     }, 1400)
 }
 

@@ -43,7 +43,7 @@ import {
   resolveFavorite,
 } from "./tech-catalog.js"
 import { shell } from "./app.js"
-import { startTour } from "./account.js"
+import { startTour, renderLanding } from "./account.js"
 import { secureEarn, REWARD_EVENTS } from "./services/rewards-sync.js"
 function scoreTechCheck(answers) {
   const totals = {}
@@ -218,12 +218,27 @@ function renderTechCheck() {
   if (!root || !tcSession) return
   const n = TECH_CHECK_QUESTIONS.length
   if (tcSession.step < 0) {
-    root.innerHTML = `${DUSK_BG}<div class="tc-wrap"><div class="tc-brand"><div class="brand-mark">◷</div><strong>StudyFlow</strong></div><div class="card tc-card tc-anim"><div class="eyebrow">First-time setup · Study Technique Check</div><h1>Let's discover how you learn best.</h1><p class="lede">There is no right or wrong answer. Your responses will help us find the study techniques that may work best for you.</p><p class="muted">${n} quick questions · about a minute · you can go back anytime</p><div class="tc-actions"><button type="button" class="primary" data-tc-begin>Begin my check</button><button type="button" class="ghost" data-tc-skip>Skip for now</button></div></div></div>`
+    root.innerHTML = `${DUSK_BG}<div class="tc-wrap"><div class="tc-brand"><div class="brand-mark">◷</div><strong>StudyFlow</strong></div><div class="card tc-card tc-anim"><div class="eyebrow">First-time setup · Study Technique Check</div><h1>Let's discover how you learn best.</h1><p class="lede">There is no right or wrong answer. Your responses will help us find the study techniques that may work best for you.</p><p class="muted">${n} quick questions · about a minute · you can go back anytime</p><div class="tc-actions"><button type="button" class="primary" data-tc-begin>Begin my check</button><button type="button" class="ghost" data-tc-skip>Skip for now</button><button type="button" class="ghost" data-tc-landing>← Back</button></div></div></div>`
     $("[data-tc-begin]", root).onclick = () => {
       tcSession.step = 0
       renderTechCheck()
     }
     $("[data-tc-skip]", root).onclick = skipTechCheck
+    // Back from the welcome page always leaves the check: onboarding goes
+    // to the landing page (and un-enters so a refresh stays there); the
+    // settings entry returns to Settings.
+    $("[data-tc-landing]", root).onclick = () => {
+      tcSession = null
+      if (techCheckReturn === "settings") {
+        state.tab = "settings"
+        persist()
+        shell()
+        return
+      }
+      state.entered = false
+      persist()
+      renderLanding()
+    }
     return
   }
   if (tcSession.step < n) {

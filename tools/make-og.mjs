@@ -131,7 +131,12 @@ console.log("done")
 
 /* ---- Share-card markup ------------------------------------------------ */
 function OG_HTML() {
-  const chips = ["10 study techniques", "Live sprint rooms", "MoMo top-ups", "Works offline"]
+  const chips = [
+    "10 study techniques",
+    "Live sprint rooms",
+    "MoMo top-ups",
+    "Works offline",
+  ]
   return `<!doctype html><html><head><meta charset="utf-8">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">

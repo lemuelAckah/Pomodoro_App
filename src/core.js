@@ -375,7 +375,9 @@ const state = {
   tasks: get("sf-tasks", []),
 
   // Daily task-completion tallies: [{ d: "YYYY-MM-DD", n: count }, …]
+
   // (last 14 days). Powers the 7-day history strip on the Focus Desk.
+
   taskLog: get("sf-tasklog", []),
 
   techCheck: get("sf-techcheck", null),
@@ -446,7 +448,9 @@ const state = {
 
   boosts: get("sf-boosts", {
     shields: 0,
+
     multiplierUntil: 0,
+
     doubleArmed: false,
   }),
 
@@ -506,13 +510,17 @@ const state = {
 
   notifPrefs: get("sf-notifs", {
     completion: true,
+
     streaks: true,
+
     community: true,
   }),
 
   reminder: get("sf-reminder", {
     enabled: false,
+
     time: "18:00",
+
     lastFired: "",
   }),
 
@@ -566,8 +574,11 @@ const state = {
 
   bookStats: get("sf-book-stats", {
     opened: {},
+
     completed: [],
+
     seconds: 0,
+
     pages: 0,
   }),
 
@@ -743,6 +754,7 @@ function persistNow() {
 
   save(
     "sf-book-stats",
+
     state.bookStats || { opened: {}, completed: [], seconds: 0, pages: 0 },
   )
 
@@ -768,11 +780,13 @@ function persistNow() {
 
   save(
     "sf-equipped",
+
     state.equipped || { theme: null, avatar: null, badges: [] },
   )
 
   save(
     "sf-boosts",
+
     state.boosts || { shields: 0, multiplierUntil: 0, doubleArmed: false },
   )
 
@@ -782,6 +796,7 @@ function persistNow() {
 
   save(
     "sf-freebox",
+
     state.freeBox || { lastClaimDay: "", history: [], pending: null },
   )
 
@@ -831,11 +846,13 @@ function persistNow() {
 
   save(
     "sf-notifs",
+
     state.notifPrefs || { completion: true, streaks: true, community: true },
   )
 
   save(
     "sf-reminder",
+
     state.reminder || { enabled: false, time: "18:00", lastFired: "" },
   )
 
@@ -898,8 +915,11 @@ function refreshCoinDisplays() {
 
     document.querySelectorAll("[data-coin]").forEach((el) => {
       // Bounce the pill when the balance actually changes (not on re-render
+
       // with the same value) — a small, satisfying earn/spend cue.
-      const changed = el.dataset.coinVal !== undefined && el.dataset.coinVal !== v
+
+      const changed =
+        el.dataset.coinVal !== undefined && el.dataset.coinVal !== v
 
       el.dataset.coinVal = v
 
@@ -919,14 +939,18 @@ function refreshCoinDisplays() {
 }
 
 // Animate number counters from zero to their value once, when their card
+
 // scrolls into view (Focus desk records/stats). Falls back to static numbers
+
 // under reduced motion or when IntersectionObserver is unavailable.
+
 function animateCountUps(root) {
   const els = $$("[data-count-up]", root || document)
 
   if (!els.length) return
 
-  const reduce = state.reduceMotion || typeof IntersectionObserver === "undefined"
+  const reduce =
+    state.reduceMotion || typeof IntersectionObserver === "undefined"
 
   const run = (el) => {
     const target = Number(el.dataset.countUp) || 0
@@ -972,6 +996,7 @@ function animateCountUps(root) {
         run(en.target)
       })
     },
+
     { threshold: 0.4 },
   )
 
@@ -983,7 +1008,9 @@ function animateCountUps(root) {
 }
 
 // Cards cascade in on view render: a short rise + fade with a small stagger.
+
 // Purely decorative — skipped under reduced motion.
+
 function staggerCardsIn(root) {
   if (state.reduceMotion) return
 
@@ -1320,7 +1347,9 @@ function applyRemoteStreak(remoteStreak) {
       ...(Array.isArray(remote?.days) ? remote.days : []),
     ]),
   ]
+
     .sort()
+
     .slice(-60)
 
   state.streak = {
@@ -1395,6 +1424,7 @@ function scheduleCloudSync() {
         setSyncStatus("online")
       }
     },
+
     500,
   )
 }
@@ -1450,6 +1480,7 @@ function collectMusicPrefs() {
 
   return {
     mix,
+
     volume: Number.isFinite(volume) ? Math.min(1, Math.max(0, volume)) : 0.8,
   }
 }
@@ -1659,11 +1690,13 @@ async function pullCloudProfile() {
 
     profileVisibility: vis(
       data.profile_visibility,
+
       state.privacy.profileVisibility,
     ),
 
     activityVisibility: vis(
       data.activity_visibility,
+
       state.privacy.activityVisibility,
     ),
 
@@ -1870,6 +1903,7 @@ async function hydrateCloudState(user) {
 
     save(
       "sf-equipped",
+
       state.equipped || { theme: null, avatar: null, badges: [] },
     )
 
@@ -2013,6 +2047,7 @@ async function hydrateCloudState(user) {
 
     save(
       "sf-equipped",
+
       state.equipped || { theme: null, avatar: null, badges: [] },
     )
 
@@ -2028,54 +2063,93 @@ export function setCloudSubscription(sub) {
 
 const STATE_ARRAYS = [
   "tasks",
+
   "favorites",
+
   "owned",
+
   "friends",
+
   "customGroups",
+
   "songs",
+
   "posts",
+
   "books",
+
   "bookFavorites",
+
   "bookRecent",
+
   "stories",
+
   "challenges",
+
   "events",
+
   "sprints",
+
   "sprintInvites",
+
   "eventInvites",
+
   "challengeInvites",
+
   "garden",
+
   "focusLog",
+
   "notifications",
+
   "purchases",
+
   "boxes",
+
   "achievements",
+
   "decks",
+
   "mindmaps",
+
   "feynmanNotes",
+
   "duckChat",
+
   "cornellNotes",
+
   "reports",
 ]
 
 const STATE_OBJECT_DEFAULTS = {
   messages: {},
+
   pins: {},
+
   statusSeen: {},
+
   focusDays: {},
+
   techUses: {},
+
   deletedChats: {},
 
   deletedMsgs: {},
 
   techStats: {},
+
   techTime: {},
+
   storeQty: {},
+
   soundMix: {},
+
   blocks: {},
+
   mutedChats: {},
 
   bookProgress: {},
+
   bookLocal: {},
 
   bookStats: { opened: {}, completed: [], seconds: 0, pages: 0 },
@@ -2104,22 +2178,33 @@ const STATE_OBJECT_DEFAULTS = {
 
   privacy: {
     profileVisibility: "friends",
+
     activityVisibility: "friends",
+
     searchable: true,
   },
 
   profile: {
     name: "Study Learner",
+
     handle: "study_learner",
+
     bio: "",
+
     avatar: "SL",
 
     photo: "",
+
     photoPath: "",
+
     country: "",
+
     phone: "",
+
     university: "",
+
     email: "",
+
     subjects: [],
   },
 
@@ -2128,47 +2213,85 @@ const STATE_OBJECT_DEFAULTS = {
 
 const HANDLE_ADJ = [
   "focus",
+
   "deep",
+
   "bright",
+
   "swift",
+
   "calm",
+
   "bold",
+
   "wise",
+
   "kind",
+
   "brave",
+
   "quiet",
+
   "clever",
+
   "happy",
+
   "lucky",
+
   "nimble",
+
   "cosmic",
+
   "solar",
+
   "misty",
+
   "rapid",
+
   "gentle",
+
   "prime",
 ]
 
 const HANDLE_NOUN = [
   "fox",
+
   "owl",
+
   "wolf",
+
   "bear",
+
   "finch",
+
   "otter",
+
   "lynx",
+
   "raven",
+
   "badger",
+
   "heron",
+
   "turtle",
+
   "falcon",
+
   "koala",
+
   "panda",
+
   "tiger",
+
   "eagle",
+
   "otter",
+
   "crane",
+
   "ember",
+
   "lotus",
 ]
 
@@ -2417,6 +2540,7 @@ function toast(text) {
 
     toastTimers.set(
       msg,
+
       setTimeout(() => {
         toastTimers.delete(msg)
 
@@ -2590,6 +2714,7 @@ function formatHeaderDate(date, short) {
   try {
     return d.toLocaleDateString(
       undefined,
+
       short
         ? { weekday: "short", month: "short", day: "numeric" }
         : { weekday: "long", month: "long", day: "numeric", year: "numeric" },
@@ -2694,135 +2819,221 @@ function iconStar(id) {
 const THEME_SKINS = {
   "focus-flame": {
     paper: "#faf3ec",
+
     panel: "#ffffff",
+
     ink: "#2a1c11",
+
     muted: "#8d7a66",
+
     line: "#e9d9c6",
+
     sage: "#cf5427",
+
     coral: "#e8795b",
+
     gold: "#e9ae3f",
   },
 
   "ocean-mist": {
     paper: "#edf4f6",
+
     panel: "#ffffff",
+
     ink: "#13262e",
+
     muted: "#5f7d89",
+
     line: "#d2e1e7",
+
     sage: "#1e7f8c",
+
     coral: "#e8795b",
+
     gold: "#e9ae3f",
   },
 
   "forest-glow": {
     paper: "#ecf3ea",
+
     panel: "#ffffff",
+
     ink: "#15241b",
+
     muted: "#5f7a68",
+
     line: "#d4e1d5",
+
     sage: "#2f7d4f",
+
     coral: "#e8795b",
+
     gold: "#e9ae3f",
   },
 
   midnight: {
     paper: "#0f141c",
+
     panel: "#1a2230",
+
     ink: "#e9edf5",
+
     muted: "#8f99ad",
+
     line: "#2b3549",
+
     sage: "#7c8aff",
+
     coral: "#ff7a6b",
+
     gold: "#e9ae3f",
+
     dark: true,
   },
 
   sunrise: {
     paper: "#fff6ea",
+
     panel: "#ffffff",
+
     ink: "#2c1e10",
+
     muted: "#8d7a5f",
+
     line: "#ecdcc2",
+
     sage: "#dd7f2e",
+
     coral: "#e86a4a",
+
     gold: "#f0b429",
   },
 
   lavender: {
     paper: "#f2eefb",
+
     panel: "#ffffff",
+
     ink: "#241d38",
+
     muted: "#776e94",
+
     line: "#ddd3f0",
+
     sage: "#8a6fd1",
+
     coral: "#e8795b",
+
     gold: "#e9ae3f",
   },
 
   cafe: {
     paper: "#f4eee3",
+
     panel: "#fffaf2",
+
     ink: "#2b2118",
+
     muted: "#87755f",
+
     line: "#e2d5c1",
+
     sage: "#8a5f3c",
+
     coral: "#c96f4a",
+
     gold: "#d9a441",
   },
 
   paper: {
     paper: "#f6f3ea",
+
     panel: "#fffdf6",
+
     ink: "#2a2620",
+
     muted: "#7c766a",
+
     line: "#e0d9c8",
+
     sage: "#6b7f59",
+
     coral: "#c96f4a",
+
     gold: "#d9a441",
   },
 
   neon: {
     paper: "#0b0f0e",
+
     panel: "#131a17",
+
     ink: "#e6f5ec",
+
     muted: "#7fa08d",
+
     line: "#24352c",
+
     sage: "#2fe08a",
+
     coral: "#ff6b9d",
+
     gold: "#ffd23f",
+
     dark: true,
   },
 
   solar: {
     paper: "#fffaeb",
+
     panel: "#ffffff",
+
     ink: "#2e230d",
+
     muted: "#8a7748",
+
     line: "#ecdfb8",
+
     sage: "#c98f1b",
+
     coral: "#e8795b",
+
     gold: "#f0b429",
   },
 
   aurora: {
     paper: "#eef4f2",
+
     panel: "#ffffff",
+
     ink: "#152b28",
+
     muted: "#5f7f79",
+
     line: "#cfe3de",
+
     sage: "#1f9d8a",
+
     coral: "#e8795b",
+
     gold: "#e9ae3f",
   },
 
   celestial: {
     paper: "#fff9ec",
+
     panel: "#fffdf6",
+
     ink: "#33270d",
+
     muted: "#8f7a45",
+
     line: "#eadfc0",
+
     sage: "#b8860b",
+
     coral: "#e8795b",
+
     gold: "#ffd700",
   },
 }
@@ -3104,14 +3315,18 @@ function toggleNight() {
 
 const SVG_THEME_STROKES = {
   "#17221d": "#f2f0e4",
+
   "#f2f0e4": "#17221d",
+
   "#c3d4c8": "#3f4f46",
 }
 
 function recolorInlineSvgTheme() {
   try {
     document
+
       .querySelectorAll(".mind-svg rect[stroke], .mind-svg line[stroke]")
+
       .forEach((el) => {
         const cur = (el.getAttribute("stroke") || "").toLowerCase()
 
@@ -3463,14 +3678,21 @@ const SIGNOUT_ARCHIVE_KEY = "sf-archived-session"
 
 const SIGNOUT_KEEP = new Set([
   "sf-device",
+
   "sf-night",
+
   "sf-motion",
+
   "sf-display",
+
   "sf-tab",
+
   "sf-toured",
 
   "sf-sound-volume",
+
   "sf-chime-vol",
+
   "sf-chime",
 ])
 

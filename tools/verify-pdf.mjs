@@ -9,7 +9,13 @@ import { spawn } from "node:child_process"
 import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
-import { convertDocx, contentsHtml, COVER_HTML, shell, markLeads } from "./pdf-parts.mjs"
+import {
+  convertDocx,
+  contentsHtml,
+  COVER_HTML,
+  shell,
+  markLeads,
+} from "./pdf-parts.mjs"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 const PDF_PATH = join(root, "StudyFlow_Documentation.pdf")
@@ -34,7 +40,11 @@ const check = (name, ok, extra = "") => {
 const buf = await readFileP(PDF_PATH)
 check("PDF magic header", buf.subarray(0, 5).toString() === "%PDF-")
 const size = statSync(PDF_PATH).size
-check("size in plausible range", size > 1e6 && size < 20e6, `${(size / 1e6).toFixed(2)} MB`)
+check(
+  "size in plausible range",
+  size > 1e6 && size < 20e6,
+  `${(size / 1e6).toFixed(2)} MB`,
+)
 
 const doc = await PDFDocument.load(buf)
 const pages = doc.getPageCount()
@@ -69,7 +79,9 @@ let browser = null
 for (let i = 0; i < 30; i++) {
   await sleep(500)
   try {
-    browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${PORT}` })
+    browser = await puppeteer.connect({
+      browserURL: `http://127.0.0.1:${PORT}`,
+    })
     break
   } catch {}
 }
@@ -101,7 +113,9 @@ try {
       h2: document.querySelectorAll("h2").length,
       codeSpans: document.querySelectorAll("code.doccode").length,
       images: document.images.length,
-      imagesOk: [...document.images].every((i) => i.complete && i.naturalWidth > 0),
+      imagesOk: [...document.images].every(
+        (i) => i.complete && i.naturalWidth > 0,
+      ),
       tables: tables.length,
       tableCells: cellStats.reduce((a, s) => a + s.cells, 0),
       tableEmptyCells: cellStats.reduce((a, s) => a + s.empty, 0),
@@ -128,7 +142,11 @@ try {
   check("h1 count (31 body + Contents)", facts.h1 === 32, `${facts.h1}`)
   check("h2 count", facts.h2 === 169, `${facts.h2}`)
   check("code spans styled", facts.codeSpans === 132, `${facts.codeSpans}`)
-  check("all figures embedded", facts.images === 28 && facts.imagesOk, `${facts.images} images`)
+  check(
+    "all figures embedded",
+    facts.images === 28 && facts.imagesOk,
+    `${facts.images} images`,
+  )
   check("table count (docx registry)", facts.tables === 18, `${facts.tables}`)
   check(
     "no empty table cells (the blank-table bug)",
@@ -141,10 +159,18 @@ try {
       facts.firstTableHead.includes("Primary need"),
     facts.firstTableHead.slice(0, 3).join(" | "),
   )
-  check("28 figure captions", facts.figureLabels === 28, `${facts.figureLabels}`)
+  check(
+    "28 figure captions",
+    facts.figureLabels === 28,
+    `${facts.figureLabels}`,
+  )
   check("18 table captions", facts.tableLabels === 18, `${facts.tableLabels}`)
   check("drop-cap leads on every section", facts.leads === 31, `${facts.leads}`)
-  check("body font is Times New Roman", facts.bodyFontIsTimes, "body computed font")
+  check(
+    "body font is Times New Roman",
+    facts.bodyFontIsTimes,
+    "body computed font",
+  )
   check("code line preserved", facts.hasCodeLine)
   check("second code line preserved", facts.hasRenderSkeleton)
   check("bold runs converted (not literal)", facts.hasBoldText)

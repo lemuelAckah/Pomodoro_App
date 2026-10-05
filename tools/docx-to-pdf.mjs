@@ -24,11 +24,20 @@ import { tmpdir } from "node:os"
 import { join, dirname, basename } from "node:path"
 import { fileURLToPath } from "node:url"
 import { execFileSync } from "node:child_process"
-import { convertDocx, contentsHtml, COVER_HTML, shell, markLeads, TOC_SENTINEL } from "./pdf-parts.mjs"
+import {
+  convertDocx,
+  contentsHtml,
+  COVER_HTML,
+  shell,
+  markLeads,
+  TOC_SENTINEL,
+} from "./pdf-parts.mjs"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 // Optional argv[2]: path to a source docx (default: the book at the root).
-const DOCX = process.argv[2] ? join(root, process.argv[2]) : join(root, "StudyFlow_Documentation.docx")
+const DOCX = process.argv[2]
+  ? join(root, process.argv[2])
+  : join(root, "StudyFlow_Documentation.docx")
 const OUT_PDF = join(root, "StudyFlow_Documentation.pdf")
 const CHROME = join(
   root,
@@ -44,7 +53,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 // ------------------------------------------------------ mammoth conversion --
 console.log("[1/6] converting docx -> HTML (mammoth)…")
-const { bodyClean, contents, messages } = await convertDocx(await readFile(DOCX))
+const { bodyClean, contents, messages } = await convertDocx(
+  await readFile(DOCX),
+)
 for (const m of messages) {
   if (m.type === "warning") console.log(`  mammoth: ${m.message}`)
 }
@@ -109,10 +120,10 @@ const TOC_PAGES = 7
 
 async function printBody(tocHtml, outPath) {
   const page = await browser.newPage()
-  await page.setContent(
-    shell(tocHtml + body),
-    { waitUntil: "load", timeout: 120000 },
-  )
+  await page.setContent(shell(tocHtml + body), {
+    waitUntil: "load",
+    timeout: 120000,
+  })
   await sleep(1500) // let data-URI images decode
   await page.pdf({
     path: outPath,
@@ -139,13 +150,21 @@ await printBody(contentsHtml(contents, null), bodyPdfPath)
 console.log("[3/6] mapping headings -> printed page numbers (pypdf)…")
 execFileSync(
   "python",
-  [join(root, "tools", "toc-pages.py"), bodyPdfPath, titlesPath, pagesPath, TOC_SENTINEL],
+  [
+    join(root, "tools", "toc-pages.py"),
+    bodyPdfPath,
+    titlesPath,
+    pagesPath,
+    TOC_SENTINEL,
+  ],
   { stdio: "inherit" },
 )
 const mapped = JSON.parse(await readFile(pagesPath, "utf8"))
 const missing = mapped.filter((p) => p === null).length
 if (missing) {
-  console.error(`${missing} heading(s) could not be located — aborting so numbers stay honest`)
+  console.error(
+    `${missing} heading(s) could not be located — aborting so numbers stay honest`,
+  )
   await browser.disconnect().catch(() => {})
   proc.kill()
   process.exit(1)
@@ -165,7 +184,10 @@ await printBody(tocHtml, bodyPdfPath2)
 try {
   const cpage = await browser.newPage()
   console.log("[5/6] printing cover sheet…")
-  await cpage.setContent(shell(COVER_HTML), { waitUntil: "load", timeout: 60000 })
+  await cpage.setContent(shell(COVER_HTML), {
+    waitUntil: "load",
+    timeout: 60000,
+  })
   await sleep(400)
   const coverPdf = await cpage.pdf({
     format: "A4",

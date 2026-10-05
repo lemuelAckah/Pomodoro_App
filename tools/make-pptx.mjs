@@ -84,7 +84,11 @@ function picture(slide, m, box, opts = {}) {
     y: box.y,
     w: box.w,
     h: box.h,
-    sizing: { type: m.role === "shot" ? "cover" : "contain", w: box.w, h: box.h },
+    sizing: {
+      type: m.role === "shot" ? "cover" : "contain",
+      w: box.w,
+      h: box.h,
+    },
   })
   const cap = opts.cap !== undefined ? opts.cap : m.cap
   if (cap) caption(slide, cap, box)
@@ -92,17 +96,31 @@ function picture(slide, m, box, opts = {}) {
 
 function header(slide, s, dark = false) {
   slide.addText(s.kicker.toUpperCase(), {
-    x: PAD_X, y: 0.38, w: W - 2 * PAD_X, h: 0.3,
-    fontSize: 12, charSpacing: 2, bold: true,
-    color: dark ? "9DBFAA" : ACCENT, fontFace: FONT,
+    x: PAD_X,
+    y: 0.38,
+    w: W - 2 * PAD_X,
+    h: 0.3,
+    fontSize: 12,
+    charSpacing: 2,
+    bold: true,
+    color: dark ? "9DBFAA" : ACCENT,
+    fontFace: FONT,
   })
   slide.addText(s.title, {
-    x: PAD_X, y: 0.68, w: W - 2 * PAD_X, h: 0.6,
-    fontSize: 28, bold: true,
-    color: dark ? "FFFFFF" : ACCENT_DARK, fontFace: FONT,
+    x: PAD_X,
+    y: 0.68,
+    w: W - 2 * PAD_X,
+    h: 0.6,
+    fontSize: 28,
+    bold: true,
+    color: dark ? "FFFFFF" : ACCENT_DARK,
+    fontFace: FONT,
   })
   slide.addShape(pptx.ShapeType.rect, {
-    x: PAD_X, y: 1.34, w: 0.64, h: 0.05,
+    x: PAD_X,
+    y: 1.34,
+    w: 0.64,
+    h: 0.05,
     fill: { color: dark ? "9DBFAA" : ACCENT },
     line: { type: "none" },
   })
@@ -111,16 +129,30 @@ function header(slide, s, dark = false) {
 function footer(slide, foot, dark = false) {
   const col = dark ? "AFC7BA" : MUTED
   slide.addShape(pptx.ShapeType.line, {
-    x: PAD_X, y: FOOT_Y, w: W - 2 * PAD_X, h: 0,
+    x: PAD_X,
+    y: FOOT_Y,
+    w: W - 2 * PAD_X,
+    h: 0,
     line: { color: dark ? ACCENT : RULE, width: 1 },
   })
   slide.addText(DECK.footer, {
-    x: PAD_X, y: FOOT_Y + 0.05, w: 9, h: 0.3,
-    fontSize: 10, color: col, fontFace: FONT,
+    x: PAD_X,
+    y: FOOT_Y + 0.05,
+    w: 9,
+    h: 0.3,
+    fontSize: 10,
+    color: col,
+    fontFace: FONT,
   })
   slide.addText(foot, {
-    x: W - PAD_X - 2, y: FOOT_Y + 0.05, w: 2, h: 0.3,
-    fontSize: 10, color: col, fontFace: FONT, align: "right",
+    x: W - PAD_X - 2,
+    y: FOOT_Y + 0.05,
+    w: 2,
+    h: 0.3,
+    fontSize: 10,
+    color: col,
+    fontFace: FONT,
+    align: "right",
   })
 }
 
@@ -128,24 +160,55 @@ function footer(slide, foot, dark = false) {
 function coverSlide(s) {
   const slide = pptx.addSlide()
   slide.addShape(pptx.ShapeType.rect, {
-    x: W / 2 - 0.45, y: 1.15, w: 0.9, h: 0.07,
-    fill: { color: ACCENT }, line: { type: "none" },
+    x: W / 2 - 0.45,
+    y: 1.15,
+    w: 0.9,
+    h: 0.07,
+    fill: { color: ACCENT },
+    line: { type: "none" },
   })
   slide.addText("STUDYFLOW", {
-    x: 0, y: 1.5, w: W, h: 1.3, align: "center",
-    fontSize: 64, charSpacing: 8, bold: true, color: ACCENT_DARK, fontFace: FONT,
+    x: 0,
+    y: 1.5,
+    w: W,
+    h: 1.3,
+    align: "center",
+    fontSize: 64,
+    charSpacing: 8,
+    bold: true,
+    color: ACCENT_DARK,
+    fontFace: FONT,
   })
   slide.addText(DECK.subtitle, {
-    x: 0, y: 2.85, w: W, h: 0.5, align: "center",
-    fontSize: 22, color: ACCENT, fontFace: FONT,
+    x: 0,
+    y: 2.85,
+    w: W,
+    h: 0.5,
+    align: "center",
+    fontSize: 22,
+    color: ACCENT,
+    fontFace: FONT,
   })
   slide.addText(DECK.tag, {
-    x: 0, y: 4.15, w: W, h: 0.4, align: "center",
-    fontSize: 17, bold: true, color: INK, fontFace: FONT,
+    x: 0,
+    y: 4.15,
+    w: W,
+    h: 0.4,
+    align: "center",
+    fontSize: 17,
+    bold: true,
+    color: INK,
+    fontFace: FONT,
   })
   slide.addText(`${DECK.author} · ${DECK.meta1}\n${DECK.meta2}`, {
-    x: 0, y: 4.6, w: W, h: 0.75, align: "center",
-    fontSize: 13, color: MUTED, fontFace: FONT,
+    x: 0,
+    y: 4.6,
+    w: W,
+    h: 0.75,
+    align: "center",
+    fontSize: 13,
+    color: MUTED,
+    fontFace: FONT,
   })
   footer(slide, s.foot)
   slide.addNotes(s.notes)
@@ -222,7 +285,9 @@ function textRightMediaLeft(s) {
 function bigDiagram(s) {
   const slide = pptx.addSlide()
   header(slide, s)
-  picture(slide, s.media[0], { x: 1.2, y: 1.6, w: 10.93, h: 3.3 }, { cap: null })
+  picture(slide, s.media[0], { x: 1.2, y: 1.6, w: 10.93, h: 3.3 }, {
+    cap: null,
+  })
   bulletsBox(slide, s.bullets, { x: 1.2, y: 5.05, w: 10.93, h: 1.6 })
   footer(slide, s.foot)
   slide.addNotes(s.notes)
@@ -241,14 +306,24 @@ function stackedDiagrams(s) {
 function closingSlide(s) {
   const slide = pptx.addSlide()
   slide.addShape(pptx.ShapeType.rect, {
-    x: 0, y: 0, w: W, h: H,
-    fill: { color: ACCENT_DARK }, line: { type: "none" },
+    x: 0,
+    y: 0,
+    w: W,
+    h: H,
+    fill: { color: ACCENT_DARK },
+    line: { type: "none" },
   })
   header(slide, s, true)
   bulletsBox(slide, s.bullets, { x: PAD_X, y: 2.1, w: W - 2 * PAD_X, h: 2.9 })
   slide.addText(s.afterword, {
-    x: PAD_X, y: 5.25, w: W - 2 * PAD_X, h: 0.5,
-    fontSize: 15, italic: true, color: "BFD8C9", fontFace: FONT,
+    x: PAD_X,
+    y: 5.25,
+    w: W - 2 * PAD_X,
+    h: 0.5,
+    fontSize: 15,
+    italic: true,
+    color: "BFD8C9",
+    fontFace: FONT,
   })
   footer(slide, s.foot, true)
   slide.addNotes(s.notes)

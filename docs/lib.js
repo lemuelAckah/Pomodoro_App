@@ -101,7 +101,8 @@ function runs(text) {
     if (m.index > last) out.push({ text: text.slice(last, m.index) })
     const tok = m[0]
     if (tok.startsWith("**")) out.push({ text: tok.slice(2, -2), bold: true })
-    else if (tok.startsWith("`")) out.push({ text: tok.slice(1, -1), code: true })
+    else if (tok.startsWith("`"))
+      out.push({ text: tok.slice(1, -1), code: true })
     else out.push({ text: tok.slice(1, -1), italics: true })
     last = m.index + tok.length
   }
@@ -210,7 +211,10 @@ export function table(caption, headers, rows, widths) {
         ? { type: ShadingType.CLEAR, fill: ACCENT, color: "auto" }
         : undefined,
       width: widths
-        ? { size: Math.round((widths[i] / total) * 100), type: WidthType.PERCENTAGE }
+        ? {
+            size: Math.round((widths[i] / total) * 100),
+            type: WidthType.PERCENTAGE,
+          }
         : undefined,
       margins: { top: 70, bottom: 70, left: 110, right: 110 },
       children: [
@@ -219,9 +223,7 @@ export function table(caption, headers, rows, widths) {
           children: runs(String(text)).map((tok) =>
             runFrom(
               tok,
-              isHead
-                ? { bold: true, color: "FFFFFF", size: 19 }
-                : { size: 19 },
+              isHead ? { bold: true, color: "FFFFFF", size: 19 } : { size: 19 },
             ),
           ),
         }),
@@ -243,12 +245,21 @@ export function table(caption, headers, rows, widths) {
         bottom: { style: BorderStyle.SINGLE, size: 4, color: "C9D6CC" },
         left: { style: BorderStyle.SINGLE, size: 4, color: "C9D6CC" },
         right: { style: BorderStyle.SINGLE, size: 4, color: "C9D6CC" },
-        insideHorizontal: { style: BorderStyle.SINGLE, size: 4, color: "DDE6DE" },
+        insideHorizontal: {
+          style: BorderStyle.SINGLE,
+          size: 4,
+          color: "DDE6DE",
+        },
         insideVertical: { style: BorderStyle.SINGLE, size: 4, color: "DDE6DE" },
       },
       rows: [
-        new TableRow({ tableHeader: true, children: headers.map((t, i) => mk(t, true, i)) }),
-        ...rows.map((r) => new TableRow({ children: r.map((t, i) => mk(t, false, i)) })),
+        new TableRow({
+          tableHeader: true,
+          children: headers.map((t, i) => mk(t, true, i)),
+        }),
+        ...rows.map(
+          (r) => new TableRow({ children: r.map((t, i) => mk(t, false, i)) }),
+        ),
       ],
     }),
     new Paragraph({ spacing: { after: 140 }, children: [] }),
@@ -281,7 +292,12 @@ export function codeCaption(caption, lines) {
     new Paragraph({
       spacing: { before: 60, after: 200 },
       children: [
-        new TextRun({ text: `${caption} `, italics: true, size: 19, color: MUTED }),
+        new TextRun({
+          text: `${caption} `,
+          italics: true,
+          size: 19,
+          color: MUTED,
+        }),
       ],
     }),
   ]
@@ -293,7 +309,9 @@ export function toc() {
     new Paragraph({
       heading: HeadingLevel.HEADING_1,
       spacing: { after: 200 },
-      children: [new TextRun({ text: "Table of Contents", color: ACCENT_DARK })],
+      children: [
+        new TextRun({ text: "Table of Contents", color: ACCENT_DARK }),
+      ],
     }),
     new TableOfContents("Table of Contents", {
       hyperlink: true,
@@ -309,4 +327,12 @@ export async function writeDocx(doc, outPath) {
   return outPath
 }
 
-export { Document, Header, Footer, PageNumber, AlignmentType, TextRun, Paragraph }
+export {
+  Document,
+  Header,
+  Footer,
+  PageNumber,
+  AlignmentType,
+  TextRun,
+  Paragraph,
+}

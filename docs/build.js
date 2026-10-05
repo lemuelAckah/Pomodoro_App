@@ -147,7 +147,9 @@ const doc = new Document({
   features: { updateFields: true },
   sections: [
     {
-      properties: { page: { margin: { top: 1130, bottom: 1130, left: 1240, right: 1240 } } },
+      properties: {
+        page: { margin: { top: 1130, bottom: 1130, left: 1240, right: 1240 } },
+      },
       headers: {
         default: new Header({
           children: [
@@ -172,7 +174,11 @@ const doc = new Document({
               alignment: AlignmentType.CENTER,
               spacing: { after: 0 },
               children: [
-                new TextRun({ children: [PageNumber.CURRENT], size: 18, color: ACCENT }),
+                new TextRun({
+                  children: [PageNumber.CURRENT],
+                  size: 18,
+                  color: ACCENT,
+                }),
               ],
             }),
           ],

@@ -59,13 +59,10 @@ export function markLeads(bodyHtml) {
 }
 
 export async function convertDocx(buffer) {
-  const { value: raw, messages } = await mammoth.convertToHtml(
-    { buffer },
-    {
-      transformDocument: markCodeRuns,
-      styleMap: ["highlight[color='studiocode'] => code.doccode"],
-    },
-  )
+  const { value: raw, messages } = await mammoth.convertToHtml({ buffer }, {
+    transformDocument: markCodeRuns,
+    styleMap: ["highlight[color='studiocode'] => code.doccode"],
+  })
   const bodyClean = stripFrontMatter(raw)
   return { bodyClean, contents: collectContents(bodyClean), messages }
 }
@@ -85,7 +82,9 @@ export function contentsHtml(items, pages) {
         pg != null
           ? `<span class="dots"></span><span class="pg">${pg}</span>`
           : '<span class="dots"></span>'
-      return `<li class="${level === "h1" ? "t1" : "t2"}"><span class="tx">${text}</span>${pgHtml}</li>`
+      return `<li class="${
+        level === "h1" ? "t1" : "t2"
+      }"><span class="tx">${text}</span>${pgHtml}</li>`
     })
     .join("\n")
   const sentinel =

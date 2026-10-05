@@ -1102,6 +1102,14 @@ async function claimFreeBox() {
     return
   }
   claimBusy = true
+  // No modal pre-check ("Checking the calendar…" is gone): show inline
+  // busy text and head straight for the reveal animation once the roll
+  // lands.
+  const claimBtn = document.querySelector("[data-free-claim]")
+  if (claimBtn) {
+    claimBtn.disabled = true
+    claimBtn.textContent = "Opening…"
+  }
   try {
     if (cloudRewards()) {
       if (!requireAuth("claim your free box")) return
@@ -1113,7 +1121,6 @@ async function claimFreeBox() {
           `Already claimed — your next box lands after midnight UTC (${freeBoxCountdown()})`,
         )
       }
-      notify("Checking the calendar…")
       await refreshServerTime()
       // The server rolls, enforces one-per-day (UTC) and credits the
       // reward. Refresh/replay can never mint a second box: the ref is
@@ -1174,7 +1181,6 @@ async function claimFreeBox() {
       openFreeBoxReveal()
       return
     }
-    notify("Checking the calendar…")
     await refreshServerTime()
     const day = serverDayKey()
     if (freeBoxState().lastClaimDay === day) {
@@ -1189,6 +1195,13 @@ async function claimFreeBox() {
     openFreeBoxReveal()
   } finally {
     claimBusy = false
+    // Undo the inline busy label if the card wasn't re-rendered (e.g. the
+    // auth gate rejected the claim).
+    const btn = document.querySelector("[data-free-claim]")
+    if (btn) {
+      btn.disabled = false
+      btn.textContent = "Claim free box"
+    }
   }
 }
 
