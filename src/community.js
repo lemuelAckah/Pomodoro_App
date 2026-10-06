@@ -675,6 +675,11 @@ async function refreshCloudSocial(force) {
 
   if (!force && Date.now() - cloudFriendsAt < 10000 && cloudFriendsAt) return
 
+  // Friendships/blocks gate which statuses RLS returns — invalidate the
+  // stories cache so the next Status render refetches (an accepted request
+  // or a removed connection must show/hide that person's statuses at once).
+  cloudStoriesAt = 0
+
   try {
     // allSettled instead of per-call catch: a transient failure must NOT
 
@@ -2990,7 +2995,7 @@ function renderCommunity() {
   }${
     immersive
       ? ""
-      : `<div class="subnav">${[
+      : `<div class="subnav" role="tablist" aria-label="Community sections">${[
           ["discover", "Discover"],
 
           ["status", "Status"],
@@ -3009,15 +3014,37 @@ function renderCommunity() {
           ["sprints", "Sprints"],
         ]
 
-          .map(
-            (x) =>
-              `<button type="button" data-subtab="${x[0]}" class="${
-                state.subtab === x[0] ? "active" : ""
-              }">${x[1]}</button>`,
-          )
+          .map((x) => {
+            const on = state.subtab === x[0]
+            return `<button type="button" role="tab" data-subtab="${x[0]}" aria-selected="${on}" class="${
+              on ? "active" : ""
+            }">${x[1]}</button>`
+          })
 
           .join("")}</div>`
   }<div id="community-body"></div>`
+
+  // Sticky subnav parks directly under the sticky topbar — measure the real
+  // topbar height at render time (it differs by breakpoint / wrapped rows).
+  const topbar = $(".topbar")
+
+  if (topbar)
+    t.style.setProperty(
+      "--subnav-top",
+      Math.max(0, Math.round(topbar.getBoundingClientRect().height)) + "px",
+    )
+
+  // Phones scroll the tab bar horizontally — keep the active chip in view
+  // (the bar is rebuilt on every switch, so scrollLeft starts at 0).
+  const subnav = $(".subnav", t)
+
+  const activeChip = subnav?.querySelector("button.active")
+
+  if (subnav && activeChip && subnav.scrollWidth > subnav.clientWidth + 4)
+    subnav.scrollLeft = Math.max(
+      0,
+      activeChip.offsetLeft - (subnav.clientWidth - activeChip.offsetWidth) / 2,
+    )
 
   $$("[data-subtab]", t).forEach(
     (b) =>
@@ -7204,25 +7231,27 @@ function renderStatus(body) {
 
     .join("")
 
+  const gate = `<div class="card status-gate" style="margin-bottom:18px">
+      <div class="st-gate-head"><span class="st-gate-ico" aria-hidden="true">${sicon("camera")}</span><h2>Your status, live for 24h</h2></div>
+      <p class="muted">Post a photo, video or text update for your circle — and see your friends' latest statuses in one place.</p>
+      <div class="st-gate-actions"><button type="button" class="primary" data-status-signin>Sign in</button><button type="button" class="ghost" data-status-create>Create account</button></div>
+    </div>`
+
   body.innerHTML =
-    `${
-      signedIn()
-        ? storyComposerMarkup()
-        : `<div class="card" style="margin-bottom:18px"><h2>Status</h2><p class="muted">Sign in to post 24h statuses for your circle.</p></div>`
-    }` +
-    `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Your statuses</h2><span class="tag">${
-      mine.length
-        ? `${mine.length} update${mine.length === 1 ? "" : "s"}${
-            unseenMine ? ` · ${unseenMine} new` : ""
-          }`
-        : "none yet"
-    }</span></div>${
-      mine.length
-        ? myRows
-        : `<p class="muted">Share your first update above — photo, video or text, live for 24h.</p>`
-    }</div>` +
+    (signedIn() ? storyComposerMarkup() : gate) +
     (signedIn()
-      ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Friends' statuses</h2><span class="tag">${
+      ? `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Your statuses</h2><span class="tag">${
+          mine.length
+            ? `${mine.length} update${mine.length === 1 ? "" : "s"}${
+                unseenMine ? ` · ${unseenMine} new` : ""
+              }`
+            : "none yet"
+        }</span></div>${
+          mine.length
+            ? myRows
+            : `<p class="muted">Share your first update above — photo, video or text, live for 24h.</p>`
+        }</div>` +
+        `<div class="card" style="margin-bottom:18px"><div class="section-row"><h2>Friends' statuses</h2><span class="tag">${
           friendGroups.length ? `${friendGroups.length} active` : "quiet"
         }</span></div>${
           friendGroups.length
@@ -7678,6 +7707,20 @@ function storyMusicRowMarkup() {
 }
 
 function bindStatusHome(body) {
+  $("[data-status-signin]", body)?.addEventListener("click", () => {
+    state.tab = "account"
+    state.accountView = "welcome"
+    persist()
+    shell()
+  })
+
+  $("[data-status-create]", body)?.addEventListener("click", () => {
+    state.tab = "account"
+    state.accountView = "create"
+    persist()
+    shell()
+  })
+
   bindFriendStoryRings(body)
 
   $$("[data-mine-status]", body).forEach((b) => {

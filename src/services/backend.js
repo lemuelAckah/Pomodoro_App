@@ -100,9 +100,14 @@ export async function searchUsers(query, limit = 8) {
   if (!supabase)
     return { data: [], error: new Error("Supabase is not configured") }
 
+  // Sanitise LIKE metacharacters, but KEEP underscores: every generated
+  // handle is word_word_NN, and stripping "_" turned "prime_bear_38" into
+  // "primebear38" — no match, so Add friend silently fell back to a local
+  // stub. "%" never appears in handles; "_" only widens the pattern, and
+  // callers narrow results with exact/prefix checks anyway.
   const q = String(query || "")
     .trim()
-    .replace(/[%_]/g, "")
+    .replace(/[%]/g, "")
     .slice(0, 60)
 
   if (q.length < 2) return { data: [], error: null }
@@ -3752,13 +3757,48 @@ export async function sendFriendRequest(friendId) {
   if (!friendId || friendId === userId)
     return { data: null, error: new Error("Pick another user first") }
 
-  // Plain insert first: the INSERT..SELECT in an upsert+select returns the
+  // Consent first: a fresh request lands as 'pending' so the RECIPIENT gets
+  // the Accept/Decline prompt (016 recipient-accept flow). Friendship checks
+  // (025/026) read an accepted row in EITHER direction, so the only cases
+  // that may show 'accepted' are consented ones: they asked us first (flip
+  // THEIR pending row — we are friend_id, the 016 recipient-accept policy)
+  // or it is already accepted. The old fall-through flipped our OWN fresh
+  // row to 'accepted', bypassing the other side's Accept/Decline entirely.
+  const rev = await supabase
 
-  // written row under its own SELECT policies, which rejected the mirrored
+    .from("friendships")
 
-  // 'accepted' row and failed the whole request (42501) — the flaw that made
+    .select("id,user_id,friend_id,status")
 
-  // friend adds silently do nothing for the other user.
+    .eq("user_id", friendId)
+
+    .eq("friend_id", userId)
+
+    .maybeSingle()
+
+  if (rev.error) return rev
+
+  if (rev.data?.status === "pending") {
+    return supabase
+
+      .from("friendships")
+
+      .update({ status: "accepted" })
+
+      .eq("id", rev.data.id)
+
+      .eq("friend_id", userId)
+
+      .eq("status", "pending")
+
+      .select("id,user_id,friend_id,status")
+
+      .maybeSingle()
+  }
+
+  // accepted → already friends; blocked (or anything else) → fall through so
+  // the requester can still send their own pending row.
+  if (rev.data?.status === "accepted") return { data: rev.data, error: null }
 
   const res = await supabase
 
@@ -3770,24 +3810,23 @@ export async function sendFriendRequest(friendId) {
 
     .single()
 
-  if (res.error && !/duplicate|unique|409/i.test(res.error.message || ""))
-    return res
+  if (!res.error) return res
 
-  // Row exists (re-request, or they already added us): converge to accepted —
-
-  // this UPDATE is now legal for the requester (023 requester-accept policy).
+  // Duplicate (same direction): the row already exists — return it unchanged.
+  // Pending stays pending (only the recipient can accept it); accepted means
+  // they are already connected. Never flip our own row here — that is the
+  // consent bypass this rewrite removed.
+  if (!/duplicate|unique|409/i.test(res.error.message || "")) return res
 
   return supabase
 
     .from("friendships")
 
-    .update({ status: "accepted" })
+    .select("id,user_id,friend_id,status")
 
     .eq("user_id", userId)
 
     .eq("friend_id", friendId)
-
-    .select("id,user_id,friend_id,status")
 
     .maybeSingle()
 }

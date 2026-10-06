@@ -1175,7 +1175,53 @@
 }
 
 @media (max-width: 640px) {
-  .st-choose {
+/* --- Signed-out gate: professional invite card instead of a bare line --- */
+.status-gate .st-gate-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.status-gate .st-gate-ico {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--sage) 16%, transparent);
+  color: var(--sage);
+  border: 1px solid color-mix(in srgb, var(--sage) 32%, transparent);
+}
+.status-gate .st-gate-head h2 {
+  margin: 0;
+}
+.status-gate p {
+  margin: 8px 0 0;
+}
+.status-gate .st-gate-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+.status-gate .st-gate-actions button {
+  min-height: 42px;
+  padding: 10px 20px;
+  border-radius: 12px;
+  font-weight: 700;
+  font-size: 13.5px;
+}
+@media (max-width: 560px) {
+  .status-gate .st-gate-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  .status-gate .st-gate-actions button {
+    padding: 10px 8px;
+  }
+}
+
+.st-choose {
     grid-template-columns: 1fr;
   }
   .st-choose-card {
