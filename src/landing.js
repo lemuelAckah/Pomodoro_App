@@ -495,14 +495,14 @@ export function mountLanding(root, { onEnter } = {}) {
     // Reflect install state changes live.
     const updateInstallBtn = () => {
       if (window.__sfInstallState && window.__sfInstallState.installed) {
-        installBtn.textContent = sicon("check") + " Installed"
+        installBtn.innerHTML = sicon("check") + " Installed"
         installBtn.disabled = true
         installBtn.style.opacity = "0.7"
       }
     }
     window.addEventListener("sf-install:installed", updateInstallBtn)
     window.addEventListener("sf-install:dismissed", () => {
-      installBtn.textContent = sicon("download") + " Install again"
+      installBtn.innerHTML = sicon("download") + " Install again"
     })
   }
 

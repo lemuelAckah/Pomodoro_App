@@ -784,6 +784,8 @@ async function refreshCloudSocial(force) {
     cloudFriendsAt = Date.now()
 
     friendPhotoUrls.clear() // profiles may have updated photos
+
+    cloudPhotoCache.clear()
   } catch {
     /* offline — keep stale cache */
 
@@ -1766,6 +1768,8 @@ function teardownCall(notifyEnd = true) {
 
   state.call = null
 
+  callReactions = []
+
   setCallStatus("idle", { force: true })
 
   state.callStatus = "idle"
@@ -1903,9 +1907,16 @@ function showIncomingCall(row) {
 
   const friend = cloudFriends.find((f) => f.id === row.initiator_id) || null
 
-  const name = friend?.name || friend?.handle || "Someone"
+  // Friends cache is community-only — a call from any other tab would read
+  // "Someone". Carry identity in the call metadata (written by the caller)
+  // and fall back to a live profile lookup below.
+  const metaName = String(row.metadata?.callerName || "").trim()
 
-  const handle = friend?.handle || ""
+  const metaHandle = String(row.metadata?.callerHandle || "").trim()
+
+  const name = friend?.name || friend?.handle || metaName || "Someone"
+
+  const handle = friend?.handle || metaHandle || ""
 
   const isVoice =
     row.call_type === "voice" || row.metadata?.callType === "voice"
@@ -1929,7 +1940,7 @@ function showIncomingCall(row) {
       <div class="call-ring-eyebrow">${sicon(isVoice ? "mic" : "phone")} ${modeTitle}</div>
       <div class="call-ring-avatar">
         <span class="wave w1"></span><span class="wave w2"></span>
-        ${friendAvatarMarkup(row.initiator_id, handle || "?", name)}
+        ${friendAvatarMarkup(row.initiator_id, name || handle || "?")}
       </div>
       <h2>${esc(name)}</h2>
       <p>${handle ? "@" + esc(handle) + " · " : ""}is calling you</p>
@@ -1940,6 +1951,34 @@ function showIncomingCall(row) {
     </div>`
 
   document.body.append(ring)
+
+  if (name === "Someone" && row.initiator_id) {
+    getPublicProfiles([row.initiator_id])
+      .then(({ data } = {}) => {
+        const p = Array.isArray(data) ? data[0] : null
+
+        if (!p) return
+
+        const still = document.getElementById("incoming-call-ring")
+
+        if (!still || pendingIncomingCall?.id !== row.id) return
+
+        const realName = p.name || p.handle || "Someone"
+
+        const h2 = still.querySelector(".call-ring-card h2")
+
+        const sub = still.querySelector(".call-ring-card p")
+
+        if (h2) h2.textContent = realName
+
+        if (sub)
+          sub.textContent =
+            (p.handle ? "@" + p.handle + " · " : "") + "is calling you"
+
+        still.setAttribute("aria-label", `${modeTitle} from ${realName}`)
+      })
+      .catch(() => {})
+  }
 
   startRingChime()
 
@@ -2034,6 +2073,8 @@ async function acceptIncomingCall(row) {
 
   rememberSectionBeforeCall()
 
+  callReactions = []
+
   state.call = {
     id: room,
 
@@ -2041,7 +2082,11 @@ async function acceptIncomingCall(row) {
 
     kind: row.group_id ? "group" : "dm",
 
-    name: friend?.name || friend?.handle || "Study partner",
+    name:
+      friend?.name ||
+      friend?.handle ||
+      String(row.metadata?.callerName || "").trim() ||
+      "Study partner",
 
     photo:
       resolvePhoto(friend?.photo) || friendPhotoUrl(row.initiator_id) || "",
@@ -2122,6 +2167,8 @@ async function startOutgoingCall(chatId, opts = {}) {
 
   rememberSectionBeforeCall()
 
+  callReactions = []
+
   const peerPhoto = peerId
     ? resolvePhoto(peer?.photo) || friendPhotoUrl(peerId) || ""
     : ""
@@ -2185,7 +2232,13 @@ async function startOutgoingCall(chatId, opts = {}) {
 
         started_at: new Date().toISOString(),
 
-        metadata: { callType: voice ? "voice" : "video" },
+        metadata: {
+          callType: voice ? "voice" : "video",
+          // The callee's ring card may render before their friends cache
+          // exists (any tab) — carry the caller's identity along.
+          callerName: String(state.profile?.name || "").slice(0, 60),
+          callerHandle: String(state.profile?.handle || "").slice(0, 40),
+        },
       })
 
       if (result.error) throw result.error
@@ -3150,10 +3203,21 @@ function renderCommunity() {
     .catch(() => {})
 
   // Social caches + notification badge refresh silently; repaint only the badge.
+  // When the friends/blocks set CHANGED, repaint the active view too — a
+  // conversations list rendered before cloudFriends resolved otherwise kept
+  // showing only "Message yourself" until some unrelated navigation.
 
   if (signedIn()) {
+    const seenSocialAt = cloudFriendsAt
+
     refreshCloudSocial(false)
-      .then(() => paintBackendPill("friends"))
+      .then(() => {
+        paintBackendPill("friends")
+
+        if (cloudFriendsAt === seenSocialAt || !cloudFriends.length) return
+
+        if (state.tab === "community" && !userIsBusy()) renderCommunity()
+      })
       .catch(() => {})
 
     refreshCloudNotifCount(false)
@@ -13814,7 +13878,7 @@ function renderNotifications(body) {
       ? list
           .map(
             (n) =>
-              `<div class="task"><div class="avatar">${sicon(n.type === "connection" ? "users" : n.type === "group_removed" ? "run" : "bell")}</div><span class="task-text"><strong>${esc(n.title)}</strong><br><small class="muted">${esc(n.text || "")} · ${notifTime(n.created_at)}</small></span><span class="friend-actions">${
+              `<div class="task"><div class="avatar">${sicon(n.type === "connection" ? "users" : n.type === "group_removed" ? "run" : "bell")}</div><span class="task-text"><strong>${esc(stripIcon(n.title))}</strong><br><small class="muted">${esc(stripIcon(n.text || ""))} · ${notifTime(n.created_at)}</small></span><span class="friend-actions">${
                 !n.read_at ? `<span class="tag">new</span>` : ""
               }${
                 n.metadata?.group_id
@@ -14058,7 +14122,9 @@ function chatDisplayInfo(id) {
   return { isGroup, target, name, photo }
 }
 
-// cloudFriends entries may carry an avatar path; resolve to a public URL once.
+// cloudFriends entries carry photo_path; resolve on the public avatars bucket.
+// profiles.avatar is a SHORT INITIAL ("SL"), never a storage path — signing it
+// hit /object/sign/studyflow-groups/SL and400'd on every messages render.
 
 let cloudPhotoCache = new Map()
 
@@ -14067,24 +14133,11 @@ function cloudFriendPhoto(id) {
 
   const f = cloudFriends.find((x) => x.id === id)
 
-  if (!f?.avatar) return ""
+  const url = f ? resolvePhoto(f.photo || "") : ""
 
-  import("./services/backend.js")
-    .then(({ getGroupAvatarUrl }) =>
-      getGroupAvatarUrl(f.avatar)
-        .then(({ data } = {}) => {
-          if (data?.publicUrl || data?.signedUrl)
-            cloudPhotoCache.set(id, data.publicUrl || data.signedUrl)
+  cloudPhotoCache.set(id, url)
 
-          rerenderChat()
-        })
-        .catch(() => {}),
-    )
-    .catch(() => {})
-
-  cloudPhotoCache.set(id, "")
-
-  return ""
+  return url
 }
 
 // Multi-select bulk delete for the Chats list — entered from either three-dot
@@ -20208,28 +20261,30 @@ function stopCallClock() {
   }
 }
 
+function spawnCallReaction(emoji) {
+  const stage = $("[data-call-stage]")
+
+  if (!stage) return
+
+  const el = document.createElement("span")
+
+  el.className = "call-reaction"
+
+  el.textContent = emoji
+
+  el.style.left = 12 + Math.random() * 70 + "%"
+
+  stage.append(el)
+
+  setTimeout(() => el.remove(), 2400)
+}
+
 function pushCallReaction(emoji) {
   if (!state.call) return
 
-  const id = uid()
+  callReactions = [...callReactions.slice(-6), { emoji, id: uid() }]
 
-  callReactions = [...callReactions.slice(-6), { emoji, id }]
-
-  const stage = $("[data-call-stage]")
-
-  if (stage) {
-    const el = document.createElement("span")
-
-    el.className = "call-reaction"
-
-    el.textContent = emoji
-
-    el.style.left = 12 + Math.random() * 70 + "%"
-
-    stage.append(el)
-
-    setTimeout(() => el.remove(), 2400)
-  }
+  spawnCallReaction(emoji)
 }
 
 function callQualityMeta() {
@@ -20522,7 +20577,10 @@ function renderCall() {
   }
 
   if (!minimized) {
-    callReactions.forEach((r) => pushCallReaction(r.emoji))
+    // Replay floats only — never pushCallReaction here: replaying into the
+    // history doubled the array on every render (7 copies of one 🔥) and old
+    // reactions kept resurrecting inside the NEXT call.
+    callReactions.forEach((r) => spawnCallReaction(r.emoji))
   }
 
   $(`[data-connect]`, call) && ($(`[data-connect]`, call).onclick = connectCall)
