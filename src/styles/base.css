@@ -267,7 +267,7 @@ h3 {
 }
 
 .danger-button {
-  background: #fff0ed;
+  background: color-mix(in srgb, var(--paper) 94%, transparent);
   color: #c85d4d;
   padding: 11px 14px;
   border-radius: 11px;
@@ -316,7 +316,7 @@ h3 {
 
 .primary {
   background: var(--sage);
-  color: #fff;
+  color: var(--paper);
   padding: 12px 20px;
   border-radius: 12px;
   font-weight: 700;
@@ -382,7 +382,7 @@ h3 {
 .input:focus,
 .textarea:focus {
   border-color: var(--sage);
-  box-shadow: 0 0 0 3px #47765a14;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sage) 8%, transparent);
 }
 
 textarea.textarea {
@@ -499,7 +499,7 @@ textarea.input {
 
 .tc-opt.selected {
   border-color: var(--sage);
-  background: #47765a12;
+  background: color-mix(in srgb, var(--sage) 7%, transparent);
 }
 
 .tc-opt.selected .tc-radio {
@@ -571,7 +571,7 @@ kbd {
 }
 
 .filter {
-  background: #fff;
+  background: var(--paper);
   border: 1px solid var(--line);
   padding: 9px 13px;
   border-radius: 999px;
@@ -582,7 +582,7 @@ kbd {
 
 .filter.active {
   background: var(--ink);
-  color: #fff;
+  color: var(--paper);
   border-color: var(--ink);
 }
 
@@ -642,7 +642,7 @@ kbd {
   width: auto;
   background-color: #2b5542;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  color: #fff;
+  color: var(--paper);
   border-color: #3c6c54;
 }
 
@@ -652,7 +652,7 @@ kbd {
 
 .store-footer .select option {
   background-color: #1a2230;
-  color: #fff;
+  color: var(--paper);
 }
 
 .sound-card h3 {
@@ -721,14 +721,14 @@ kbd {
 }
 .chat-extras-toggle[aria-expanded="true"] {
   background: var(--sage);
-  color: #fff;
+  color: var(--paper);
 }
 .chat-extras-toggle[aria-expanded="true"] .chat-extras-plus {
   transform: rotate(45deg);
 }
 .chat-extras-toggle[aria-expanded="true"]:hover {
   background: var(--sage);
-  color: #fff;
+  color: var(--paper);
   transform: none;
 }
 .chat-extras-menu {

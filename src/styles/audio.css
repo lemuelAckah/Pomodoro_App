@@ -84,7 +84,7 @@ html[data-night="1"] .song.active { background: rgba(255, 255, 255, 0.07); }
   height: 38px;
   border-radius: 50%;
   background: var(--sage);
-  color: #fff;
+  color: var(--paper);
   display: grid;
   place-items: center;
   font-size: 17px;
@@ -131,7 +131,7 @@ html[data-night="1"] .song.active { background: rgba(255, 255, 255, 0.07); }
   align-items: center;
   gap: 12px;
   background: var(--ink);
-  color: #fff;
+  color: var(--paper);
   padding: 10px 16px;
   box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.22);
   animation: mini-slide-up 0.25s ease-out;
@@ -155,7 +155,7 @@ html[data-night="1"] .song.active { background: rgba(255, 255, 255, 0.07); }
 .np-btn {
   background: transparent;
   border: 1px solid rgba(255, 255, 255, 0.15);
-  color: #fff;
+  color: var(--paper);
   width: 36px;
   height: 36px;
   border-radius: 50%;
@@ -242,7 +242,7 @@ html[data-night="1"] .song.active { background: rgba(255, 255, 255, 0.07); }
   border-color: var(--sage);
 }
 .np-btn[data-np-fav].liked {
-  color: #e8795b;
+  color: var(--coral);
 }
 .np-close {
   opacity: 0.6;
@@ -265,7 +265,7 @@ html[data-night="1"] .song.active { background: rgba(255, 255, 255, 0.07); }
      centered mini-timer pill (left side) on narrow screens. */
   gap: 8px;
   background: var(--ink);
-  color: #fff;
+  color: var(--paper);
   padding: 8px 12px;
   border-radius: 999px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
@@ -279,7 +279,7 @@ html[data-night="1"] .song.active { background: rgba(255, 255, 255, 0.07); }
 .np-mini-btn {
   background: transparent;
   border: none;
-  color: #fff;
+  color: var(--paper);
   width: 32px;
   height: 32px;
   border-radius: 50%;
@@ -396,7 +396,7 @@ html[data-night="1"] .song.active { background: rgba(255, 255, 255, 0.07); }
   cursor: pointer;
   padding: 4px;
 }
-.queue-remove:hover { color: #e8795b; }
+.queue-remove:hover { color: var(--coral); }
 .queue-remove .sicon { width: 14px; height: 14px; }
 .queue-empty {
   padding: 30px;
@@ -546,7 +546,7 @@ html[data-night="1"] .pl-row.open {
   height: 34px;
   border-radius: 50%;
   background: var(--sage);
-  color: #fff;
+  color: var(--paper);
   display: grid;
   place-items: center;
   flex-shrink: 0;
@@ -590,7 +590,7 @@ html[data-night="1"] .pl-detail {
   height: 28px;
   border-radius: 50%;
   background: var(--sage);
-  color: #fff;
+  color: var(--paper);
   display: grid;
   place-items: center;
   flex-shrink: 0;
@@ -666,7 +666,7 @@ html[data-night="1"] .pl-detail {
   height: 38px;
   border-radius: 50%;
   background: var(--sage);
-  color: #fff;
+  color: var(--paper);
   display: grid;
   place-items: center;
   flex-shrink: 0;
@@ -781,7 +781,7 @@ html[data-night="1"] .pl-detail {
   opacity: 0.35;
   line-height: 1;
 }
-.pl-cover-sunset { background: linear-gradient(135deg, #e8795b, #b0415c); }
+.pl-cover-sunset { background: linear-gradient(135deg, var(--coral), color-mix(in srgb, var(--coral) 50%, var(--ink))); }
 .pl-cover-ocean { background: linear-gradient(135deg, #1e7f8c, #134e5e); }
 .pl-cover-forest { background: linear-gradient(135deg, #2f7d4f, #173f2a); }
 .pl-cover-grape { background: linear-gradient(135deg, #8a6fd1, #4c3480); }
@@ -798,7 +798,7 @@ html[data-night="1"] .pl-detail {
   border-radius: 50%;
   border: none;
   background: rgba(12, 18, 16, 0.72);
-  color: #fff;
+  color: var(--paper);
   display: grid;
   place-items: center;
   cursor: pointer;

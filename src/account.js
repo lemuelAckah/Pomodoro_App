@@ -1783,7 +1783,7 @@ function openPrivacy() {
 }
 
 function privacyCrestSvg() {
-  return `<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="32" cy="32" r="29" fill="none" stroke="#e9ae3f" stroke-width="3"/><circle cx="32" cy="32" r="22" fill="#ffffff" opacity="0.14"/><path d="M36 10 L22 36 h10 L28 54 L44 26 h-11 z" fill="#e9ae3f"/><circle cx="32" cy="32" r="29" fill="none" stroke="#ffffff" stroke-width="1" opacity="0.35"/></svg>`
+  return `<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="32" cy="32" r="29" fill="none" stroke="var(--gold)" stroke-width="3"/><circle cx="32" cy="32" r="22" fill="var(--paper)" opacity="0.14"/><path d="M36 10 L22 36 h10 L28 54 L44 26 h-11 z" fill="var(--gold)"/><circle cx="32" cy="32" r="29" fill="none" stroke="var(--paper)" stroke-width="1" opacity="0.35"/></svg>`
 }
 
 function downloadPrivacyPDF() {
@@ -1798,21 +1798,21 @@ function downloadPrivacyPDF() {
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>StudyFlow-Privacy-Guidelines-v${PRIVACY_VERSION}</title><style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: Georgia, 'Times New Roman', serif; color: #17221d; background: #fff; }
-    .hero { background: linear-gradient(135deg, #0f2a1e 0%, #1d4a32 55%, #47765a 100%); color: #fff; padding: 44px 48px 36px; position: relative; overflow: hidden; }
+    .hero { background: linear-gradient(135deg, color-mix(in srgb, var(--sage) 30%, var(--ink) 70%) 0%, color-mix(in srgb, var(--sage) 55%, var(--ink) 45%) 55%, var(--sage) 100%); color: var(--accent-contrast); padding: 44px 48px 36px; position: relative; overflow: hidden; }
     .hero::after { content: ""; position: absolute; right: -70px; top: -70px; width: 260px; height: 260px; border-radius: 50%; border: 26px solid rgba(233,174,63,.25); }
     .hero::before { content: ""; position: absolute; right: 60px; bottom: -110px; width: 200px; height: 200px; border-radius: 50%; border: 18px solid rgba(255,255,255,.08); }
     .brand { display: flex; align-items: center; gap: 14px; }
     .brand svg { width: 54px; height: 54px; }
     .brand-name { font-size: 30px; font-weight: bold; letter-spacing: .5px; }
-    .brand-sub { font-size: 12px; letter-spacing: 3px; text-transform: uppercase; color: #e9ae3f; margin-top: 2px; }
+    .brand-sub { font-size: 12px; letter-spacing: 3px; text-transform: uppercase; color: var(--gold); margin-top: 2px; }
     h1 { font-size: 34px; margin: 22px 0 6px; }
     .meta { font-size: 12.5px; color: #cfe0d5; }
-    .meta b { color: #e9ae3f; }
+    .meta b { color: var(--gold); }
     .body { padding: 30px 48px 40px; }
-    h2 { font-size: 13px; letter-spacing: 2.5px; text-transform: uppercase; color: #47765a; margin: 26px 0 12px; padding-bottom: 6px; border-bottom: 2px solid #e9e2cf; }
+    h2 { font-size: 13px; letter-spacing: 2.5px; text-transform: uppercase; color: var(--sage); margin: 26px 0 12px; padding-bottom: 6px; border-bottom: 2px solid var(--line); }
     h2.red { color: #b3402e; }
     .promise { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-    .promise div { background: #f2f6ef; border-left: 4px solid #47765a; border-radius: 0 10px 10px 0; padding: 10px 12px; font-size: 12.5px; }
+    .promise div { background: color-mix(in srgb, var(--paper) 80%, white); border-left: 4px solid var(--sage); border-radius: 0 10px 10px 0; padding: 10px 12px; font-size: 12.5px; color: var(--ink); }
     .promise strong { display: block; font-size: 13px; margin-bottom: 2px; }
     .rule { display: flex; gap: 10px; align-items: flex-start; border: 1px solid #e4e8df; border-radius: 10px; padding: 9px 12px; margin-bottom: 8px; font-size: 12.5px; page-break-inside: avoid; }
     .rule .num { width: 22px; height: 22px; border-radius: 50%; background: #17221d; color: #fff; font-size: 11px; font-weight: bold; display: flex; align-items: center; justify-content: center; flex: none; }

@@ -50,7 +50,7 @@
 .subnav button {
   padding: 9px 12px;
   border-radius: 10px;
-  background: #fff;
+  background: var(--paper);
   border: 1px solid var(--line);
   font-size: 12px;
   color: var(--muted);
@@ -58,7 +58,7 @@
 
 .subnav button.active {
   background: var(--sage);
-  color: #fff;
+  color: var(--paper);
   border-color: var(--sage);
 }
 
@@ -388,7 +388,7 @@ html[data-night="1"] .group-logo {
   padding: 0 6px;
   border-radius: 999px;
   background: var(--sage);
-  color: #fff;
+  color: var(--paper);
   font-size: 11px;
   font-weight: 800;
   display: grid;
@@ -787,7 +787,7 @@ button.chat-head-who:hover {
   margin-left: 4px;
   border-radius: 999px;
   background: var(--sage);
-  color: #fff;
+  color: var(--paper);
   font-size: 10px;
   font-weight: 700;
   vertical-align: 1px;
@@ -836,7 +836,7 @@ button.chat-head-who:hover {
   margin-left: 4px;
   border-radius: 999px;
   background: var(--sage);
-  color: #fff;
+  color: var(--paper);
   font-size: 10px;
   font-weight: 700;
   vertical-align: 1px;
@@ -1017,9 +1017,9 @@ button.chat-head-who:hover {
 
 .bubble.me {
   align-self: flex-end;
-  background: color-mix(in srgb, var(--sage) 88%, #ffffff);
+  background: color-mix(in srgb, var(--sage) 88%, var(--paper));
   border-color: transparent;
-  color: #fff;
+  color: var(--paper);
   border-top-right-radius: 12px;
 }
 html[data-night="1"] .bubble.me {
@@ -1039,7 +1039,7 @@ html[data-night="1"] .bubble.me {
 }
 
 .bubble.me .mention {
-  color: #fff;
+  color: var(--paper);
   text-decoration: underline;
 }
 
@@ -1102,7 +1102,7 @@ html[data-night="1"] .pin-count {
   align-items: center;
   gap: 6px;
   max-width: 240px;
-  background: #fff;
+  background: var(--paper);
   border: 1px solid #e8d9a8;
   border-radius: 999px;
   padding: 4px 11px;
@@ -1288,7 +1288,7 @@ html[data-night="1"] .pin-entry-main {
 
 .bubble.me .poll-opt {
   background: rgba(255, 255, 255, 0.2);
-  color: #fff;
+  color: var(--paper);
 }
 
 .poll-bar {
@@ -1345,7 +1345,7 @@ html[data-night="1"] .pin-entry-main {
 }
 
 .react-chip {
-  background: #fff;
+  background: var(--paper);
   border: 1px solid var(--line);
   border-radius: 999px;
   font-size: 11px;
@@ -1361,7 +1361,7 @@ html[data-night="1"] .pin-entry-main {
   display: flex;
   gap: 2px;
   margin-top: 6px;
-  background: #fff;
+  background: var(--paper);
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 4px;
@@ -1634,7 +1634,7 @@ html[data-night="1"] .rec-time {
   height: 36px;
   border-radius: 50%;
   background: var(--sage);
-  color: #fff;
+  color: var(--paper);
   display: grid;
   place-items: center;
   flex: none;
@@ -1721,7 +1721,7 @@ html[data-night="1"] .rec-time {
 }
 /* On my own (sage) bubbles the player inverts for contrast. */
 .bubble.me .vmsg-play {
-  background: #fff;
+  background: var(--paper);
   color: var(--sage);
 }
 .bubble.me .vmsg-wave i {
@@ -1729,7 +1729,7 @@ html[data-night="1"] .rec-time {
   opacity: 0.6;
 }
 .bubble.me .vmsg-wave i.on {
-  background: #fff;
+  background: var(--paper);
   opacity: 1;
 }
 .bubble.me .vmsg-label,
@@ -1741,7 +1741,7 @@ html[data-night="1"] .rec-time {
 }
 .bubble.me .vmsg-dl:hover {
   background: rgba(255, 255, 255, 0.18);
-  color: #fff;
+  color: var(--paper);
 }
 @media (max-width: 560px) {
   .vmsg {
@@ -1948,13 +1948,13 @@ html[data-night="1"] .poll-add:hover {
   background:
     radial-gradient(1200px 500px at 20% -10%, #1d3a2b 0%, transparent 60%),
     radial-gradient(900px 420px at 90% 110%, #14314f33 0%, transparent 55%),
-    #0c1310;
-  color: #fff;
+    var(--ink);
+  color: var(--paper);
   border: 1px solid #3b5f49;
   border-radius: 24px;
   box-shadow:
     0 40px 120px #050a07cc,
-    inset 0 1px 0 #ffffff14;
+    inset 0 1px 0 var(--paper)14;
   overflow: hidden;
   animation: call-pop 0.28s cubic-bezier(0.2, 0.9, 0.25, 1.2);
 }
@@ -1972,8 +1972,8 @@ html[data-night="1"] .poll-add:hover {
   align-items: center;
   gap: 14px;
   padding: 13px 18px;
-  background: #ffffff08;
-  border-bottom: 1px solid #ffffff12;
+  background: var(--paper)08;
+  border-bottom: 1px solid var(--paper)12;
 }
 .call-live {
   display: inline-flex;
@@ -2009,8 +2009,8 @@ html[data-night="1"] .poll-add:hover {
 .call-timer {
   font: 700 13px "Space Mono", monospace;
   letter-spacing: 0.5px;
-  background: #ffffff10;
-  border: 1px solid #ffffff1c;
+  background: var(--paper)10;
+  border: 1px solid var(--paper)1c;
   padding: 5px 11px;
   border-radius: 999px;
 }
@@ -2031,9 +2031,9 @@ html[data-night="1"] .poll-add:hover {
 }
 .call-quality.q-ok { background: #3ab07a1f; border-color: #3ab07a4d; color: #7fe0b4; }
 .call-quality.q-ok i { background: #3ab07a; box-shadow: 0 0 7px #3ab07ab0; }
-.call-quality.q-wait { background: #e9ae3f1f; border-color: #e9ae3f4d; color: #ffd98a; }
-.call-quality.q-wait i { background: #e9ae3f; box-shadow: 0 0 7px #e9ae3fb0; }
-.call-quality.q-idle { background: #ffffff10; border-color: #ffffff22; color: #cfe0d5; }
+.call-quality.q-wait { background: var(--gold)1f; border-color: var(--gold)4d; color: color-mix(in srgb, var(--gold) 80%, var(--paper)); }
+.call-quality.q-wait i { background: var(--gold); box-shadow: 0 0 7px var(--gold)b0; }
+.call-quality.q-idle { background: var(--paper)10; border-color: var(--paper)22; color: var(--muted); }
 .call-quality.q-idle i { background: #9fb4a7; }
 .call-head-actions {
   display: inline-flex;
@@ -2045,13 +2045,13 @@ html[data-night="1"] .poll-add:hover {
   border-radius: 9px;
   display: grid;
   place-items: center;
-  background: #ffffff10;
-  border: 1px solid #ffffff1c;
+  background: var(--paper)10;
+  border: 1px solid var(--paper)1c;
   color: #e6efe9;
   cursor: pointer;
   transition: background 0.15s ease, transform 0.15s ease;
 }
-.call-icon:hover { background: #ffffff1f; transform: translateY(-1px); }
+.call-icon:hover { background: var(--paper)1f; transform: translateY(-1px); }
 .call-icon.danger:hover { background: #d95f5533; border-color: #d95f5566; color: #ffb0a8; }
 .call-icon svg { width: 15px; height: 15px; }
 
@@ -2069,7 +2069,7 @@ html[data-night="1"] .poll-add:hover {
   position: relative;
   border-radius: 18px;
   background: linear-gradient(160deg, #17251d, #101a15);
-  border: 1px solid #ffffff14;
+  border: 1px solid var(--paper)14;
   overflow: hidden;
   display: grid;
   place-items: center;
@@ -2083,7 +2083,7 @@ html[data-night="1"] .poll-add:hover {
   width: 200px;
   aspect-ratio: 4 / 3;
   border-radius: 14px;
-  border: 1.5px solid #ffffff2b;
+  border: 1.5px solid var(--paper)2b;
   box-shadow: 0 14px 40px #00000073;
   z-index: 3;
 }
@@ -2104,7 +2104,7 @@ html[data-night="1"] .poll-add:hover {
   aspect-ratio: auto;
   min-height: 140px;
   box-shadow: none;
-  border: 1px solid #ffffff18;
+  border: 1px solid var(--paper)18;
   border-radius: 14px;
 }
 .call-stage.group .call-tile.self-inline {
@@ -2128,8 +2128,8 @@ html[data-night="1"] .poll-add:hover {
   text-align: left;
   padding: 14px;
   border-radius: 16px;
-  background: #47765a14;
-  border: 1px solid #47765a33;
+  background: var(--sage)14;
+  border: 1px solid var(--sage)33;
   margin-bottom: 8px;
 }
 .incoming-call-who h2 {
@@ -2162,7 +2162,7 @@ html[data-night="1"] .poll-add:hover {
   place-items: center;
   padding: 20px;
   background:
-    radial-gradient(900px 500px at 50% 0%, #47765a2e 0%, transparent 60%),
+    radial-gradient(900px 500px at 50% 0%, var(--sage)2e 0%, transparent 60%),
     #0b1210cc;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -2178,12 +2178,12 @@ html[data-night="1"] .poll-add:hover {
   padding: 28px 24px 24px;
   border-radius: 28px;
   background: linear-gradient(180deg, #16241c 0%, #101a15 100%);
-  border: 1px solid #47765a66;
+  border: 1px solid var(--sage)66;
   color: #f4faf6;
   box-shadow:
     0 40px 100px #04100acc,
-    inset 0 1px 0 #ffffff18,
-    0 0 0 1px #47765a22;
+    inset 0 1px 0 var(--paper)18,
+    0 0 0 1px var(--sage)22;
   animation: call-pop 0.3s cubic-bezier(0.2, 0.9, 0.25, 1.15);
 }
 .call-ring-eyebrow {
@@ -2231,8 +2231,8 @@ html[data-night="1"] .poll-add:hover {
   font:
     700 2rem "Space Mono",
     monospace;
-  background: #47765a;
-  color: #fff;
+  background: var(--sage);
+  color: var(--paper);
   border: 3px solid #8fd4b0;
   box-shadow: 0 12px 40px #00000066;
   position: relative;
@@ -2274,15 +2274,15 @@ html[data-night="1"] .poll-add:hover {
 .call-ring-btn:active { transform: scale(0.97); }
 .call-ring-btn.accept {
   background: linear-gradient(180deg, #3d9b6f, #2f7a57);
-  color: #fff;
-  box-shadow: 0 12px 30px #2f7a5766, inset 0 1px 0 #ffffff33;
+  color: var(--paper);
+  box-shadow: 0 12px 30px #2f7a5766, inset 0 1px 0 var(--paper)33;
   animation: live-pulse 1.6s ease-in-out infinite;
 }
 .call-ring-btn.decline {
   background: #2a1a1a;
   color: #ffb4a8;
   border: 1px solid #ff6b5b44;
-  box-shadow: inset 0 1px 0 #ffffff12;
+  box-shadow: inset 0 1px 0 var(--paper)12;
 }
 .call-ring-btn:hover { filter: brightness(1.08); }
 
@@ -2296,11 +2296,11 @@ html[data-night="1"] .poll-add:hover {
   align-items: center;
   gap: 10px;
   padding: 12px 16px;
-  border: 1px solid #47765a88;
+  border: 1px solid var(--sage)88;
   border-radius: 999px;
   background: linear-gradient(180deg, #16241fee, #101a15f5);
   color: #f4faf6;
-  box-shadow: 0 16px 40px #04100aaa, inset 0 1px 0 #ffffff18;
+  box-shadow: 0 16px 40px #04100aaa, inset 0 1px 0 var(--paper)18;
   font:
     700 13px "Space Mono",
     monospace;
@@ -2336,8 +2336,8 @@ html[data-night="1"] .poll-add:hover {
   margin: 0 0 14px;
   padding: 12px 14px;
   border-radius: 16px;
-  background: #47765a1a;
-  border: 1px solid #47765a44;
+  background: var(--sage)1a;
+  border: 1px solid var(--sage)44;
 }
 .notif-live-call.live {
   background: #1d4d3629;
@@ -2350,7 +2350,7 @@ html[data-night="1"] .poll-add:hover {
   display: grid;
   place-items: center;
   background: #2f7a57;
-  color: #fff;
+  color: var(--paper);
   flex-shrink: 0;
 }
 .notif-live-ico svg { width: 18px; height: 18px; }
@@ -2368,7 +2368,7 @@ html[data-night="1"] .poll-add:hover {
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  background: #47765a22;
+  background: var(--sage)22;
   color: #2f7a57;
   margin-right: 6px;
   vertical-align: -5px;
@@ -2389,10 +2389,10 @@ html[data-night="1"] .poll-add:hover {
   width: 110px;
   height: 110px;
   border-radius: 50%;
-  background: linear-gradient(140deg, #47765a, #2c4f3a);
+  background: linear-gradient(140deg, var(--sage), #2c4f3a);
   box-shadow:
-    0 0 0 8px #47765a1c,
-    0 0 0 20px #47765a0d;
+    0 0 0 8px var(--sage)1c,
+    0 0 0 20px var(--sage)0d;
 }
 .tile-avatar.small {
   width: 64px;
@@ -2420,7 +2420,7 @@ html[data-night="1"] .poll-add:hover {
   border-radius: 999px;
   background: #050a0799;
   backdrop-filter: blur(6px);
-  border: 1px solid #ffffff1a;
+  border: 1px solid var(--paper)1a;
 }
 .tile-tag svg { width: 12px; height: 12px; }
 .tile-hint {
@@ -2432,7 +2432,7 @@ html[data-night="1"] .poll-add:hover {
   justify-items: center;
   gap: 8px;
   font-size: 12.5px;
-  color: #cfe0d5;
+  color: var(--muted);
   text-align: center;
   padding: 0 14px;
 }
@@ -2445,8 +2445,8 @@ html[data-night="1"] .poll-add:hover {
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: #ffd98a;
-  background: #0c1310cc;
+  color: color-mix(in srgb, var(--gold) 80%, var(--paper));
+  background: var(--ink)cc;
   z-index: 2;
 }
 .call-connecting {
@@ -2457,7 +2457,7 @@ html[data-night="1"] .poll-add:hover {
   place-content: center;
   justify-items: center;
   gap: 8px;
-  background: #0c131099;
+  background: var(--ink)99;
   backdrop-filter: blur(3px);
   text-align: center;
 }
@@ -2478,7 +2478,7 @@ html[data-night="1"] .poll-add:hover {
 }
 .call-dots i:nth-child(2) { animation-delay: 0.15s; }
 .call-dots i:nth-child(3) { animation-delay: 0.3s; }
-.call-dots.light i { background: #fff; }
+.call-dots.light i { background: var(--paper); }
 @keyframes call-bounce {
   0%, 100% { transform: translateY(0); opacity: 0.5; }
   50% { transform: translateY(-5px); opacity: 1; }
@@ -2508,8 +2508,8 @@ html[data-night="1"] .poll-add:hover {
   gap: 12px;
   padding: 13px 18px;
   border: 0;
-  border-top: 1px solid #ffffff12;
-  background: #ffffff08;
+  border-top: 1px solid var(--paper)12;
+  background: var(--paper)08;
   flex-wrap: wrap;
 }
 .call-ctrl-group {
@@ -2518,9 +2518,9 @@ html[data-night="1"] .poll-add:hover {
   gap: 9px;
 }
 .call-btn {
-  border: 1px solid #ffffff1f;
-  background: #ffffff12;
-  color: #fff;
+  border: 1px solid var(--paper)1f;
+  background: var(--paper)12;
+  color: var(--paper);
   width: 44px;
   height: 44px;
   border-radius: 50%;
@@ -2531,7 +2531,7 @@ html[data-night="1"] .poll-add:hover {
   transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease;
 }
 .call-btn svg { width: 18px; height: 18px; }
-.call-btn:hover { transform: translateY(-2px); background: #ffffff22; }
+.call-btn:hover { transform: translateY(-2px); background: var(--paper)22; }
 .call-btn:active { transform: translateY(0) scale(0.96); }
 .call-btn.off {
   background: #d95f5526;
@@ -3024,7 +3024,7 @@ mark {
   inset: 0;
   display: grid;
   place-items: center;
-  color: #fff;
+  color: var(--paper);
   background: rgba(0, 0, 0, 0.25);
   pointer-events: none;
 }
@@ -3126,7 +3126,7 @@ mark {
   border-radius: 50%;
   border: 0;
   background: rgba(0, 0, 0, 0.55);
-  color: #fff;
+  color: var(--paper);
   font-size: 20px;
   cursor: pointer;
 }
@@ -3293,7 +3293,7 @@ mark {
 .sprint-room.pro.live .sprint-beam { opacity: 1; animation: beam-slide 3s linear infinite; }
 @keyframes beam-slide { to { background-position: 200% 0; } }
 .tag.live {
-  background: var(--sage); color: #fff; border-color: var(--sage);
+  background: var(--sage); color: var(--paper); border-color: var(--sage);
   animation: tag-pulse 1.8s ease-in-out infinite;
 }
 @keyframes tag-pulse { 50% { box-shadow: 0 0 12px rgba(71, 118, 90, .55); } }
@@ -3321,7 +3321,7 @@ mark {
 .crew-avatar {
   width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
   display: grid; place-items: center;
-  background: var(--sage); color: #fff; font-weight: 800; font-size: 13px;
+  background: var(--sage); color: var(--paper); font-weight: 800; font-size: 13px;
 }
 .crew-avatar.sm { width: 24px; height: 24px; font-size: 11px; display: inline-grid; vertical-align: -7px; margin-right: 4px; }
 .crew-meta { flex: 1; min-width: 0; display: grid; gap: 4px; }
@@ -3383,7 +3383,7 @@ mark {
   color: var(--sage);
 }
 .sys-ico .sicon { width: 15px; height: 15px; }
-.bubble.me .sys-ico { color: #fff; }
+.bubble.me .sys-ico { color: var(--paper); }
 
 /* ---------- group challenges pro ---------- */
 .challenge.pro {
@@ -3494,9 +3494,9 @@ mark {
 }
 
 .friends-picker .fp-row.picked .fp-check {
-  background: linear-gradient(135deg, var(--gold, #d9a441), #e8795b);
+  background: linear-gradient(135deg, var(--gold, #d9a441), var(--coral));
   border-color: transparent;
-  color: #fff;
+  color: var(--paper);
   transform: scale(1.05);
 }
 
@@ -3557,8 +3557,8 @@ mark {
   overflow: hidden;
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, var(--gold, #d9a441), #e8795b);
-  color: #fff;
+  background: linear-gradient(135deg, var(--gold, #d9a441), var(--coral));
+  color: var(--paper);
   font-weight: 800;
   font-size: 18px;
   flex-shrink: 0;
@@ -3635,8 +3635,8 @@ mark {
   display: grid;
   place-items: center;
   border: 3px solid var(--card, #fff);
-  background: linear-gradient(135deg, var(--gold, #d9a441), #e8795b);
-  color: #fff;
+  background: linear-gradient(135deg, var(--gold, #d9a441), var(--coral));
+  color: var(--paper);
   font-weight: 800;
   font-size: 28px;
   flex-shrink: 0;
@@ -3768,7 +3768,7 @@ mark {
   background: conic-gradient(
     from 210deg,
     var(--gold, #d9a441),
-    #e8795b,
+    var(--coral),
     #c94f7c,
     #8a5cf5,
     var(--gold, #d9a441)
@@ -4001,8 +4001,8 @@ mark {
   border-radius: 11px;
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, var(--gold, #d9a441), #e8795b);
-  color: #fff;
+  background: linear-gradient(135deg, var(--gold, #d9a441), var(--coral));
+  color: var(--paper);
   flex-shrink: 0;
 }
 
@@ -4056,7 +4056,7 @@ mark {
 .conv-check.on {
   background: var(--sage);
   border-color: var(--sage);
-  color: #fff;
+  color: var(--paper);
 }
 .conv-row.select-mode {
   cursor: pointer;
@@ -4095,8 +4095,8 @@ mark {
   border-radius: 10px;
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, var(--gold, #d9a441), #e8795b);
-  color: #fff;
+  background: linear-gradient(135deg, var(--gold, #d9a441), var(--coral));
+  color: var(--paper);
 }
 .mission-invite .mi-ico .sicon {
   width: 16px;
@@ -4167,8 +4167,8 @@ mark {
   display: block;
 }
 .bubble-ava.me-ava {
-  background: color-mix(in srgb, var(--sage) 88%, #ffffff);
-  color: #fff;
+  background: color-mix(in srgb, var(--sage) 88%, var(--paper));
+  color: var(--paper);
 }
 html[data-night="1"] .bubble-ava.me-ava {
   background: color-mix(in srgb, var(--sage) 80%, #06231a);
@@ -4256,7 +4256,7 @@ html[data-night="1"] .bubble-ava.me-ava {
 .msg-check .sicon {
   width: 12px;
   height: 12px;
-  color: #fff;
+  color: var(--paper);
 }
 .msg-check.on {
   background: var(--sage);
@@ -4290,7 +4290,7 @@ html[data-night="1"] .bubble-ava.me-ava {
 .call-window.voice {
   background:
     radial-gradient(900px 420px at 50% -10%, #1a3d2e 0%, transparent 60%),
-    #0c1310;
+    var(--ink);
 }
 .call-stage.voice {
   align-items: center;
@@ -4310,7 +4310,7 @@ html[data-night="1"] .bubble-ava.me-ava {
   width: 96px;
   height: 96px;
   border-radius: 50%;
-  border: 2px solid #ffffff33;
+  border: 2px solid var(--paper)33;
 }
 .call-stage.voice .tile-avatar {
   width: 100%;
@@ -4341,8 +4341,8 @@ html[data-night="1"] .bubble-ava.me-ava {
   flex-wrap: wrap;
   gap: 6px;
   padding: 8px 14px;
-  background: #ffffff06;
-  border-bottom: 1px solid #ffffff10;
+  background: var(--paper)06;
+  border-bottom: 1px solid var(--paper)10;
   max-height: 72px;
   overflow-y: auto;
 }
@@ -4352,8 +4352,8 @@ html[data-night="1"] .bubble-ava.me-ava {
   gap: 6px;
   padding: 4px 10px;
   border-radius: 999px;
-  background: #ffffff12;
-  border: 1px solid #ffffff1c;
+  background: var(--paper)12;
+  border: 1px solid var(--paper)1c;
   font-size: 11.5px;
   font-weight: 700;
   color: #e8f5ee;
@@ -4378,8 +4378,8 @@ html[data-night="1"] .bubble-ava.me-ava {
 .roster-chip.st-ringing,
 .roster-chip.st-calling,
 .roster-chip.st-accepted {
-  border-color: #e9ae3f66;
-  background: #e9ae3f1f;
+  border-color: var(--gold)66;
+  background: var(--gold)1f;
   color: #ffe2a0;
 }
 .roster-chip.st-declined,

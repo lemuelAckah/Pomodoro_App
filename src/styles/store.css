@@ -69,7 +69,7 @@
 }
 
 .limited-tag {
-  background: #fff0ed;
+  background: color-mix(in srgb, var(--paper) 94%, transparent);
   color: #c0392b;
   margin-left: 4px;
 }
@@ -110,10 +110,10 @@
 }
 
 .box-legendary {
-  background: linear-gradient(180deg, #fff6dd, #f7e3ac);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--gold) 90%, transparent), color-mix(in srgb, var(--gold) 60%, var(--ink)));
   border-color: var(--gold);
   border-width: 2px;
-  box-shadow: 0 0 34px #e9ae3f66;
+  box-shadow: 0 0 34px var(--gold)66;
 }
 
 html[data-night="1"] .box-common {
@@ -133,7 +133,7 @@ html[data-night="1"] .box-epic {
 
 html[data-night="1"] .box-legendary {
   background: linear-gradient(180deg, #2b2314, #1d1810);
-  box-shadow: 0 0 34px #e9ae3f44;
+  box-shadow: 0 0 34px var(--gold)44;
 }
 
 .box-emoji {
@@ -160,7 +160,7 @@ html[data-night="1"] .box-legendary {
 
 .rarity-common {
   background: #eef2eb;
-  color: #47765a;
+  color: var(--sage);
 }
 
 .rarity-rare {
@@ -234,7 +234,7 @@ html[data-night="1"] .box-legendary {
 
 .mystery-stage.glow {
   background: radial-gradient(circle, #fdf3d0 0%, transparent 70%);
-  box-shadow: 0 0 44px #e9ae3f55;
+  box-shadow: 0 0 44px var(--gold)55;
 }
 
 .mystery-stage.glow .mystery-boxart {
@@ -242,7 +242,7 @@ html[data-night="1"] .box-legendary {
 }
 
 .mystery-stage.burst {
-  background: radial-gradient(circle, #fff6da 0%, transparent 72%);
+  background: radial-gradient(circle, color-mix(in srgb, var(--gold) 85%, transparent) 0%, transparent 72%);
 }
 
 .mystery-stage {
@@ -269,14 +269,14 @@ html[data-night="1"] .box-legendary {
 .freebox-modal.tier-rare,
 .freebox-modal.tier-epic {
   border: 2px solid var(--gold);
-  box-shadow: 0 0 60px #e9ae3f66;
+  box-shadow: 0 0 60px var(--gold)66;
 }
 
 .freebox-modal.tier-legendary {
   border: 2px solid var(--gold);
   box-shadow:
-    0 0 60px #e9ae3fcc,
-    0 0 140px #e9ae3f55;
+    0 0 60px var(--gold)cc,
+    0 0 140px var(--gold)55;
 }
 
 .box-open-epic .mystery-stage.glow {
@@ -284,7 +284,7 @@ html[data-night="1"] .box-legendary {
 }
 
 .box-open-legendary .mystery-stage.glow {
-  box-shadow: 0 0 80px #e9ae3faa;
+  box-shadow: 0 0 80px var(--gold)aa;
 }
 
 .box-open-legendary .mystery-stage.burst {
@@ -300,7 +300,7 @@ html[data-night="1"] .box-legendary {
 }
 
 .freebox-card.pending {
-  box-shadow: 0 0 24px #e9ae3f33;
+  box-shadow: 0 0 24px var(--gold)33;
 }
 
 .earn-grid {
@@ -403,7 +403,7 @@ html[data-night="1"] .box-legendary {
   justify-content: space-between;
   margin-top: 22px;
   background: #18352a;
-  color: #fff;
+  color: var(--paper);
   border-radius: 16px;
   padding: 15px 18px;
   box-shadow: 0 15px 35px #18352a25;
@@ -451,7 +451,7 @@ html[data-night="1"] .box-legendary {
   border-radius: 50%;
   border: 0;
   background: var(--sage);
-  color: #fff;
+  color: var(--paper);
   font-size: 16px;
   font-weight: 800;
   line-height: 1;
@@ -613,7 +613,7 @@ body.is-scrolling .store-item:focus-within {
   letter-spacing: .04em;
   text-transform: uppercase;
   background: var(--gold);
-  color: #fff;
+  color: var(--paper);
   border-radius: 999px;
   padding: 3px 10px;
 }

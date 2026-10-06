@@ -13,7 +13,7 @@
   align-items: center;
   gap: 12px;
   background: var(--ink);
-  color: #fff;
+  color: var(--paper);
   padding: 10px 12px 10px 18px;
   border-radius: 999px;
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
@@ -53,7 +53,7 @@
 
 .mini-timer .mini-btn {
   background: var(--sage);
-  color: #fff;
+  color: var(--paper);
   padding: 8px 14px;
   border-radius: 999px;
   font-weight: 700;
@@ -127,8 +127,8 @@
   display: grid;
   place-items: center;
   border-radius: 14px;
-  color: #fff;
-  background: linear-gradient(140deg, var(--sage, #47765a), #2c4f3a);
+  color: var(--paper);
+  background: linear-gradient(140deg, var(--sage, var(--sage)), color-mix(in srgb, var(--sage) 40%, var(--ink)));
   box-shadow:
     0 0 0 3px rgba(233, 174, 63, 0.35),
     0 6px 16px rgba(44, 79, 58, .4);
@@ -164,12 +164,12 @@
 }
 
 .tour-progress i.now {
-  background: linear-gradient(90deg, var(--sage, #47765a), var(--gold, #e9ae3f));
+  background: linear-gradient(90deg, var(--sage, var(--sage)), var(--gold, var(--gold)));
   transform: scaleY(1.35);
 }
 
 .tour-progress i.done {
-  background: var(--sage, #47765a);
+  background: var(--sage, var(--sage));
   opacity: .55;
 }
 
@@ -251,7 +251,7 @@
   z-index: 601;
   border-radius: 12px;
   box-shadow:
-    0 0 0 3px var(--gold, #e9ae3f),
+    0 0 0 3px var(--gold, var(--gold)),
     0 0 0 6px rgba(233, 174, 63, 0.28),
     0 0 34px rgba(233, 174, 63, 0.5) !important;
   animation: tour-glow-in .45s ease;
@@ -259,7 +259,7 @@
 
 @keyframes tour-glow-in {
   from { box-shadow: 0 0 0 3px rgba(233,174,63,0), 0 0 0 0 rgba(233,174,63,0); }
-  to { box-shadow: 0 0 0 3px var(--gold, #e9ae3f), 0 0 0 6px rgba(233, 174, 63, 0.28), 0 0 34px rgba(233, 174, 63, 0.5); }
+  to { box-shadow: 0 0 0 3px var(--gold, var(--gold)), 0 0 0 6px rgba(233, 174, 63, 0.28), 0 0 34px rgba(233, 174, 63, 0.5); }
 }
 
 /* --- Tour on phones / short windows: docked bottom sheet --- */
@@ -311,7 +311,7 @@
   align-items: center;
   gap: 12px;
   background: var(--ink);
-  color: #fff;
+  color: var(--paper);
   font-size: 13px;
   font-weight: 600;
   border-radius: 999px;
@@ -322,7 +322,7 @@
 
 #update-toast button {
   background: var(--sage);
-  color: #fff;
+  color: var(--paper);
   border-radius: 999px;
   padding: 8px 14px;
   font-size: 12px;
@@ -396,7 +396,7 @@
 .modal {
   max-width: 500px;
   width: 100%;
-  background: #fff;
+  background: var(--paper);
   border-radius: 18px;
   padding: 24px;
   box-shadow: var(--shadow);
@@ -429,8 +429,8 @@
   width: 48px;
   height: 48px;
   border-radius: 50%;
-  background: linear-gradient(135deg, var(--sage), #2c4f3a);
-  color: #fff;
+  background: linear-gradient(135deg, var(--sage), color-mix(in srgb, var(--sage) 40%, var(--ink)));
+  color: var(--paper);
   display: grid;
   place-items: center;
   margin: 0 auto 14px;
@@ -490,7 +490,7 @@
 }
 .toast {
   background: var(--ink);
-  color: #fff;
+  color: var(--paper);
   border-radius: 999px;
   padding: 9px 18px;
   font-size: 13px;

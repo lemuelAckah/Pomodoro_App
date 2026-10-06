@@ -108,7 +108,7 @@
 }
 
 .auth-tabs button.active {
-  background: #fff;
+  background: var(--paper);
   color: var(--sage);
   box-shadow: 0 3px 12px #46694c14;
 }
@@ -144,7 +144,7 @@
 .oauth {
   padding: 11px;
   border-radius: 10px;
-  background: #fff;
+  background: var(--paper);
   border: 1px solid var(--line);
   color: var(--ink);
   font-size: 12px;
@@ -222,7 +222,7 @@
   align-items: center;
   gap: 9px;
   background: #2b5542;
-  color: #fff;
+  color: var(--paper);
   border: 1px solid #3c6c54;
   border-radius: 12px;
   padding: 10px 14px;
@@ -545,7 +545,7 @@
 
 .landing-on-dusk .card h3,
 .landing-on-dusk .card h2 {
-  color: #f4f3ea;
+  color: var(--paper);
 }
 
 .landing-on-dusk .muted {
@@ -568,7 +568,7 @@
 .landing-on-dusk .brand-mark {
   background: linear-gradient(140deg, rgba(242, 240, 228, 0.16), rgba(242, 240, 228, 0.06));
   border: 1px solid rgba(242, 240, 228, 0.26);
-  color: #f4f3ea;
+  color: var(--paper);
   box-shadow: 0 8px 30px rgba(8, 14, 10, 0.35);
 }
 
@@ -749,7 +749,7 @@ html[data-night="1"] .skin-row span {
 
 .seg-row .seg.on {
   background: var(--sage);
-  color: #fff;
+  color: var(--paper);
 }
 
 .shortcut-list {
@@ -850,7 +850,7 @@ html[data-night="1"] .skin-row span {
   margin: 15px auto 18px;
   border-radius: 20px;
   background: var(--coral);
-  color: #fff;
+  color: var(--paper);
   font-size: 22px;
   font-weight: 700;
 }
@@ -960,7 +960,7 @@ html[data-night="1"] .profile-identity {
   place-items: center;
   font-size: 24px;
   background: linear-gradient(135deg, var(--sage), #2c4f3a);
-  color: #fff;
+  color: var(--paper);
   flex-shrink: 0;
 }
 .badge-medal .sicon {
@@ -974,7 +974,7 @@ html[data-night="1"] .profile-identity {
   background: linear-gradient(135deg, #7b4fd6, #3f2470);
 }
 .badge-tile.tier-legendary .badge-medal {
-  background: linear-gradient(135deg, #e9ae3f, #8a5a12);
+  background: linear-gradient(135deg, var(--gold), color-mix(in srgb, var(--gold) 40%, var(--ink)));
 }
 .badge-tile.tier-master .badge-medal {
   background: linear-gradient(135deg, #3f7d5c, #1d3a2b);
@@ -1008,7 +1008,7 @@ html[data-night="1"] .profile-identity {
   height: 22px;
   border-radius: 50%;
   background: var(--sage);
-  color: #fff;
+  color: var(--paper);
   display: grid;
   place-items: center;
 }
@@ -1197,7 +1197,7 @@ html[data-night="1"] .profile-identity {
   place-items: center;
   flex: none;
   background: linear-gradient(140deg, var(--sage), #2c4f3a);
-  color: #fff;
+  color: var(--paper);
 }
 .notification-ico .sicon {
   width: 19px;
@@ -1302,8 +1302,8 @@ html[data-night="1"] .privacy-consent.in-form:has(input:checked) {
   display: flex;
   gap: 14px;
   align-items: center;
-  background: linear-gradient(135deg, #0f2a1e, #2c4f3a);
-  color: #fff;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--sage) 25%, var(--ink) 75%), color-mix(in srgb, var(--sage) 45%, var(--ink) 55%));
+  color: var(--paper);
   border-radius: 16px;
   padding: 18px;
   margin-bottom: 16px;
@@ -1313,10 +1313,10 @@ html[data-night="1"] .privacy-consent.in-form:has(input:checked) {
   font-size: 20px;
 }
 .privacy-hero .eyebrow {
-  color: #e9ae3f;
+  color: var(--gold);
 }
 .privacy-hero .muted {
-  color: #cfe0d5;
+  color: var(--muted);
 }
 .privacy-crest {
   width: 52px;
@@ -1325,18 +1325,18 @@ html[data-night="1"] .privacy-consent.in-form:has(input:checked) {
   display: grid;
   place-items: center;
   font-size: 26px;
-  background: rgba(233, 174, 63, .16);
-  border: 2px solid #e9ae3f;
+  background: color-mix(in srgb, var(--gold) 16%, transparent);
+  border: 2px solid var(--gold);
   flex: none;
 }
 .privacy-sec {
   margin-bottom: 18px;
 }
 .privacy-sec .eyebrow.do {
-  color: #2f7d4f;
+  color: var(--sage);
 }
 .privacy-sec .eyebrow.dont {
-  color: #b3402e;
+  color: var(--coral);
 }
 .promise-grid {
   display: grid;
@@ -1401,10 +1401,10 @@ html[data-night="1"] .privacy-consent.in-form:has(input:checked) {
   flex: none;
 }
 .rule-card.do .rule-mark {
-  color: #2f7d4f;
+  color: var(--sage);
 }
 .rule-card.dont .rule-mark {
-  color: #b3402e;
+  color: var(--coral);
 }
 @media (max-width: 560px) {
   .promise-grid {
@@ -1711,7 +1711,7 @@ html[data-night="1"] .privacy-consent.in-form:has(input:checked) {
   display: grid;
   place-items: center;
   background: linear-gradient(135deg, var(--sage), #2f5a42);
-  color: #fff;
+  color: var(--paper);
   box-shadow: 0 10px 24px rgba(71, 118, 90, 0.35);
 }
 .auth-gate-crest .sicon {
@@ -1784,7 +1784,7 @@ html[data-night="1"] .auth-gate-perks {
 }
 .auth-side h3 {
   margin: 6px 0 8px;
-  color: #fff;
+  color: var(--paper);
   font-size: 21px;
   line-height: 1.25;
 }
@@ -1858,7 +1858,7 @@ html[data-night="1"] .auth-gate-perks {
 .auth-side-perks strong {
   display: block;
   font-size: 13px;
-  color: #fff;
+  color: var(--paper);
 }
 .auth-side-perks small {
   font-size: 11px;
@@ -1905,7 +1905,7 @@ html[data-night="1"] .auth-gate-perks {
   display: flex;
   align-items: center;
   gap: 10px;
-  color: #f4f3ea;
+  color: var(--paper);
 }
 
 .ln-brand strong {
@@ -1924,7 +1924,7 @@ html[data-night="1"] .auth-gate-perks {
 .ln-links button {
   background: none;
   border: 0;
-  color: rgba(238, 240, 230, 0.75);
+  color: var(--muted);
   font-size: 13px;
   font-weight: 600;
   padding: 8px 11px;
@@ -1934,13 +1934,13 @@ html[data-night="1"] .auth-gate-perks {
 }
 
 .ln-links button:hover {
-  color: #fff;
-  background: rgba(242, 240, 228, 0.1);
+  color: var(--paper);
+  background: color-mix(in srgb, var(--paper) 10%, transparent);
 }
 
 .ln-links .ln-open {
   background: var(--lime);
-  color: #18352a;
+  color: var(--ink);
   padding: 9px 16px;
   font-weight: 700;
 }
@@ -2071,7 +2071,7 @@ body.pwa-installable .landing-install .sicon {
     700 52px "Space Mono",
     monospace;
   letter-spacing: -3px;
-  color: #f4f3ea;
+  color: var(--paper);
 }
 
 .demo-label {
@@ -2176,7 +2176,7 @@ body.pwa-installable .landing-install .sicon {
   gap: 6px;
   padding: 10px 14px;
   background: rgba(242, 240, 228, 0.07);
-  border-bottom: 1px solid rgba(242, 240, 228, 0.1);
+  border-bottom: 1px solid color-mix(in srgb, var(--paper) 10%, transparent);
 }
 
 .shot-bar i {
@@ -2191,7 +2191,7 @@ body.pwa-installable .landing-install .sicon {
 }
 
 .shot-bar i:nth-child(2) {
-  background: #e9ae3f;
+  background: var(--gold);
 }
 
 .shot-bar i:nth-child(3) {
@@ -2231,7 +2231,7 @@ body.pwa-installable .landing-install .sicon {
   text-align: center;
   font-size: clamp(22px, 3vw, 30px);
   margin-bottom: 6px;
-  color: #f4f3ea;
+  color: var(--paper);
 }
 
 .landing-focus-desk .muted {
@@ -2311,7 +2311,7 @@ body.pwa-installable .landing-install .sicon {
 .landing-focus-row strong {
   display: block;
   font-size: 13.5px;
-  color: #f4f3ea;
+  color: var(--paper);
 }
 
 .landing-focus-row span {
@@ -2392,7 +2392,7 @@ body.pwa-installable .landing-install .sicon {
   text-align: center;
   font-size: clamp(22px, 3vw, 30px);
   margin-bottom: 20px;
-  color: #f4f3ea;
+  color: var(--paper);
 }
 
 /* ---- Testimonials ---- */
@@ -2432,7 +2432,7 @@ body.pwa-installable .landing-install .sicon {
 
 .landing-quote figcaption strong {
   font-size: 13px;
-  color: #f4f3ea;
+  color: var(--paper);
   display: block;
 }
 
@@ -2468,7 +2468,7 @@ body.pwa-installable .landing-install .sicon {
   padding: 13px 0;
   font-weight: 700;
   font-size: 14.5px;
-  color: #f4f3ea;
+  color: var(--paper);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2496,7 +2496,7 @@ body.pwa-installable .landing-install .sicon {
   margin: 0 0 14px;
   font-size: 13.5px;
   line-height: 1.6;
-  color: rgba(238, 240, 230, 0.75);
+  color: var(--muted);
 }
 
 /* ---- Closing CTA ---- */
@@ -2540,7 +2540,7 @@ body.pwa-installable .landing-install .sicon {
   display: flex;
   align-items: center;
   gap: 9px;
-  color: #f4f3ea;
+  color: var(--paper);
 }
 
 .lf-brand strong {
@@ -2573,7 +2573,7 @@ body.pwa-installable .landing-install .sicon {
 }
 
 .lf-links button:hover {
-  color: #fff;
+  color: var(--paper);
   background: rgba(242, 240, 228, 0.08);
 }
 
@@ -2635,7 +2635,7 @@ body.pwa-installable .landing-install .sicon {
 }
 
 .landing-nav.stuck {
-  background: color-mix(in srgb, #0c1310 94%, transparent);
+  background: color-mix(in srgb, var(--ink) 94%, transparent);
   box-shadow: 0 16px 34px rgba(5, 10, 7, 0.4);
 }
 
@@ -2754,7 +2754,7 @@ body.pwa-installable .landing-install .sicon {
 .shot-tab {
   background: rgba(242, 240, 228, 0.07);
   border: 1px solid rgba(242, 240, 228, 0.14);
-  color: rgba(238, 240, 230, 0.75);
+  color: var(--muted);
   font-size: 12.5px;
   font-weight: 600;
   padding: 8px 16px;
@@ -2764,7 +2764,7 @@ body.pwa-installable .landing-install .sicon {
 }
 
 .shot-tab:hover {
-  color: #fff;
+  color: var(--paper);
   border-color: rgba(184, 215, 124, 0.5);
   transform: translateY(-1px);
 }
@@ -2772,7 +2772,7 @@ body.pwa-installable .landing-install .sicon {
 .shot-tab.is-active {
   background: var(--lime);
   border-color: var(--lime);
-  color: #18352a;
+  color: var(--ink);
   font-weight: 700;
 }
 
@@ -2835,11 +2835,11 @@ body.pwa-installable .landing-install .sicon {
   border-radius: 16px;
   font-size: clamp(12px, 1.6vw, 14px);
   line-height: 1.45;
-  color: #f4f3ea;
+  color: var(--paper);
 }
 
 .mk-bubble.them {
-  background: rgba(242, 240, 228, 0.1);
+  background: color-mix(in srgb, var(--paper) 10%, transparent);
   border: 1px solid rgba(242, 240, 228, 0.14);
   justify-self: start;
   border-bottom-left-radius: 6px;
@@ -2883,8 +2883,8 @@ body.pwa-installable .landing-install .sicon {
   border-radius: 50%;
   display: grid;
   place-items: center;
-  background: rgba(242, 240, 228, 0.1);
-  color: #f4f3ea;
+  background: color-mix(in srgb, var(--paper) 10%, transparent);
+  color: var(--paper);
   font: 700 10px "Space Mono", monospace;
   flex: none;
 }
@@ -3011,7 +3011,7 @@ body.pwa-installable .landing-install .sicon {
 
 .mk-note {
   font: 600 clamp(11px, 1.5vw, 13px) "Space Mono", monospace;
-  color: rgba(238, 240, 230, 0.75);
+  color: var(--muted);
   margin: 0;
 }
 
@@ -3024,7 +3024,7 @@ body.pwa-installable .landing-install .sicon {
 
 .landing-includes h2 {
   font-size: clamp(22px, 3vw, 30px);
-  color: #f4f3ea;
+  color: var(--paper);
   margin-bottom: 8px;
 }
 
@@ -3123,7 +3123,7 @@ body.pwa-installable .landing-install .sicon {
 
 .landing-invite h2 {
   margin: 0 0 8px;
-  color: #f4f3ea;
+  color: var(--paper);
   font-size: clamp(20px, 2.6vw, 26px);
 }
 

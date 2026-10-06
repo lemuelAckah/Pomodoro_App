@@ -353,7 +353,7 @@ article.card:hover .deck-list-del,
 }
 
 .tech-day-tag {
-  background: #e9ae3f22;
+  background: var(--gold)22;
   color: #aa710d;
 }
 

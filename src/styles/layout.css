@@ -14,7 +14,7 @@
     margin: 18px 0;
     border: 1px solid #efd69a;
     border-radius: 13px;
-    background: #fff8e6;
+    background: color-mix(in srgb, var(--paper) 96%, transparent);
     color: #8a650e;
     font-size: 12px;
   }
@@ -26,10 +26,10 @@
     justify-self: start;
     padding: 8px 10px;
     color: #8a650e;
-    background: #fff0c7;
+    background: color-mix(in srgb, var(--gold) 80%, transparent);
     font-size: 11px;
   }
-  background: #18352a;
+  background: var(--ink);
   color: #eaf3e9;
   padding: 28px 18px;
   display: flex;
@@ -52,7 +52,7 @@
   height: 38px;
   border-radius: 13px;
   background: var(--lime);
-  color: #18352a;
+  color: var(--ink);
   display: grid;
   place-items: center;
   font-size: 21px;
@@ -86,7 +86,7 @@
 .nav button:hover,
 .nav button.active {
   background: #2b5542;
-  color: #fff;
+  color: var(--paper);
 }
 
 .nav button.active {
@@ -144,7 +144,7 @@
   width: 38px;
   height: 38px;
   border-radius: 50%;
-  background: #fff;
+  background: var(--paper);
   color: var(--sage);
   border: 1px solid var(--line);
   font-size: 20px;
@@ -168,14 +168,14 @@
   padding: 0 2px;
   border-radius: 99px;
   background: var(--coral);
-  color: #fff;
+  color: var(--paper);
   font:
     700 8px "Space Mono",
     monospace;
 }
 
 .coins {
-  background: #fff6dd;
+  background: color-mix(in srgb, var(--gold) 90%, transparent);
   color: #a76c06;
   border: 1px solid #f1d894;
   padding: 10px 14px;
@@ -203,7 +203,7 @@ button.coins:hover {
   height: 38px;
   border-radius: 50%;
   background: var(--coral);
-  color: #fff;
+  color: var(--paper);
   display: grid;
   place-items: center;
   font-weight: 700;
@@ -332,7 +332,7 @@ button.coins:hover {
   }
   .nav button.active {
     background: var(--lime);
-    color: #18352a;
+    color: var(--ink);
     border-color: var(--lime);
     font-weight: 700;
   }

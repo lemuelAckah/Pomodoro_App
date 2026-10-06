@@ -3268,6 +3268,10 @@ function applyEquippedTheme() {
 
   try {
     root.style.setProperty("--on-accent", onAccentText(sageHex.trim()))
+    // --accent is the primary brand/accent color (alias of --sage so the whole
+    // design system follows the theme). --accent-contrast is readable text on it.
+    root.style.setProperty("--accent", sageHex.trim())
+    root.style.setProperty("--accent-contrast", onAccentText(sageHex.trim()))
   } catch {
     /* ignore */
   }

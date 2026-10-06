@@ -8,7 +8,7 @@
   border-radius: 9px;
   border: 2px solid var(--line);
   background: var(--panel, #fff);
-  color: #fff;
+  color: var(--paper);
   transition:
     background-color 0.18s ease,
     border-color 0.18s ease,
@@ -29,9 +29,9 @@
   inset: 0;
   z-index: 0;
   background:
-    radial-gradient(600px 420px at 12% 8%, #47765a26, transparent 70%),
-    radial-gradient(560px 420px at 88% 18%, #e9ae3f2b, transparent 70%),
-    radial-gradient(700px 520px at 50% 110%, #e8795b22, transparent 70%),
+    radial-gradient(600px 420px at 12% 8%, var(--sage)26, transparent 70%),
+    radial-gradient(560px 420px at 88% 18%, var(--gold)2b, transparent 70%),
+    radial-gradient(700px 520px at 50% 110%, var(--coral)22, transparent 70%),
     var(--paper);
   pointer-events: none;
 }
@@ -40,7 +40,7 @@
   content: "";
   position: absolute;
   inset: 0;
-  background-image: radial-gradient(#47765a2e 1.2px, transparent 1.3px);
+  background-image: radial-gradient(var(--sage)2e 1.2px, transparent 1.3px);
   background-size: 26px 26px;
   mask-image: radial-gradient(85% 70% at 50% 28%, #000 30%, transparent 100%);
   -webkit-mask-image: radial-gradient(85% 70% at 50% 28%, #000 30%, transparent 100%);
@@ -180,7 +180,7 @@
   flex: none;
   border-radius: 50%;
   background: var(--sage);
-  color: #fff;
+  color: var(--paper);
   place-items: center;
 }
 
@@ -373,7 +373,7 @@
 .tc-dusk .dusk-dot.a {
   top: 10%;
   right: 16%;
-  background: var(--coral, #e8795b);
+  background: var(--coral, var(--coral));
 }
 
 .tc-dusk .dusk-dot.b {
@@ -381,7 +381,7 @@
   left: 12%;
   width: 10px;
   height: 10px;
-  background: var(--gold, #e9ae3f);
+  background: var(--gold, var(--gold));
 }
 
 .tc-dusk .dusk-echo {

@@ -38,7 +38,7 @@
   font-family: "Fraunces", serif;
   font-weight: 700;
   font-size: 44px;
-  color: #fff;
+  color: var(--paper);
   background: linear-gradient(135deg, var(--sage), #2c4f3a);
 }
 .book-progressbar {
@@ -150,7 +150,7 @@
   --read-mark: rgba(233, 174, 63, 0.3);
 }
 .reader-light {
-  --read-bg: #fffdf6;
+  --read-bg: color-mix(in srgb, var(--paper) 94%, transparent);
   --read-ink: #2a2620;
   --read-muted: #7c766a;
   --read-mark: rgba(233, 174, 63, 0.4);
@@ -386,7 +386,7 @@ html[data-night="1"] .reader:not(.reader-light):not(.reader-sepia) {
   height: min(58vh, 600px);
   border: 0;
   border-radius: 8px;
-  background: #fff;
+  background: var(--paper);
 }
 /* ---------- Ink tray (selection popover) ---------- */
 .reader-selectbar {
@@ -835,7 +835,7 @@ span.ink-ring.ink-purple { color: rgba(104, 76, 184, 0.95); }
   border-radius: 50%;
   display: grid;
   place-items: center;
-  color: #fff;
+  color: var(--paper);
   background: linear-gradient(135deg, var(--sage), #2c4f3a);
   box-shadow: 0 6px 16px rgba(44, 79, 58, 0.28);
 }
@@ -926,7 +926,7 @@ html[data-night="1"] .book-dz-picked {
   flex: none;
   display: grid;
   place-items: center;
-  color: #fff;
+  color: var(--paper);
   background: linear-gradient(140deg, var(--sage), #2c4f3a 60%, #c98a1f 130%);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .25);
   overflow: hidden;
@@ -963,7 +963,7 @@ html[data-night="1"] .book-dz-picked {
   flex: none;
   font-size: 12px;
   font-weight: 800;
-  color: #fff;
+  color: var(--paper);
   background: linear-gradient(140deg, var(--sage), #2c4f3a);
   border-radius: 999px;
   padding: 8px 16px;
