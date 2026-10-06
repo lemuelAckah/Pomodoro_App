@@ -2102,22 +2102,25 @@ function bindDataZone(root) {
 }
 
 function bindInstallApp(root) {
-  $(root).querySelector("[data-install-app]")?.addEventListener("click", () => {
+  const btn = root.querySelector("[data-install-app]")
+  if (!btn) return
+  btn.addEventListener("click", () => {
     if (window.__sfInstallState && window.__sfInstallState.ios && window.__sfInstallState.hint) {
       const hint = window.__sfInstallState.hint
-      const msg = [
-        hint.label + ":",
-        ...hint.instructions.map((s) => "• " + s),
-      ].join("\n")
-      alert(msg)
-      return
+      if (hint && hint.instructions) {
+        const msg = [
+          hint.label + ":",
+          ...hint.instructions.map((s) => "• " + s),
+        ].join("\n")
+        alert(msg)
+        return
+      }
     }
     if (window.sfInstall) window.sfInstall()
   })
 }
 
 function bindSettings(root) {
-  bindInstallApp(root)
   bindDataZone(root)
 
   bindPwToggles(root)

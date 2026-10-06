@@ -2148,6 +2148,26 @@ body.pwa-installable .landing-install .sicon {
   border: 1px solid rgba(242, 240, 228, 0.16);
   box-shadow: 0 30px 80px rgba(5, 10, 7, 0.5);
   background: #0e1611;
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+
+.shot-panel:not(.is-active) {
+  opacity: 0;
+  transform: scale(0.97);
+  position: absolute;
+  inset: 0;
+}
+
+.shot-panel.is-active {
+  opacity: 1;
+  transform: scale(1);
+  position: relative;
+  animation: shot-in 0.45s ease;
+}
+
+.shot-stage {
+  position: relative;
+  min-height: 200px;
 }
 
 .shot-bar {
@@ -2193,6 +2213,7 @@ body.pwa-installable .landing-install .sicon {
   display: block;
   width: 100%;
   height: auto;
+  object-fit: cover;
 }
 
 .landing-showcase figcaption {
@@ -2298,52 +2319,14 @@ body.pwa-installable .landing-install .sicon {
   color: rgba(238, 240, 230, 0.66);
 }
 
-.landing-focus-timer {
-  margin-top: 18px;
-  padding: 18px;
-  border-radius: 18px;
-  background: rgba(184, 215, 124, 0.08);
-  border: 1px solid rgba(184, 215, 124, 0.3);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
+.landing-focus-cta {
+  margin-top: 20px;
   text-align: center;
 }
 
-.landing-focus-timer .demo-ring {
-  width: min(200px, 62vw);
-  margin: 0;
-}
-
-.landing-focus-timer .demo-time {
-  font-size: 38px;
-  letter-spacing: -2px;
-}
-
-.landing-focus-timer .demo-label {
-  font-size: 10px;
-}
-
-.landing-focus-timer .demo-actions {
-  gap: 8px;
-  margin-top: 0;
-}
-
-.landing-focus-timer .demo-actions .primary {
-  padding: 10px 18px;
-  font-size: 13px;
-}
-
-.landing-focus-timer .demo-actions .icon-btn {
-  width: 38px;
-  height: 38px;
-}
-
-.landing-focus-timer .demo-hint {
-  font-size: 11px;
-  margin: 0;
-  padding: 0 4px;
+.landing-focus-cta .primary {
+  padding: 12px 24px;
+  font-size: 14px;
 }
 
 /* ---- Install app chip (landing hero) ---- */
@@ -3288,7 +3271,131 @@ body.pwa-installable .landing-install .sicon {
   }
 }
 
+@media (max-width: 720px) {
+  .landing-invite {
+    grid-template-columns: 1fr;
+  }
+
+  .li-art {
+    justify-self: center;
+  }
+}
+
 @media (max-width: 560px) {
+  .landing {
+    padding: 0 12px 40px;
+  }
+
+  .landing-hero {
+    padding: 20px 0 18px;
+  }
+
+  .landing-mark {
+    width: 48px;
+    height: 48px;
+    font-size: 22px;
+  }
+
+  .landing-hero h1 {
+    font-size: 28px;
+  }
+
+  .landing-hero .lede {
+    font-size: 14px;
+  }
+
+  .landing-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .landing-actions .primary,
+  .landing-actions .ghost {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .landing-demo {
+    margin: 10px 0 4px;
+  }
+
+  .demo-card {
+    padding: 18px 14px 14px;
+  }
+
+  .demo-ring {
+    width: min(180px, 50vw);
+  }
+
+  .demo-time {
+    font-size: 36px;
+  }
+
+  .landing-stats {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+
+  .ls-item {
+    padding: 12px 10px;
+  }
+
+  .ls-item b {
+    font-size: 20px;
+  }
+
+  .ls-item span {
+    font-size: 10.5px;
+  }
+
+  .landing-showcase {
+    margin: 20px 0 4px;
+  }
+
+  .shot-tabs {
+    gap: 6px;
+  }
+
+  .shot-tab {
+    font-size: 11px;
+    padding: 6px 12px;
+  }
+
+  .shot-stage {
+    min-height: 180px;
+  }
+
+  .landing-focus-desk {
+    margin-top: 24px;
+  }
+
+  .landing-focus-grid {
+    gap: 10px;
+  }
+
+  .landing-focus-card {
+    padding: 14px;
+  }
+
+  .landing-focus-card .emoji {
+    font-size: 22px;
+  }
+
+  .landing-focus-card h3 {
+    font-size: 14px;
+  }
+
+  .landing-focus-card .muted {
+    font-size: 12px;
+  }
+
+  .landing-focus-cta .primary {
+    width: 100%;
+    justify-content: center;
+    padding: 11px 18px;
+    font-size: 13px;
+  }
+
   .li-actions .primary {
     width: 100%;
     justify-content: center;
@@ -3303,8 +3410,53 @@ body.pwa-installable .landing-install .sicon {
   }
 
   .inc-grid li {
-    font-size: 13px;
-    padding: 12px 14px;
+    font-size: 12px;
+    padding: 10px 12px;
+  }
+
+  .landing-cta {
+    padding: 18px 16px;
+  }
+
+  .landing-cta h2 {
+    font-size: 20px;
+  }
+
+  .landing-cta .primary {
+    width: 100%;
+    text-align: center;
+  }
+
+  .landing-foot {
+    padding: 16px 0 4px;
+    font-size: 11px;
+  }
+
+  .lf-brand strong {
+    font-size: 15px;
+  }
+
+  .lf-links button {
+    font-size: 11px;
+    padding: 5px 7px;
+  }
+}
+
+@media (max-width: 380px) {
+  .landing-hero h1 {
+    font-size: 24px;
+  }
+
+  .demo-ring {
+    width: min(150px, 45vw);
+  }
+
+  .demo-time {
+    font-size: 30px;
+  }
+
+  .landing-stats {
+    grid-template-columns: 1fr 1fr;
   }
 }
 
@@ -3317,5 +3469,9 @@ body.pwa-installable .landing-install .sicon {
   .li-ava,
   .live-dot {
     animation: none;
+  }
+
+  .shot-panel {
+    transition: none;
   }
 }

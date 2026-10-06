@@ -167,22 +167,8 @@ function landingMarkup() {
       <p class="muted">Installs as an app and keeps the shell and your data on-device, so a dropped link never stops a session.</p>
     </div>
   </div>
-  <div class="landing-focus-timer card">
-    <div class="demo-head">
-      <span class="eyebrow">Live demo — no signup</span>
-      <button type="button" class="ghost demo-sprint" data-demo-sprint>Try a 30s sprint</button>
-    </div>
-    <div class="demo-ring" data-demo-ring style="--p:0deg">
-      <div>
-        <div class="demo-time" data-demo-time>25:00</div>
-        <div class="demo-label" data-demo-label>Focus</div>
-      </div>
-    </div>
-    <div class="demo-actions">
-      <button type="button" class="icon-btn" data-demo-reset title="Reset">↻</button>
-      <button type="button" class="primary" data-demo-toggle>Start session</button>
-    </div>
-    <p class="muted demo-hint">This is the real timer — the same ring, focus sounds and streaks waiting inside.</p>
+  <div class="landing-focus-cta">
+    <button type="button" class="primary" data-scroll="#landing-demo">Try the live demo timer →</button>
   </div>
 </section>
 
@@ -259,8 +245,11 @@ function runStatCount(section) {
 
 function wireReveal(root) {
   if (!("IntersectionObserver" in window) || state.reduceMotion) return
+  // The showcase already has its own tab-switching animation — skip it so the
+  // product screenshot is visible immediately on mobile (the parent .rv opacity
+  // would otherwise hide it until the section scrolls into view).
   const targets = $$(
-    ".landing > section, #landing-feats > .card, .landing-how-card, .landing-quote, .landing-cta",
+    ".landing > section:not([data-showcase]), #landing-feats > .card, .landing-how-card, .landing-quote, .landing-cta",
     root,
   )
   if (!targets.length) return
