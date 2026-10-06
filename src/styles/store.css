@@ -261,7 +261,7 @@ html[data-night="1"] .box-legendary {
   position: absolute;
   inset: 0;
   border-radius: 14px;
-  background: radial-gradient(circle, #ffffff 0%, transparent 70%);
+  background: radial-gradient(circle, var(--paper) 0%, transparent 70%);
   animation: free-flash 0.6s ease-out;
   pointer-events: none;
 }
@@ -288,7 +288,7 @@ html[data-night="1"] .box-legendary {
 }
 
 .box-open-legendary .mystery-stage.burst {
-  background: radial-gradient(circle, #fff3cf 0%, transparent 75%);
+  background: radial-gradient(circle, color-mix(in srgb, var(--gold) 92%, transparent) 0%, transparent 75%);
 }
 
 .freebox-badge {
@@ -402,11 +402,11 @@ html[data-night="1"] .box-legendary {
   align-items: center;
   justify-content: space-between;
   margin-top: 22px;
-  background: #18352a;
+  background: var(--ink);
   color: var(--paper);
   border-radius: 16px;
   padding: 15px 18px;
-  box-shadow: 0 15px 35px #18352a25;
+  box-shadow: 0 15px 35px var(--ink)25;
 }
 
 /* Hovering a card lifts it above neighbouring cards (for the info tooltip),
