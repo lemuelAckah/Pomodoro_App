@@ -458,3 +458,49 @@ button.coins:hover {
     bottom: 44px;
   }
 }
+
+/* --- Night / dark-skin sidebar: --ink flips light in those modes, which
+   would invert the sidebar to cream. Pin it to a deep surface and restore
+   label contrast on pills that assumed a dark sidebar. --- */
+html[data-night="1"] .sidebar,
+[data-theme="midnight"] .sidebar,
+[data-theme="neon"] .sidebar {
+  background: #10161f;
+}
+
+html[data-night="1"] .brand-mark,
+[data-theme="midnight"] .brand-mark,
+[data-theme="neon"] .brand-mark {
+  color: #17221d;
+}
+
+html[data-night="1"] .nav button:hover,
+html[data-night="1"] .nav button.active,
+[data-theme="midnight"] .nav button:hover,
+[data-theme="midnight"] .nav button.active,
+[data-theme="neon"] .nav button:hover,
+[data-theme="neon"] .nav button.active {
+  color: #f2f0e4;
+}
+
+@media (max-width: 900px) {
+  html[data-night="1"] .nav button.active,
+  [data-theme="midnight"] .nav button.active,
+  [data-theme="neon"] .nav button.active {
+    color: #17221d;
+  }
+}
+
+html[data-night="1"] .sidebar .verification-banner,
+[data-theme="midnight"] .sidebar .verification-banner,
+[data-theme="neon"] .sidebar .verification-banner {
+  background: rgba(233, 174, 63, 0.1);
+  border-color: rgba(233, 174, 63, 0.4);
+  color: #f2d9a0;
+}
+
+html[data-night="1"] .sidebar .verification-banner span,
+[data-theme="midnight"] .sidebar .verification-banner span,
+[data-theme="neon"] .sidebar .verification-banner span {
+  color: #cbb98d;
+}

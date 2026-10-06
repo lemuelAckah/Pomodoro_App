@@ -272,7 +272,7 @@ article.card:hover .deck-list-del,
 
 .quiz-opt {
   text-align: left;
-  background: #f6f7f2;
+  background: var(--paper);
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 13px 15px;

@@ -92,7 +92,7 @@
   <link rel="icon" type="image/png" href="/icon-512.png" sizes="512x512" />
   <link rel="apple-touch-icon" href="/icon-192.png" />
   <link rel="manifest" href="/manifest.webmanifest" />
-  <script>try{if(localStorage.getItem("sf-night")==="true"){document.documentElement.setAttribute("data-night","1");}}catch(e){}</script>
+  <script>try{var k=localStorage.getItem("sf-night");var e=localStorage.getItem("sf-entered")==="true";if(e&&(k==="true"||(k===null&&matchMedia("(prefers-color-scheme: dark)").matches))){document.documentElement.setAttribute("data-night","1");}}catch(e){}</script>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 

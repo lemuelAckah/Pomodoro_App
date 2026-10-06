@@ -357,3 +357,29 @@ html[data-night="1"] .reply-quote {
 html[data-night="1"] ::-webkit-scrollbar-thumb {
   background: var(--line);
 }
+
+/* ---- Night polish: focus rings, selection, canvas depth ---- */
+html[data-night="1"] :focus-visible {
+  outline-color: var(--lime);
+}
+
+html[data-night="1"] ::selection {
+  background: color-mix(in srgb, var(--lime) 36%, transparent);
+}
+
+html[data-night="1"] body,
+[data-theme="midnight"] body,
+[data-theme="neon"] body {
+  background:
+    radial-gradient(
+      1000px 700px at 88% -10%,
+      rgba(71, 118, 90, 0.17),
+      transparent 62%
+    ),
+    radial-gradient(
+      860px 640px at -10% 110%,
+      rgba(124, 138, 255, 0.13),
+      transparent 58%
+    ),
+    var(--paper);
+}

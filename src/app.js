@@ -930,9 +930,15 @@ function isSupportedBrowser() {
 
 function isInstalled() {
   // display-mode tells us whether the app is already running standalone.
-  if (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)
+  if (
+    window.matchMedia &&
+    window.matchMedia("(display-mode: standalone)").matches
+  )
     return true
-  if (window.matchMedia && window.matchMedia("(display-mode: window-controls-overlay)").matches)
+  if (
+    window.matchMedia &&
+    window.matchMedia("(display-mode: window-controls-overlay)").matches
+  )
     return true
   // iOS fallback: navigator.standalone is true after "Add to Home Screen".
   if (navigator.standalone) return true
@@ -981,23 +987,27 @@ window.addEventListener("SFInstalled", () => {
   window.dispatchEvent(new CustomEvent("sf-install:installed"))
 })
 
-window.sfInstall = (() => {
+window.sfInstall = () => {
   const prompt = window.__sfInstallPrompt
   if (!prompt) return
-  prompt.prompt().then((choice) => {
-    if (choice && choice.outcome === "accepted") {
-      window.__sfInstallState.installed = true
-      window.__sfInstallState.offered = false
-      document.body.classList.remove("pwa-installable")
-      document.body.classList.add("pwa-installed")
-      window.dispatchEvent(new CustomEvent("sf-install:installed"))
-      if (window.sfInstallDismissed === "dismissed") window.sfInstallDismissed = null
-    } else if (choice && choice.outcome === "dismissed") {
-      window.sfInstallDismissed = "dismissed"
-      window.dispatchEvent(new CustomEvent("sf-install:dismissed"))
-    }
-  }).catch(() => {})
-})
+  prompt
+    .prompt()
+    .then((choice) => {
+      if (choice && choice.outcome === "accepted") {
+        window.__sfInstallState.installed = true
+        window.__sfInstallState.offered = false
+        document.body.classList.remove("pwa-installable")
+        document.body.classList.add("pwa-installed")
+        window.dispatchEvent(new CustomEvent("sf-install:installed"))
+        if (window.sfInstallDismissed === "dismissed")
+          window.sfInstallDismissed = null
+      } else if (choice && choice.outcome === "dismissed") {
+        window.sfInstallDismissed = "dismissed"
+        window.dispatchEvent(new CustomEvent("sf-install:dismissed"))
+      }
+    })
+    .catch(() => {})
+}
 
 /**
  * Public API used by the landing page and Settings install card.
@@ -1021,7 +1031,6 @@ export function sfInstallNow() {
   if (navigator.standalone || isInstalled()) return
   if (window.sfInstall) window.sfInstall()
 }
-
 
 function showUpdateToast(reg) {
   if ($("#update-toast")) return

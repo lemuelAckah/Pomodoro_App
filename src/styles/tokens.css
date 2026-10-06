@@ -13,6 +13,7 @@
   --gold: #e9ae3f;
   --shadow: 0 18px 50px rgba(45, 67, 48, 0.08);
   --faint: #eef2eb;
+  --card: var(--panel);
 }
 
 html[data-night="1"] {
@@ -32,18 +33,31 @@ html[data-night="1"] {
   height: 32px;
   border-radius: 99px;
   border: 1px solid var(--line);
-  background: var(--panel);
+  background: linear-gradient(
+    100deg,
+    color-mix(in srgb, var(--gold) 34%, var(--panel)),
+    color-mix(in srgb, var(--sage) 20%, var(--panel))
+  );
   position: relative;
   cursor: pointer;
   flex: none;
   padding: 0;
   -webkit-tap-highlight-color: transparent;
+  transition:
+    border-color 0.3s ease,
+    background 0.34s ease;
+}
+
+.theme-toggle.night {
+  background: linear-gradient(100deg, #1e2740, #131a2e);
+  border-color: rgba(124, 138, 255, 0.4);
 }
 
 .tt-icons {
   position: absolute;
   inset: 0;
   display: flex;
+  flex-direction: row-reverse;
   align-items: center;
   justify-content: space-between;
   padding: 0 8px;
@@ -53,14 +67,23 @@ html[data-night="1"] {
 .tt-icons .sicon {
   width: 15px;
   height: 15px;
+  opacity: 0.5;
+  transition:
+    transform 0.3s ease,
+    color 0.3s ease,
+    opacity 0.3s ease;
 }
 
 .theme-toggle:not(.night) .tt-icons .sicon:first-child {
   color: var(--gold);
+  opacity: 1;
+  transform: scale(1.18);
 }
 
 .theme-toggle.night .tt-icons .sicon:last-child {
-  color: var(--gold);
+  color: #cfd9ff;
+  opacity: 1;
+  transform: scale(1.18);
 }
 
 .tt-thumb {
@@ -70,13 +93,32 @@ html[data-night="1"] {
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  background: var(--sage);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
-  transition: left 0.25s ease, background-color 0.25s ease;
+  background: radial-gradient(circle at 34% 30%, #ffe9b8, var(--gold) 72%);
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.25),
+    0 0 14px color-mix(in srgb, var(--gold) 55%, transparent);
+  transition:
+    left 0.34s cubic-bezier(0.5, 1.45, 0.5, 1),
+    background 0.3s ease,
+    box-shadow 0.3s ease,
+    transform 0.18s ease;
 }
 
 .theme-toggle.night .tt-thumb {
   left: 33px;
+  background: radial-gradient(circle at 64% 34%, #f6f9ff, #ccd6ef 78%);
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.35),
+    0 0 14px rgba(205, 217, 255, 0.4),
+    inset -5px -4px 0 rgba(146, 161, 199, 0.55);
+}
+
+.theme-toggle:hover .tt-thumb {
+  transform: scale(1.06);
+}
+
+.theme-toggle:active .tt-thumb {
+  transform: scale(0.92);
 }
 
 .theme-toggle:focus-visible {
@@ -89,4 +131,59 @@ html[data-night="1"] {
 [data-motion="reduced"] *::after {
   animation: none !important;
   transition: none !important;
+}
+
+/* ---- Global surface details ---- */
+::selection {
+  background: color-mix(in srgb, var(--gold) 45%, transparent);
+  color: var(--ink);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 55%, transparent) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 50%, transparent);
+  background-clip: padding-box;
+  border: 2.5px solid transparent;
+  border-radius: 99px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--muted) 85%, transparent);
+  background-clip: padding-box;
+}
+
+/* ---- Theme flip: View Transitions (JS-gated) + class-driven fallback ---- */
+::view-transition-old(root) {
+  animation-duration: 0.24s;
+  animation-timing-function: cubic-bezier(0.4, 0, 1, 1);
+}
+
+::view-transition-new(root) {
+  animation-duration: 0.38s;
+  animation-timing-function: cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+html.theme-anim *:not(.tt-thumb),
+html.theme-anim *:not(.tt-thumb)::before,
+html.theme-anim *:not(.tt-thumb)::after {
+  transition:
+    background-color 0.34s ease,
+    border-color 0.34s ease,
+    color 0.34s ease,
+    box-shadow 0.34s ease,
+    fill 0.34s ease,
+    stroke 0.34s ease !important;
 }

@@ -26,7 +26,7 @@ import {
   hydrateCloudState,
   openWhatsNew,
   setCloudSubscription,
-  toggleNight,
+  setNightMode,
   requireAuth,
   archiveStateForSignOut,
   restoreArchivedState,
@@ -793,7 +793,11 @@ function installCardMarkup() {
     hint: null,
   }
 
-  const isInstalled = st.installed || navigator.standalone || window.matchMedia?.("(display-mode: standalone)").matches || window.matchMedia?.("(display-mode: window-controls-overlay)").matches
+  const isInstalled =
+    st.installed ||
+    navigator.standalone ||
+    window.matchMedia?.("(display-mode: standalone)").matches ||
+    window.matchMedia?.("(display-mode: window-controls-overlay)").matches
 
   const installedLabel = isInstalled
     ? "Installed"
@@ -811,7 +815,19 @@ function installCardMarkup() {
         ? "Chrome, Edge and other supported browsers can install StudyFlow as an app."
         : "This browser doesn’t support app installation — use a supported browser to install."
 
-  return `<div class="card" style="margin-top:18px"><div class="section-row"><h2>Install app</h2><span class="tag">${installedLabel}</span></div><p class="muted">${installedHint}</p><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button type="button" class="primary" data-install-app ${isInstalled ? "disabled" : ""}>${st.ios ? sicon("download") : sicon("download")} ${st.ios ? "Add to Home Screen" : st.offered ? "Install app" : "Install app"}</button></div>${st.ios && st.hint ? `<p class="muted" style="font-size:11px;margin-top:10px"><b>On iPhone or iPad:</b><br>• Tap the Share button in the browser bar<br>• Scroll and tap “Add to Home Screen”<br>• Confirm, then open StudyFlow from your home screen</p>` : ""}${!st.supported ? `<p class="muted" style="font-size:11px;margin-top:10px">Your browser doesn’t currently support installing web apps. Try Chrome or Edge on desktop, or Safari on iPhone/iPad (Add to Home Screen).</p>` : ""}</div>`
+  return `<div class="card" style="margin-top:18px"><div class="section-row"><h2>Install app</h2><span class="tag">${installedLabel}</span></div><p class="muted">${installedHint}</p><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button type="button" class="primary" data-install-app ${
+    isInstalled ? "disabled" : ""
+  }>${st.ios ? sicon("download") : sicon("download")} ${
+    st.ios ? "Add to Home Screen" : st.offered ? "Install app" : "Install app"
+  }</button></div>${
+    st.ios && st.hint
+      ? `<p class="muted" style="font-size:11px;margin-top:10px"><b>On iPhone or iPad:</b><br>• Tap the Share button in the browser bar<br>• Scroll and tap “Add to Home Screen”<br>• Confirm, then open StudyFlow from your home screen</p>`
+      : ""
+  }${
+    !st.supported
+      ? `<p class="muted" style="font-size:11px;margin-top:10px">Your browser doesn’t currently support installing web apps. Try Chrome or Edge on desktop, or Safari on iPhone/iPad (Add to Home Screen).</p>`
+      : ""
+  }</div>`
 }
 
 function dataMarkup() {
@@ -1111,6 +1127,8 @@ function renderLanding() {
   mountLanding(root, {
     onEnter: () => {
       state.entered = true
+
+      applyEquippedTheme()
 
       persist()
 
@@ -1984,13 +2002,17 @@ function shortcutsCard() {
 }
 
 function appearanceCard() {
-  return `<div class="card"><div class="section-row"><h2>Appearance</h2><span class="tag">${
-    state.night ? "night" : "day"
-  }</span></div><p class="muted">Switch the whole app between Day and Night mode. Your choice saves instantly and follows your account.</p><div class="seg-row" role="group" aria-label="Color mode"><button type="button" class="seg${
-    !state.night ? " on" : ""
-  }" data-mode-set="day">Day</button><button type="button" class="seg${
-    state.night ? " on" : ""
-  }" data-mode-set="night">Night</button></div></div>`
+  const mode = state.nightAuto ? "auto" : state.night ? "night" : "day"
+
+  const seg = (id, label) =>
+    `<button type="button" class="seg${
+      mode === id ? " on" : ""
+    }" data-mode-set="${id}">${label}</button>`
+
+  return `<div class="card"><div class="section-row"><h2>Appearance</h2><span class="tag">${mode}</span></div><p class="muted">Pick Day, Night, or Auto — Auto follows your device's light and dark setting. Your choice saves instantly.</p><div class="seg-row" role="group" aria-label="Color mode">${seg("auto", "Auto")}${seg(
+    "day",
+    "Day",
+  )}${seg("night", "Night")}</div></div>`
 }
 
 function techCheckCard() {
@@ -2105,7 +2127,11 @@ function bindInstallApp(root) {
   const btn = root.querySelector("[data-install-app]")
   if (!btn) return
   btn.addEventListener("click", () => {
-    if (window.__sfInstallState && window.__sfInstallState.ios && window.__sfInstallState.hint) {
+    if (
+      window.__sfInstallState &&
+      window.__sfInstallState.ios &&
+      window.__sfInstallState.hint
+    ) {
       const hint = window.__sfInstallState.hint
       if (hint && hint.instructions) {
         const msg = [
@@ -2128,8 +2154,9 @@ function bindSettings(root) {
   $$("[data-mode-set]", root).forEach(
     (b) =>
       (b.onclick = () => {
-        if ((b.dataset.modeSet === "night") !== Boolean(state.night))
-          toggleNight()
+        const cur = state.nightAuto ? "auto" : state.night ? "night" : "day"
+
+        if (b.dataset.modeSet !== cur) setNightMode(b.dataset.modeSet)
 
         renderSettings()
       }),

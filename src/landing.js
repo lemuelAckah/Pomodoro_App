@@ -182,7 +182,8 @@ const SHARE_TEXT =
 
 const LEGAL = {
   privacy: {
-    title: "Privacy Policy",      body: `<p>StudyFlow is local-first: your tasks, notes, timer settings, streaks and books live on your own device by default.</p>
+    title: "Privacy Policy",
+    body: `<p>StudyFlow is local-first: your tasks, notes, timer settings, streaks and books live on your own device by default.</p>
       <h3>What leaves your device</h3>
       <p>Only when you sign in do we sync the essentials — your profile, progress, coins, stories and uploaded books — to secure cloud storage. Nothing is sold, rented or used for advertising.</p>
       <h3>What others can see</h3>

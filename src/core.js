@@ -32,6 +32,17 @@ const get = (key, fallback) => {
 
 const save = (key, value) => localStorage.setItem(key, JSON.stringify(value))
 
+function systemPrefersDark() {
+  try {
+    return (
+      typeof matchMedia === "function" &&
+      matchMedia("(prefers-color-scheme: dark)").matches
+    )
+  } catch {
+    return false
+  }
+}
+
 const esc = (value) =>
   String(value ?? "").replace(
     /[&<>'"]/g,
@@ -526,7 +537,9 @@ const state = {
 
   reduceMotion: get("sf-motion", false),
 
-  night: get("sf-night", false),
+  night: get("sf-night", systemPrefersDark()),
+
+  nightAuto: get("sf-night", null) === null,
 
   whatsNewSeen: get("sf-whatsnew", 0),
 
@@ -858,7 +871,7 @@ function persistNow() {
 
   save("sf-motion", Boolean(state.reduceMotion))
 
-  save("sf-night", Boolean(state.night))
+  writeNightKey()
 
   save("sf-whatsnew", state.whatsNewSeen || 0)
 
@@ -1565,7 +1578,7 @@ async function applyUserSettings(row) {
         : state.display?.zoom || 1,
     }
 
-    if (typeof d.night === "boolean") state.night = d.night
+    if (typeof d.night === "boolean" && !state.nightAuto) state.night = d.night
 
     touched = true
   }
@@ -1899,7 +1912,7 @@ async function hydrateCloudState(user) {
 
     save("sf-techcheck", state.techCheck)
 
-    save("sf-night", state.night)
+    writeNightKey()
 
     save(
       "sf-equipped",
@@ -2043,7 +2056,7 @@ async function hydrateCloudState(user) {
 
     save("sf-techcheck", state.techCheck)
 
-    save("sf-night", state.night)
+    writeNightKey()
 
     save(
       "sf-equipped",
@@ -2370,7 +2383,11 @@ function sanitizeState() {
 
     if (!Number.isFinite(Number(state.soundVolume))) state.soundVolume = 0.8
 
-    state.night = state.night === true
+    const nightKey = get("sf-night", null)
+
+    state.nightAuto = nightKey === null
+
+    state.night = nightKey === null ? systemPrefersDark() : nightKey === true
 
     state.reduceMotion = state.reduceMotion === true
 
@@ -3238,7 +3255,7 @@ function applyEquippedTheme() {
 
   const skin = custom || THEME_SKINS[state.equipped?.theme]
 
-  const night = Boolean(state.night)
+  const night = Boolean(state.night) && Boolean(state.entered)
 
   const nightBase = night && !(skin && skin.dark) ? NIGHT_BASE : null
 
@@ -3268,9 +3285,13 @@ function applyEquippedTheme() {
 
   try {
     root.style.setProperty("--on-accent", onAccentText(sageHex.trim()))
+
     // --accent is the primary brand/accent color (alias of --sage so the whole
+
     // design system follows the theme). --accent-contrast is readable text on it.
+
     root.style.setProperty("--accent", sageHex.trim())
+
     root.style.setProperty("--accent-contrast", onAccentText(sageHex.trim()))
   } catch {
     /* ignore */
@@ -3279,10 +3300,47 @@ function applyEquippedTheme() {
   if (nightBase || (skin && skin.dark))
     root.style.setProperty("--shadow", NIGHT_SHADOW)
   else root.style.removeProperty("--shadow")
+
+  // Native UI (form controls, scrollbars, form widgets) must follow the
+
+  // resolved surface, including dark skins that run without night mode.
+
+  const darkUi = Boolean(
+    nightBase || (skin && skin.dark) || (custom && isDarkPaper(custom.paper)),
+  )
+
+  root.style.colorScheme = darkUi ? "dark" : "light"
+
+  // Browser chrome tracks the real paper color, so skins tint it too.
+
+  try {
+    const paper =
+      getComputedStyle(root).getPropertyValue("--paper").trim() ||
+      (darkUi ? "#0f141c" : "#47765a")
+
+    document
+
+      .querySelector('meta[name="theme-color"]')
+
+      ?.setAttribute("content", paper)
+  } catch {
+    /* ignore */
+  }
 }
 
-function toggleNight() {
-  state.night = !state.night
+function writeNightKey() {
+  try {
+    if (state.nightAuto) localStorage.removeItem("sf-night")
+    else save("sf-night", Boolean(state.night))
+  } catch {
+    /* ignore */
+  }
+}
+
+function setNightMode(mode) {
+  state.nightAuto = mode === "auto"
+
+  state.night = mode === "auto" ? systemPrefersDark() : mode === "night"
 
   persist()
 
@@ -3292,16 +3350,6 @@ function toggleNight() {
 
   syncThemeToggle()
 
-  try {
-    document
-
-      .querySelector('meta[name="theme-color"]')
-
-      ?.setAttribute("content", state.night ? "#0f141c" : "#47765a")
-  } catch {
-    /* ignore */
-  }
-
   // Inline SVG artwork carries hardcoded theme colors (mind-map selection
 
   // dashes, edge strokes). Recolor it in place instead of waiting for the
@@ -3309,6 +3357,39 @@ function toggleNight() {
   // next render, so a mid-selection theme flip never leaves dark-on-dark.
 
   recolorInlineSvgTheme()
+}
+
+function transitionTheme(run) {
+  if (state.reduceMotion) {
+    run()
+
+    return
+  }
+
+  if (typeof document.startViewTransition === "function") {
+    try {
+      const t = document.startViewTransition(run)
+
+      if (t && t.finished && typeof t.finished.catch === "function")
+        t.finished.catch(() => {})
+
+      return
+    } catch {
+      /* the call itself failed before scheduling — use the fallback */
+    }
+  }
+
+  const root = document.documentElement
+
+  root.classList.add("theme-anim")
+
+  run()
+
+  setTimeout(() => root.classList.remove("theme-anim"), 420)
+}
+
+function toggleNight() {
+  transitionTheme(() => setNightMode(state.night ? "day" : "night"))
 }
 
 // Swap hardcoded light/dark strokes on SVGs that are currently on screen.
@@ -3353,6 +3434,25 @@ function syncThemeToggle() {
   btn.setAttribute("aria-checked", String(Boolean(state.night)))
 
   btn.title = state.night ? "Switch to day mode" : "Switch to night mode"
+}
+
+try {
+  if (typeof matchMedia === "function")
+    matchMedia("(prefers-color-scheme: dark)").addEventListener?.(
+      "change",
+
+      (e) => {
+        if (!state.nightAuto) return
+
+        state.night = e.matches
+
+        applyEquippedTheme()
+
+        syncThemeToggle()
+      },
+    )
+} catch {
+  /* ignore */
 }
 
 function applyDisplay() {
@@ -3981,6 +4081,7 @@ export {
   onAccentText,
   applyEquippedTheme,
   toggleNight,
+  setNightMode,
   syncThemeToggle,
   applyMotion,
   applyDisplay,

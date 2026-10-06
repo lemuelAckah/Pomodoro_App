@@ -87,9 +87,7 @@ self.addEventListener("install", (event) => {
   // Do not force skipWaiting here — the app handles worker updates by
   // reloading once the new worker activates, so users do not lose mid-flow
   // state when a deploy drops while they are using the app.
-  event.waitUntil(
-    fetchShell(false).catch(() => {}),
-  )
+  event.waitUntil(fetchShell(false).catch(() => {}))
 })
 
 self.addEventListener("activate", (event) => {
@@ -132,8 +130,7 @@ self.addEventListener("message", (event) => {
                 if (hit) return
 
                 const res = await fetch(assetUrl)
-                if (res && res.ok)
-                  await cache.put(assetUrl, stripVary(res))
+                if (res && res.ok) await cache.put(assetUrl, stripVary(res))
               } catch {
                 /* best effort — runtime caching picks it up on first use */
               }
@@ -165,9 +162,7 @@ self.addEventListener("fetch", (event) => {
 
   // App shell: network first, cached fallback keeps reloads working offline.
   if (request.mode === "navigate") {
-    event.respondWith(
-      fetchShell(true),
-    )
+    event.respondWith(fetchShell(true))
     return
   }
 
@@ -175,16 +170,17 @@ self.addEventListener("fetch", (event) => {
   if (isStaticAsset(url)) {
     event.respondWith(
       openCache().then((cache) =>
-        cache.match(request, { ignoreVary: true }).then((hit) =>
-          hit ||
-          fetch(request)
-            .then(async (res) => {
-              if (res && res.ok)
-                await cache.put(request, stripVary(res.clone()))
+        cache.match(request, { ignoreVary: true }).then(
+          (hit) =>
+            hit ||
+            fetch(request)
+              .then(async (res) => {
+                if (res && res.ok)
+                  await cache.put(request, stripVary(res.clone()))
 
-              return res
-            })
-            .catch(() => hit),
+                return res
+              })
+              .catch(() => hit),
         ),
       ),
     )
@@ -211,4 +207,3 @@ self.addEventListener("fetch", (event) => {
       }),
   )
 })
-
