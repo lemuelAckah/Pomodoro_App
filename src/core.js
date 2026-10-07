@@ -497,6 +497,13 @@ const state = {
 
   stories: get("sf-stories", []),
 
+  // The Dreams experience — a kid's answer to "Who do you want to be when
+  // you grow up?" (shown first on every open) and an adult's life ambitions.
+
+  dream: get("sf-dream", { answer: "", at: 0, dismissedAt: 0 }),
+
+  ambitions: get("sf-ambitions", []),
+
   statusSeen: get("sf-status-seen", {}),
 
   focusDays: get("sf-focus-days", {}),
@@ -790,6 +797,10 @@ function persistNow() {
   save("sf-decks", state.decks || [])
 
   save("sf-cornell", state.cornellNotes || [])
+
+  save("sf-dream", state.dream || { answer: "", at: 0, dismissedAt: 0 })
+
+  save("sf-ambitions", state.ambitions || [])
 
   save(
     "sf-equipped",
@@ -2075,6 +2086,8 @@ export function setCloudSubscription(sub) {
 }
 
 const STATE_ARRAYS = [
+  "ambitions",
+
   "tasks",
 
   "favorites",
@@ -2135,6 +2148,8 @@ const STATE_ARRAYS = [
 ]
 
 const STATE_OBJECT_DEFAULTS = {
+  dream: { answer: "", at: 0, dismissedAt: 0 },
+
   messages: {},
 
   pins: {},

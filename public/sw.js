@@ -1,4 +1,4 @@
-const VERSION = "studyflow-v4"
+const VERSION = "studyflow-v5"
 
 /* Offline strategy — StudyFlow PWA
    - Navigations: network first (fresh deployments win), cached app shell

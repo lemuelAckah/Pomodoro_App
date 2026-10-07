@@ -76,6 +76,8 @@ import { renderFavorites } from "./tech-catalog.js"
 
 import { renderLanding, renderAccount, renderSettings } from "./account.js"
 
+import { mountDreamIntro } from "./dreams.js"
+
 let searchHits = []
 
 // Guards the one-time-per-session cloud hydration: auth events repeat
@@ -819,6 +821,17 @@ if (!state.entered) {
         import("./account.js").then((m) => m.startTour()).catch(() => {})
     }, 1400)
 }
+
+// The dream greets the user first — over the landing page and inside the
+// app alike: the kids' question when it's unanswered, the dream itself once
+// it has been spoken. (dreams.js locks its own cleanup down.)
+setTimeout(() => {
+  try {
+    mountDreamIntro()
+  } catch {
+    /* a broken dream must never block the app */
+  }
+}, 280)
 
 try {
   if (sessionStorage.getItem("sf-wiped") === "1") {

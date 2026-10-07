@@ -2151,6 +2151,8 @@ function bindSettings(root) {
 
   bindPwToggles(root)
 
+  bindInstallApp(root)
+
   $$("[data-mode-set]", root).forEach(
     (b) =>
       (b.onclick = () => {

@@ -1,0 +1,967 @@
+/* dreams.css — the Dreams experience: the first-open greeting veil, the
+   kids' question card, the adults' ambitions panel, the landing ribbon and
+   the full-screen standing-ovation player. Built on design tokens only, so
+   every equipped theme recolors it. */
+
+body.dream-lock {
+  overflow: hidden;
+}
+
+/* ---------- greeting veil (first thing the site shows) ---------- */
+
+.dream-veil {
+  position: fixed;
+
+  inset: 0;
+
+  z-index: 900;
+
+  display: grid;
+
+  place-items: center;
+
+  padding: 18px;
+
+  opacity: 0;
+
+  transition: opacity 0.45s ease;
+
+  background:
+    radial-gradient(
+      1100px 560px at 50% -8%,
+      color-mix(in srgb, var(--gold) 24%, transparent),
+      transparent 62%
+    ),
+    radial-gradient(
+      900px 520px at 88% 108%,
+      color-mix(in srgb, var(--sage) 32%, transparent),
+      transparent 64%
+    ),
+    color-mix(in srgb, var(--ink) 90%, #05070a);
+}
+
+.dream-veil.dream-in {
+  opacity: 1;
+}
+
+.dream-veil.dream-out {
+  opacity: 0;
+}
+
+.dream-sparks {
+  position: absolute;
+
+  inset: 0;
+
+  overflow: hidden;
+
+  pointer-events: none;
+}
+
+.dream-sparks i {
+  position: absolute;
+
+  top: 0;
+
+  display: block;
+
+  border-radius: 50%;
+
+  background: var(--gold);
+
+  opacity: 0;
+
+  box-shadow: 0 0 12px color-mix(in srgb, var(--gold) 70%, transparent);
+
+  animation-name: dream-float;
+
+  animation-timing-function: linear;
+
+  animation-iteration-count: infinite;
+}
+
+@keyframes dream-float {
+  0% {
+    transform: translateY(104vh) scale(0.7);
+
+    opacity: 0;
+  }
+
+  12% {
+    opacity: 0.85;
+  }
+
+  85% {
+    opacity: 0.7;
+  }
+
+  100% {
+    transform: translateY(-8vh) scale(1.15);
+
+    opacity: 0;
+  }
+}
+
+.dream-splash {
+  position: relative;
+
+  width: min(680px, 100%);
+}
+
+.dream-splash-card {
+  position: relative;
+
+  z-index: 2;
+
+  text-align: center;
+
+  padding: clamp(26px, 5vw, 46px);
+
+  border-radius: 24px;
+
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+
+  border: 1px solid color-mix(in srgb, var(--gold) 38%, var(--line));
+
+  box-shadow:
+    0 30px 80px rgb(0 0 0 / 0.45),
+    inset 0 0 0 1px rgb(255 255 255 / 0.05);
+
+  backdrop-filter: blur(14px);
+
+  -webkit-backdrop-filter: blur(14px);
+
+  animation: dream-rise 0.7s cubic-bezier(0.2, 0.9, 0.25, 1.15) both;
+}
+
+@keyframes dream-rise {
+  from {
+    transform: translateY(26px) scale(0.96);
+
+    opacity: 0;
+  }
+}
+
+.dream-shake {
+  animation: dream-shake 0.5s ease !important;
+}
+
+@keyframes dream-shake {
+  20% {
+    transform: translateX(-8px);
+  }
+
+  40% {
+    transform: translateX(7px);
+  }
+
+  60% {
+    transform: translateX(-5px);
+  }
+
+  80% {
+    transform: translateX(3px);
+  }
+}
+
+.dream-eyebrow {
+  display: inline-flex;
+
+  align-items: center;
+
+  gap: 8px;
+
+  font-size: 12px;
+
+  font-weight: 700;
+
+  letter-spacing: 0.16em;
+
+  text-transform: uppercase;
+
+  color: var(--gold);
+}
+
+.dream-eyebrow .sicon {
+  width: 15px;
+
+  height: 15px;
+}
+
+.dream-big {
+  font-family: "Fraunces", Georgia, serif;
+
+  font-weight: 700;
+
+  font-size: clamp(28px, 5vw, 48px);
+
+  line-height: 1.14;
+
+  margin: 14px 0 6px;
+
+  color: var(--ink);
+
+  overflow-wrap: anywhere;
+}
+
+.dream-qform {
+  display: flex;
+
+  gap: 10px;
+
+  margin: 18px 0 10px;
+}
+
+.dream-qinput {
+  flex: 1;
+
+  min-width: 0;
+
+  font-size: 17px;
+
+  padding: 14px 18px;
+
+  border-radius: 14px;
+
+  border: 1.5px solid var(--line);
+
+  background: var(--panel-2);
+
+  color: var(--ink);
+}
+
+.dream-qinput:focus {
+  outline: none;
+
+  border-color: var(--gold);
+
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--gold) 22%, transparent);
+}
+
+.dream-qform .primary {
+  white-space: nowrap;
+
+  border-radius: 14px;
+}
+
+.dream-maybe {
+  background: none;
+
+  border: none;
+
+  color: var(--muted);
+
+  font: inherit;
+
+  font-size: 13px;
+
+  text-decoration: underline;
+
+  text-underline-offset: 3px;
+
+  cursor: pointer;
+
+  padding: 6px 10px;
+
+  border-radius: 8px;
+}
+
+.dream-maybe:hover {
+  color: var(--ink);
+}
+
+.dream-splash-card small {
+  display: block;
+
+  margin-top: 12px;
+
+  font-size: 12.5px;
+}
+
+.dream-autobar {
+  display: block;
+
+  height: 3px;
+
+  margin-top: 18px;
+
+  border-radius: 2px;
+
+  background: linear-gradient(90deg, var(--gold), var(--sage));
+
+  transform-origin: left center;
+
+  animation: dream-autobar 6.8s linear forwards;
+}
+
+.dream-autobar.fast {
+  animation-duration: 3.2s;
+}
+
+@keyframes dream-autobar {
+  from {
+    transform: scaleX(1);
+  }
+
+  to {
+    transform: scaleX(0);
+  }
+}
+
+.dream-veil-actions {
+  display: flex;
+
+  justify-content: center;
+
+  margin-top: 18px;
+}
+
+.dream-veil-actions .primary {
+  border-radius: 999px;
+
+  padding: 12px 26px;
+}
+
+/* ---------- landing ribbon (dream at the very top of the site) ---------- */
+
+.dream-ribbon {
+  display: flex;
+
+  justify-content: center;
+
+  flex-wrap: wrap;
+
+  gap: 8px;
+
+  padding: 4px 16px 0;
+}
+
+.dream-ribbon-pill {
+  display: inline-flex;
+
+  align-items: center;
+
+  gap: 8px;
+
+  flex-wrap: wrap;
+
+  justify-content: center;
+
+  padding: 9px 18px;
+
+  border-radius: 999px;
+
+  cursor: pointer;
+
+  font: inherit;
+
+  font-size: 14px;
+
+  color: var(--ink);
+
+  border: 1px solid color-mix(in srgb, var(--gold) 48%, var(--line));
+
+  background:
+    linear-gradient(
+      100deg,
+      color-mix(in srgb, var(--gold) 16%, var(--panel)),
+      color-mix(in srgb, var(--sage) 14%, var(--panel))
+    );
+
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.08);
+
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.dream-ribbon-pill:hover {
+  transform: translateY(-1px);
+
+  box-shadow: 0 10px 24px rgb(0 0 0 / 0.12);
+}
+
+.dream-ribbon-pill .sicon {
+  width: 15px;
+
+  height: 15px;
+
+  color: var(--gold);
+}
+
+.dream-ribbon-pill b {
+  font-family: "Fraunces", Georgia, serif;
+
+  color: var(--sage);
+}
+
+/* ---------- landing section: kids + adults ---------- */
+
+.landing-dreams {
+  max-width: 1180px;
+
+  margin: 0 auto;
+
+  padding: 30px 4vw 6px;
+}
+
+.dreams-head {
+  text-align: center;
+
+  margin-bottom: 20px;
+}
+
+.dreams-head h2 {
+  font-family: "Fraunces", Georgia, serif;
+
+  font-size: clamp(24px, 3.4vw, 36px);
+}
+
+.dreams-grid {
+  display: grid;
+
+  grid-template-columns: 1fr 1.15fr;
+
+  gap: 18px;
+
+  align-items: start;
+}
+
+.dream-card {
+  padding: 26px;
+
+  position: relative;
+}
+
+.dream-card-kids {
+  border-top: 4px solid var(--gold);
+
+  background:
+    radial-gradient(
+      420px 200px at 12% 0%,
+      color-mix(in srgb, var(--gold) 12%, transparent),
+      transparent 70%
+    ),
+    var(--panel);
+}
+
+.dream-card-adults {
+  border-top: 4px solid var(--sage);
+
+  background:
+    radial-gradient(
+      420px 200px at 88% 0%,
+      color-mix(in srgb, var(--sage) 12%, transparent),
+      transparent 70%
+    ),
+    var(--panel);
+}
+
+.dream-card-head h3 {
+  font-family: "Fraunces", Georgia, serif;
+
+  font-size: clamp(20px, 2.4vw, 26px);
+
+  margin: 10px 0 6px;
+}
+
+.dream-tag {
+  display: inline-flex;
+
+  align-items: center;
+
+  gap: 6px;
+
+  font-size: 11.5px;
+
+  font-weight: 700;
+
+  letter-spacing: 0.12em;
+
+  text-transform: uppercase;
+
+  padding: 5px 12px;
+
+  border-radius: 999px;
+}
+
+.dream-tag .sicon {
+  width: 13px;
+
+  height: 13px;
+}
+
+.dream-tag-kids {
+  color: var(--gold);
+
+  background: color-mix(in srgb, var(--gold) 16%, transparent);
+
+  border: 1px solid color-mix(in srgb, var(--gold) 45%, transparent);
+}
+
+.dream-tag-adults {
+  color: var(--sage);
+
+  background: color-mix(in srgb, var(--sage) 14%, transparent);
+
+  border: 1px solid color-mix(in srgb, var(--sage) 42%, transparent);
+}
+
+.dream-answer-big {
+  font-family: "Fraunces", Georgia, serif;
+
+  font-style: italic;
+
+  font-size: clamp(24px, 3vw, 34px);
+
+  line-height: 1.2;
+
+  margin: 12px 0 4px;
+
+  background: linear-gradient(100deg, var(--gold), var(--sage));
+
+  -webkit-background-clip: text;
+
+  background-clip: text;
+
+  color: transparent;
+
+  overflow-wrap: anywhere;
+}
+
+.dream-note {
+  font-size: 13.5px;
+
+  margin: 8px 0 4px;
+}
+
+.dream-actions {
+  display: flex;
+
+  gap: 10px;
+
+  margin: 12px 0 4px;
+}
+
+.dream-card .dream-qform {
+  margin-top: 16px;
+}
+
+/* Adults: ambition list + form */
+
+.dream-list {
+  list-style: none;
+
+  margin: 16px 0;
+
+  padding: 0;
+
+  display: flex;
+
+  flex-direction: column;
+
+  gap: 10px;
+
+  max-height: 264px;
+
+  overflow: auto;
+}
+
+.dream-item {
+  display: flex;
+
+  align-items: center;
+
+  gap: 12px;
+
+  padding: 12px 14px;
+
+  border-radius: 14px;
+
+  border: 1px solid var(--line);
+
+  background: var(--panel-2);
+
+  transition: opacity 0.2s ease;
+}
+
+.dream-item.done {
+  opacity: 0.72;
+}
+
+.dream-item.done .dream-item-main b {
+  text-decoration: line-through;
+
+  text-decoration-thickness: 2px;
+
+  text-decoration-color: var(--sage);
+}
+
+.dream-item-main {
+  flex: 1;
+
+  min-width: 0;
+
+  display: flex;
+
+  align-items: center;
+
+  gap: 10px;
+
+  flex-wrap: wrap;
+}
+
+.dream-item-main b {
+  overflow-wrap: anywhere;
+}
+
+.dream-chip {
+  display: inline-flex;
+
+  align-items: center;
+
+  gap: 5px;
+
+  font-size: 12px;
+
+  font-weight: 700;
+
+  color: var(--gold);
+
+  padding: 3px 10px;
+
+  border-radius: 999px;
+
+  border: 1px solid color-mix(in srgb, var(--gold) 40%, transparent);
+
+  background: color-mix(in srgb, var(--gold) 12%, transparent);
+}
+
+.dream-chip .sicon {
+  width: 12px;
+
+  height: 12px;
+}
+
+.dream-check {
+  flex: none;
+
+  width: 30px;
+
+  height: 30px;
+
+  border-radius: 50%;
+
+  border: 2px solid color-mix(in srgb, var(--sage) 55%, var(--line));
+
+  background: transparent;
+
+  color: var(--panel);
+
+  cursor: pointer;
+
+  display: grid;
+
+  place-items: center;
+
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.dream-check .sicon {
+  width: 16px;
+
+  height: 16px;
+}
+
+.dream-check.on {
+  background: var(--sage);
+
+  border-color: var(--sage);
+}
+
+.dream-del {
+  flex: none;
+
+  color: var(--muted);
+}
+
+.dream-del:hover {
+  color: var(--coral);
+}
+
+.dream-empty {
+  padding: 16px;
+
+  border-radius: 14px;
+
+  border: 1.5px dashed color-mix(in srgb, var(--sage) 45%, var(--line));
+
+  color: var(--muted);
+
+  font-size: 14px;
+
+  text-align: center;
+}
+
+.dream-ambition-form {
+  display: grid;
+
+  grid-template-columns: 1fr 128px auto;
+
+  gap: 10px;
+}
+
+.dream-ambition-form .primary {
+  border-radius: 12px;
+
+  white-space: nowrap;
+
+  display: inline-flex;
+
+  align-items: center;
+
+  gap: 7px;
+}
+
+.dream-ambition-form .primary .sicon {
+  width: 15px;
+
+  height: 15px;
+}
+
+.dream-ovation-row {
+  display: flex;
+
+  align-items: center;
+
+  gap: 14px;
+
+  flex-wrap: wrap;
+
+  margin-top: 16px;
+
+  padding-top: 16px;
+
+  border-top: 1px dashed var(--line);
+}
+
+.dream-ovation-row small {
+  flex: 1;
+
+  min-width: 180px;
+
+  font-size: 12px;
+}
+
+/* ---------- standing-ovation player ---------- */
+
+.ovation-veil {
+  position: fixed;
+
+  inset: 0;
+
+  z-index: 950;
+
+  overflow: hidden;
+
+  background: #05070a;
+
+  opacity: 0;
+
+  transition: opacity 0.6s ease;
+}
+
+.ovation-veil.ovation-in {
+  opacity: 1;
+}
+
+.ovation-veil.ovation-out {
+  opacity: 0;
+}
+
+.ovation-veil video {
+  position: absolute;
+
+  inset: 0;
+
+  width: 100%;
+
+  height: 100%;
+
+  object-fit: cover;
+}
+
+.ovation-glow {
+  position: absolute;
+
+  inset: 0;
+
+  pointer-events: none;
+
+  background:
+    linear-gradient(to top, rgb(3 6 4 / 0.84), rgb(3 6 4 / 0) 46%),
+    radial-gradient(
+      60% 42% at 50% 100%,
+      color-mix(in srgb, var(--gold) 16%, transparent),
+      transparent
+    );
+}
+
+.ovation-copy {
+  position: absolute;
+
+  left: clamp(18px, 5vw, 64px);
+
+  right: clamp(18px, 5vw, 64px);
+
+  bottom: clamp(20px, 7vh, 64px);
+
+  max-width: 660px;
+
+  color: #fff;
+
+  animation: dream-rise 0.9s 0.35s cubic-bezier(0.2, 0.9, 0.25, 1.15) both;
+}
+
+.ovation-eyebrow {
+  display: inline-flex;
+
+  align-items: center;
+
+  gap: 8px;
+
+  font-size: 12.5px;
+
+  font-weight: 700;
+
+  letter-spacing: 0.18em;
+
+  text-transform: uppercase;
+
+  color: var(--gold);
+
+  padding: 7px 14px;
+
+  border-radius: 999px;
+
+  border: 1px solid color-mix(in srgb, var(--gold) 55%, transparent);
+
+  background: rgb(0 0 0 / 0.35);
+
+  backdrop-filter: blur(6px);
+
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.ovation-eyebrow .sicon {
+  width: 15px;
+
+  height: 15px;
+}
+
+.ovation-copy h2 {
+  font-family: "Fraunces", Georgia, serif;
+
+  font-size: clamp(34px, 6vw, 66px);
+
+  line-height: 1.05;
+
+  margin: 16px 0 10px;
+
+  color: #fff;
+
+  text-shadow: 0 4px 30px rgb(0 0 0 / 0.5);
+}
+
+.ovation-copy p {
+  font-size: clamp(14px, 1.8vw, 17px);
+
+  color: rgb(255 255 255 / 0.82);
+
+  max-width: 520px;
+}
+
+.ovation-wait::after {
+  content: "Tap anywhere to take your bow";
+
+  position: absolute;
+
+  inset: 0;
+
+  display: grid;
+
+  place-items: center;
+
+  font-family: "Fraunces", Georgia, serif;
+
+  font-size: clamp(20px, 3vw, 30px);
+
+  color: #fff;
+
+  background: rgb(3 6 4 / 0.55);
+
+  animation: ovation-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes ovation-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* ---------- mobile ---------- */
+
+@media (max-width: 860px) {
+  .dreams-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dream-ambition-form {
+    grid-template-columns: 1fr;
+  }
+
+  .dream-ambition-form .primary {
+    justify-content: center;
+  }
+
+  .dream-qform {
+    flex-direction: column;
+  }
+
+  .landing-dreams {
+    padding: 22px 5vw 4px;
+  }
+
+  .dream-card {
+    padding: 20px 18px;
+  }
+
+  .ovation-copy {
+    left: 16px;
+
+    right: 16px;
+
+    bottom: 84px;
+  }
+}
+
+/* ---------- reduced motion ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .dream-sparks {
+    display: none;
+  }
+
+  .dream-splash-card,
+  .ovation-copy {
+    animation: none;
+  }
+
+  .dream-autobar {
+    animation-duration: 1s;
+  }
+
+  .dream-ribbon-pill,
+  .dream-item,
+  .dream-check {
+    transition: none;
+  }
+}
