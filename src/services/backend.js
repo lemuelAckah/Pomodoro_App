@@ -1647,8 +1647,12 @@ export function subscribeToConversation({
 
   let retried = false
 
+  let joined = false
+
   const join = () => {
     channel = supabase.channel(channelName)
+
+    joined = false
 
     for (const spec of specs) {
       channel
@@ -1707,6 +1711,7 @@ export function subscribeToConversation({
       )
 
       .subscribe((status) => {
+        joined = status === "SUBSCRIBED"
         // A dead channel must not silently swallow live messages: retry the
 
         // join once, then give up (history/polling still cover delivery).
@@ -1733,14 +1738,28 @@ export function subscribeToConversation({
   join()
 
   return {
-    sendTyping: (userId, isTyping) =>
-      channel?.send({
-        type: "broadcast",
+    // Typing broadcasts before SUBSCRIBED would take channel.send()'s
+    // deprecated implicit REST fallback (console warning) — use httpSend()
+    // explicitly until the socket is joined, then WebSocket send().
+    sendTyping: async (userId, isTyping) => {
+      if (!channel) return
 
-        event: "typing",
+      const payload = { userId, isTyping }
 
-        payload: { userId, isTyping },
-      }),
+      const envelope = { type: "broadcast", event: "typing", payload }
+
+      if (joined) return channel.send(envelope)
+
+      if (typeof channel.httpSend === "function") {
+        try {
+          return await channel.httpSend("typing", payload)
+        } catch {
+          /* fall through to send() */
+        }
+      }
+
+      return channel.send(envelope)
+    },
 
     unsubscribe: () => {
       if (channel) supabase.removeChannel(channel)
@@ -1995,23 +2014,46 @@ export function createSignalingRoom(roomId, userId, onSignal) {
     config: { broadcast: { self: false } },
   })
 
+  let joined = false
+
   channel
 
     .on("broadcast", { event: "signal" }, ({ payload }) => {
       if (payload?.senderId !== userId) onSignal(payload)
     })
 
-    .subscribe()
+    .subscribe((status) => {
+      joined = status === "SUBSCRIBED"
+    })
+
+  // channel.send() before SUBSCRIBED silently falls back to REST and logs a
+  // deprecation warning ("use httpSend() explicitly"). Call signaling MUST
+  // deliver during the join window (the first offer races subscribe), so
+  // pre-join sends ask for REST delivery explicitly; once the socket is up,
+  // WebSocket send() is used (no warning, lower latency).
+  let httpSendUsable = typeof channel.httpSend === "function"
 
   return {
-    send: (signal) =>
-      channel.send({
-        type: "broadcast",
+    send: async (signal) => {
+      const payload = { ...signal, senderId: userId }
 
-        event: "signal",
+      const envelope = { type: "broadcast", event: "signal", payload }
 
-        payload: { ...signal, senderId: userId },
-      }),
+      if (joined) return channel.send(envelope)
+
+      if (httpSendUsable) {
+        try {
+          return await channel.httpSend("signal", payload)
+        } catch (err) {
+          const msg = String(err?.message || "")
+
+          // Realtime server too old for httpSend (404) — stop trying it.
+          if (/404|httpSend\(\) requires/i.test(msg)) httpSendUsable = false
+        }
+      }
+
+      return channel.send(envelope)
+    },
 
     close: () => supabase.removeChannel(channel),
   }
